@@ -14,9 +14,10 @@ import (
 
 // newServer constructs the HTTP server used by Vantyx.
 func newServer(addr string) *http.Server {
+	app := httpapi.NewApp()
 	return &http.Server{
 		Addr:         addr,
-		Handler:      httpapi.NewRouter(),
+		Handler:      app.NewRouter(),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 	}

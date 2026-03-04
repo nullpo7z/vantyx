@@ -58,7 +58,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		http.Error(w, "failed to start terminal session", http.StatusInternalServerError)
 		return
 	}

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 
 	"golang.org/x/crypto/bcrypt"
@@ -8,10 +9,12 @@ import (
 
 const bcryptCost = bcrypt.DefaultCost
 
+var ErrEmptyPassword = errors.New("password must not be empty")
+
 // HashPassword returns a bcrypt hash of the password.
 func HashPassword(plain string) (string, error) {
 	if plain == "" {
-		return "", fmt.Errorf("password must not be empty")
+		return "", ErrEmptyPassword
 	}
 	hashed, err := bcrypt.GenerateFromPassword([]byte(plain), bcryptCost)
 	if err != nil {

@@ -43,6 +43,7 @@ func (a *App) NewRouter() http.Handler {
 
 	// Authentication
 	r.Post("/api/login", a.handleLogin)
+	r.Get("/api/me", a.handleMe)
 
 	return r
 }
@@ -98,9 +99,33 @@ func (a *App) sessionMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if sess, err := a.SessionStore.Get(c.Value); err == nil {
-			_ = sess // placeholder for attaching to context in later phases
-		}
+		_, _ = a.SessionStore.Get(c.Value) // placeholder for attaching to context in later phases
 		next.ServeHTTP(w, r)
+	})
+}
+
+// handleMe returns information about the currently authenticated user.
+func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie("vantyx_session")
+	if err != nil || c.Value == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	sess, err := a.SessionStore.Get(c.Value)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	u, err := a.UserStore.GetByID(sess.UserID)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(loginResponse{
+		UserID:   u.ID,
+		Username: u.Username,
 	})
 }

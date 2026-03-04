@@ -77,3 +77,15 @@ func (s *InMemoryUserStore) Authenticate(username, plainPassword string) (*User,
 	}
 	return u, nil
 }
+
+// GetByID returns a user by ID.
+func (s *InMemoryUserStore) GetByID(id string) (*User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	u, ok := s.byID[id]
+	if !ok {
+		return nil, ErrUserNotFound
+	}
+	return u, nil
+}

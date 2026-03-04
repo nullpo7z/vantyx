@@ -39,3 +39,20 @@ func TestInMemoryUserStore_DuplicateUser(t *testing.T) {
 		t.Fatalf("expected error for duplicate username, got nil")
 	}
 }
+
+func TestInMemoryUserStore_GetByID(t *testing.T) {
+	store := NewInMemoryUserStore()
+
+	u, err := store.CreateUser("u1", "alice", "password123")
+	if err != nil {
+		t.Fatalf("CreateUser returned error: %v", err)
+	}
+
+	got, err := store.GetByID("u1")
+	if err != nil {
+		t.Fatalf("GetByID returned error: %v", err)
+	}
+	if got.ID != u.ID || got.Username != u.Username {
+		t.Fatalf("unexpected user from GetByID: %+v", got)
+	}
+}

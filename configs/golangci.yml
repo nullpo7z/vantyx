@@ -2,10 +2,6 @@ run:
   timeout: 5m
   issues-exit-code: 1
 
-linters-settings:
-  govet:
-    check-shadowing: true
-
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
@@ -20,4 +16,5 @@ linters:
     - ineffassign
     - gosec
     - gocyclo
+    - shadow
 

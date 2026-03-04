@@ -1,0 +1,26 @@
+mode: atomic
+github.com/nullpo7z/vantyx/internal/netutil/ipv6.go:11.66,12.13 1 6
+github.com/nullpo7z/vantyx/internal/netutil/ipv6.go:12.13,14.3 1 1
+github.com/nullpo7z/vantyx/internal/netutil/ipv6.go:16.2,18.45 3 5
+github.com/nullpo7z/vantyx/internal/netutil/ipv6.go:18.45,21.3 2 2
+github.com/nullpo7z/vantyx/internal/netutil/ipv6.go:23.2,24.54 2 5
+github.com/nullpo7z/vantyx/internal/netutil/ipv6.go:24.54,26.3 1 2
+github.com/nullpo7z/vantyx/internal/netutil/ipv6.go:28.2,29.16 2 3
+github.com/nullpo7z/vantyx/internal/netutil/ipv6.go:29.16,31.17 2 2
+github.com/nullpo7z/vantyx/internal/netutil/ipv6.go:31.17,33.4 1 1
+github.com/nullpo7z/vantyx/internal/netutil/ipv6.go:34.3,34.14 1 1
+github.com/nullpo7z/vantyx/internal/netutil/ipv6.go:37.2,37.23 1 2
+github.com/nullpo7z/vantyx/internal/session/manager.go:30.28,35.2 1 3
+github.com/nullpo7z/vantyx/internal/session/manager.go:38.80,42.41 3 4
+github.com/nullpo7z/vantyx/internal/session/manager.go:42.41,44.3 1 1
+github.com/nullpo7z/vantyx/internal/session/manager.go:46.2,57.12 4 3
+github.com/nullpo7z/vantyx/internal/session/manager.go:57.12,64.3 5 3
+github.com/nullpo7z/vantyx/internal/session/manager.go:66.2,66.18 1 3
+github.com/nullpo7z/vantyx/internal/session/manager.go:70.32,74.33 3 1
+github.com/nullpo7z/vantyx/internal/session/manager.go:74.33,76.3 1 1
+github.com/nullpo7z/vantyx/internal/session/manager.go:80.31,84.9 4 2
+github.com/nullpo7z/vantyx/internal/session/manager.go:84.9,86.3 1 0
+github.com/nullpo7z/vantyx/internal/session/manager.go:88.2,89.13 2 2
+github.com/nullpo7z/vantyx/internal/session/manager.go:93.36,98.29 4 2
+github.com/nullpo7z/vantyx/internal/session/manager.go:98.29,100.3 1 1
+github.com/nullpo7z/vantyx/internal/session/manager.go:101.2,101.12 1 2

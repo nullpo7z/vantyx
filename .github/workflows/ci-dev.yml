@@ -1,0 +1,99 @@
+name: CI (dev branch)
+
+on:
+  push:
+    branches: ["dev"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  lint-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Install golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+      - name: Run golangci-lint
+        run: |
+          golangci-lint run --config=./configs/golangci.yml --issues-exit-code=1
+      - name: Go fmt check
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Go files are not formatted. Run gofmt."
+            exit 1
+          fi
+
+  lint-fe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        if: hashFiles('web/package-lock.json') != ''
+        run: |
+          cd web
+          npm ci
+      - name: Lint frontend
+        if: hashFiles('web/package.json') != ''
+        run: |
+          cd web
+          npm run lint -- --max-warnings=0
+      - name: Typecheck frontend
+        if: hashFiles('web/tsconfig.json') != ''
+        run: |
+          cd web
+          npx tsc --noEmit
+
+  test-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Run tests
+        run: |
+          go test ./...
+      - name: Run coverage for internal packages
+        run: |
+          go test ./internal/... -covermode=atomic -coverprofile=coverage.out
+      - name: Enforce coverage threshold
+        run: |
+          chmod +x scripts/check_coverage.sh
+          ./scripts/check_coverage.sh coverage.out 85
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy FS scan
+        uses: aquasecurity/trivy-action@0.22.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Install gosec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+      - name: Run gosec
+        run: gosec ./...
+
+  build-docker:
+    runs-on: ubuntu-latest
+    needs: [lint-go, lint-fe, test-go, security-scan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t vantyx:ci .
+

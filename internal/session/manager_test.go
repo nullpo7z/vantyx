@@ -77,4 +77,3 @@ func TestManager_TouchUpdatesLastSeen(t *testing.T) {
 
 	m.Stop("touch")
 }
-

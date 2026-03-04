@@ -101,4 +101,3 @@ func (m *Manager) ActiveIDs() []ID {
 	}
 	return ids
 }
-

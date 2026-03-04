@@ -57,4 +57,3 @@ func main() {
 
 	log.Println("server shutdown completed")
 }
-

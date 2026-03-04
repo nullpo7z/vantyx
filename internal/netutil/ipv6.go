@@ -36,4 +36,3 @@ func ParseIPv6WithZone(s string) (net.IP, *net.Interface, error) {
 
 	return ip, iface, nil
 }
-

@@ -60,4 +60,3 @@ func TestParseIPv6WithZone_InvalidInputs(t *testing.T) {
 		}
 	}
 }
-

@@ -8,21 +8,15 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-)
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
-}
+	"github.com/nullpo7z/vantyx/internal/httpapi"
+)
 
 // newServer constructs the HTTP server used by Vantyx.
 func newServer(addr string) *http.Server {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", healthHandler)
-
 	return &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      httpapi.NewRouter(),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 	}

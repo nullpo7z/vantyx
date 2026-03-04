@@ -7,25 +7,38 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 )
 
 // App encapsulates HTTP handlers and shared dependencies.
 type App struct {
-	UserStore    *auth.InMemoryUserStore
-	SessionStore *auth.InMemorySessionStore
+	UserStore        *auth.InMemoryUserStore
+	SessionStore     *auth.InMemorySessionStore
+	TargetStore      *access.InMemoryTargetStore
+	AccessGroupStore *access.InMemoryAccessGroupStore
 }
 
 // NewApp constructs an App with default in-memory dependencies.
 func NewApp() *App {
 	store := auth.NewInMemoryUserStore()
 	sessions := auth.NewInMemorySessionStore(24 * time.Hour)
-	// Seed a single local admin user for now.
+	targets := access.NewInMemoryTargetStore()
+	groups := access.NewInMemoryAccessGroupStore()
+
 	admin, _ := store.CreateUser("admin", "admin", "admin123!")
 	_, _ = sessions.Create(admin.ID)
+
+	_, _ = groups.Create("default", "Default")
+	_ = groups.AddUserToGroup(admin.ID, "default")
+	_, _ = targets.Create("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH)
+	_ = groups.AddTargetToGroup("default", "demo")
+
 	return &App{
-		UserStore:    store,
-		SessionStore: sessions,
+		UserStore:        store,
+		SessionStore:     sessions,
+		TargetStore:      targets,
+		AccessGroupStore: groups,
 	}
 }
 
@@ -44,6 +57,9 @@ func (a *App) NewRouter() http.Handler {
 	// Authentication
 	r.Post("/api/login", a.handleLogin)
 	r.Get("/api/me", a.handleMe)
+
+	// Targets (requires auth)
+	r.Get("/api/targets", a.handleTargets)
 
 	return r
 }
@@ -128,4 +144,44 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 		UserID:   u.ID,
 		Username: u.Username,
 	})
+}
+
+type targetResponse struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Host     string `json:"host"`
+	Port     uint16 `json:"port"`
+	Protocol string `json:"protocol"`
+}
+
+// handleTargets returns the list of targets the current user can access.
+func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie("vantyx_session")
+	if err != nil || c.Value == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	sess, err := a.SessionStore.Get(c.Value)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	ids := a.AccessGroupStore.TargetIDsForUser(sess.UserID)
+	targets := a.TargetStore.ListByIDs(ids)
+
+	out := make([]targetResponse, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, targetResponse{
+			ID:       t.ID,
+			Name:     t.Name,
+			Host:     t.Host,
+			Port:     t.Port,
+			Protocol: string(t.Protocol),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(out)
 }

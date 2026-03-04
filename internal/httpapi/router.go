@@ -9,6 +9,7 @@ import (
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
+	"github.com/nullpo7z/vantyx/internal/session"
 )
 
 // App encapsulates HTTP handlers and shared dependencies.
@@ -17,6 +18,8 @@ type App struct {
 	SessionStore     *auth.InMemorySessionStore
 	TargetStore      *access.InMemoryTargetStore
 	AccessGroupStore *access.InMemoryAccessGroupStore
+
+	TerminalSessionManager *session.Manager
 }
 
 // NewApp constructs an App with default in-memory dependencies.
@@ -25,6 +28,7 @@ func NewApp() *App {
 	sessions := auth.NewInMemorySessionStore(24 * time.Hour)
 	targets := access.NewInMemoryTargetStore()
 	groups := access.NewInMemoryAccessGroupStore()
+	terminalSessions := session.NewManager()
 
 	admin, _ := store.CreateUser("admin", "admin", "admin123!")
 	_, _ = sessions.Create(admin.ID)
@@ -35,10 +39,11 @@ func NewApp() *App {
 	_ = groups.AddTargetToGroup("default", "demo")
 
 	return &App{
-		UserStore:        store,
-		SessionStore:     sessions,
-		TargetStore:      targets,
-		AccessGroupStore: groups,
+		UserStore:              store,
+		SessionStore:           sessions,
+		TargetStore:            targets,
+		AccessGroupStore:       groups,
+		TerminalSessionManager: terminalSessions,
 	}
 }
 
@@ -60,6 +65,9 @@ func (a *App) NewRouter() http.Handler {
 
 	// Targets (requires auth)
 	r.Get("/api/targets", a.handleTargets)
+
+	// SSH/WebSocket terminal (Phase 2 skeleton)
+	r.Get("/ws/ssh", a.handleSSHWebSocket)
 
 	return r
 }

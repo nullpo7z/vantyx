@@ -6,11 +6,14 @@ import (
 	"testing"
 )
 
-func TestHealthHandler(t *testing.T) {
+func TestHealthz(t *testing.T) {
+	server := newServer(":0")
+	defer server.Close()
+
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
 
-	healthHandler(w, req)
+	server.Handler.ServeHTTP(w, req)
 
 	res := w.Result()
 	if res.StatusCode != http.StatusOK {

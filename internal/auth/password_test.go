@@ -34,4 +34,3 @@ func TestVerifyPasswordRejectsEmptyInputs(t *testing.T) {
 		t.Fatalf("expected false when password is empty")
 	}
 }
-

@@ -28,4 +28,3 @@ func VerifyPassword(hashed, plain string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hashed), []byte(plain))
 	return err == nil
 }
-

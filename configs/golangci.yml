@@ -16,5 +16,4 @@ linters:
     - ineffassign
     - gosec
     - gocyclo
-    - shadow
 

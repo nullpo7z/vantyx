@@ -43,6 +43,7 @@ func (m *Manager) Start(id ID, fn func(ctx context.Context)) (*Session, error) {
 		return nil, ErrSessionExists
 	}
 
+	// #nosec G118 -- cancel is stored on Session and invoked via Manager.Stop
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := &Session{
 		id:        id,

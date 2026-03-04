@@ -37,7 +37,7 @@ func main() {
 	server := newServer(addr)
 
 	go func() {
-		log.Printf("starting vantyx server on %s", addr)
+		log.Println("starting vantyx server")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http server failed: %v", err)
 		}

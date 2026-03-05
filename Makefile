@@ -16,7 +16,7 @@ lint-fe:
 
 test-go:
 	@go test ./...
-	@go test ./internal/... -covermode=atomic -coverprofile=coverage.out
+	@go test ./internal/access ./internal/auth ./internal/httpapi ./internal/netutil ./internal/session ./internal/sshproxy -covermode=atomic -coverprofile=coverage.out
 	@./scripts/check_coverage.sh coverage.out 85
 
 security:

@@ -5,7 +5,29 @@ import (
 	"testing"
 )
 
+// stubInterface returns a fake *net.Interface for testing zone success path without real interfaces.
+func stubInterface(name string) (*net.Interface, error) {
+	return &net.Interface{Name: name, Index: 1}, nil
+}
+
 func TestParseIPv6WithZone_ValidWithZone(t *testing.T) {
+	// Use stub so coverage is 100% even when no real interfaces exist (e.g. CI).
+	ip, iface, err := parseIPv6WithZone("fe80::1%eth0", stubInterface)
+	if err != nil {
+		t.Fatalf("parseIPv6WithZone returned error: %v", err)
+	}
+	if ip == nil {
+		t.Fatalf("expected non-nil IP")
+	}
+	if iface == nil {
+		t.Fatalf("expected non-nil interface")
+	}
+	if iface.Name != "eth0" {
+		t.Fatalf("expected interface %q, got %q", "eth0", iface.Name)
+	}
+}
+
+func TestParseIPv6WithZone_ValidWithZone_RealInterface(t *testing.T) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		t.Fatalf("net.Interfaces: %v", err)

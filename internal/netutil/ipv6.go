@@ -9,6 +9,11 @@ import (
 // ParseIPv6WithZone parses an IPv6 address that may contain a zone ID (e.g. "fe80::1%eth0")
 // and returns the IP and an interface suitable for net.Dial / net.DialIP.
 func ParseIPv6WithZone(s string) (net.IP, *net.Interface, error) {
+	return parseIPv6WithZone(s, net.InterfaceByName)
+}
+
+// parseIPv6WithZone is the internal implementation with injectable interface lookup for tests.
+func parseIPv6WithZone(s string, interfaceByName func(string) (*net.Interface, error)) (net.IP, *net.Interface, error) {
 	if s == "" {
 		return nil, nil, fmt.Errorf("empty address")
 	}
@@ -27,7 +32,7 @@ func ParseIPv6WithZone(s string) (net.IP, *net.Interface, error) {
 
 	var iface *net.Interface
 	if zone != "" {
-		ifi, err := net.InterfaceByName(zone)
+		ifi, err := interfaceByName(zone)
 		if err != nil {
 			return nil, nil, fmt.Errorf("lookup interface %q: %w", zone, err)
 		}

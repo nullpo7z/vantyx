@@ -77,3 +77,12 @@ func TestManager_TouchUpdatesLastSeen(t *testing.T) {
 
 	m.Stop("touch")
 }
+
+func TestManager_StopUnknownIDNoOp(t *testing.T) {
+	m := NewManager()
+	// Stop with non-existent ID must not block or panic.
+	m.Stop("nonexistent")
+	if n := len(m.ActiveIDs()); n != 0 {
+		t.Fatalf("expected 0 active sessions, got %d", n)
+	}
+}

@@ -1,9 +1,27 @@
 package auth
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
 
-func TestInMemoryUserStore_CreateAndAuthenticate(t *testing.T) {
-	store := NewInMemoryUserStore()
+	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
+)
+
+func newTestSQLiteUserStore(t *testing.T) *SQLiteUserStore {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "users.db")
+	db, err := dbsqlite.Open(dbsqlite.Config{Path: dbPath})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := dbsqlite.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return NewSQLiteUserStore(db)
+}
+
+func TestSQLiteUserStore_CreateAndAuthenticate(t *testing.T) {
+	store := newTestSQLiteUserStore(t)
 
 	u, err := store.CreateUser("u1", "alice", "password123")
 	if err != nil {
@@ -26,8 +44,8 @@ func TestInMemoryUserStore_CreateAndAuthenticate(t *testing.T) {
 	}
 }
 
-func TestInMemoryUserStore_DuplicateUser(t *testing.T) {
-	store := NewInMemoryUserStore()
+func TestSQLiteUserStore_DuplicateUser(t *testing.T) {
+	store := newTestSQLiteUserStore(t)
 
 	if _, err := store.CreateUser("u1", "bob", "pw"); err != nil {
 		t.Fatalf("CreateUser returned error: %v", err)
@@ -40,8 +58,8 @@ func TestInMemoryUserStore_DuplicateUser(t *testing.T) {
 	}
 }
 
-func TestInMemoryUserStore_GetByID(t *testing.T) {
-	store := NewInMemoryUserStore()
+func TestSQLiteUserStore_GetByID(t *testing.T) {
+	store := newTestSQLiteUserStore(t)
 
 	u, err := store.CreateUser("u1", "alice", "password123")
 	if err != nil {

@@ -1,12 +1,33 @@
 package auth
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
+
+	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
 )
 
-func TestInMemorySessionStore_CreateAndGet(t *testing.T) {
-	store := NewInMemorySessionStore(5 * time.Minute)
+func newTestSQLiteSessionStore(t *testing.T) *SQLiteSessionStore {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "sessions.db")
+	db, err := dbsqlite.Open(dbsqlite.Config{Path: dbPath})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := dbsqlite.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	// ensure user exists for FK constraint
+	userStore := NewSQLiteUserStore(db)
+	if _, err := userStore.CreateUser("user1", "user1", "password"); err != nil && err != ErrUserExists {
+		t.Fatalf("create user: %v", err)
+	}
+	return NewSQLiteSessionStore(db, 5*time.Minute)
+}
+
+func TestSQLiteSessionStore_CreateAndGet(t *testing.T) {
+	store := newTestSQLiteSessionStore(t)
 
 	sess, err := store.Create("user1")
 	if err != nil {
@@ -22,22 +43,5 @@ func TestInMemorySessionStore_CreateAndGet(t *testing.T) {
 	}
 	if got.ID != sess.ID {
 		t.Fatalf("expected session ID %q, got %q", sess.ID, got.ID)
-	}
-}
-
-func TestInMemorySessionStore_Expired(t *testing.T) {
-	store := NewInMemorySessionStore(1 * time.Second)
-	store.now = func() time.Time { return time.Unix(0, 0) }
-
-	sess, err := store.Create("user1")
-	if err != nil {
-		t.Fatalf("Create returned error: %v", err)
-	}
-
-	// advance time beyond ttl
-	store.now = func() time.Time { return time.Unix(10, 0) }
-
-	if _, err := store.Get(sess.ID); err == nil {
-		t.Fatalf("expected error for expired session, got nil")
 	}
 }

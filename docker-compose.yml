@@ -1,0 +1,12 @@
+services:
+  vantyx:
+    build: .
+    ports:
+      - "80:8080"   # HTTP → HTTPS リダイレクト（無効化不可）
+      - "443:8443" # HTTPS (TLS)
+    volumes:
+      - vantyx_certs:/app/certs
+    # 証明書を自前で用意する場合: ./certs:/app/certs などに差し替え
+
+volumes:
+  vantyx_certs:

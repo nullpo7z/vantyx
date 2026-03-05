@@ -1,0 +1,51 @@
+# Binaries and build artifacts
+/vantyx
+/vantyx-server
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test and coverage
+*.test
+coverage.out
+coverage.html
+*.cover
+*.prof
+
+# Go workspace / vendor
+/vendor/
+go.work
+go.work.sum
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Frontend (if present)
+/web/node_modules/
+/web/dist/
+/web/.cache/
+/web/npm-debug.log*
+/web/yarn-debug.log*
+/web/yarn-error.log*
+
+# Misc
+*.log
+/tmp/
+/dist/

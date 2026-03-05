@@ -11,7 +11,7 @@ info:
     - ローカルユーザー認証
     - セッションベースの自己情報取得
     - アクセス可能なターゲット一覧の取得
-    - SSH WebSocket ターミナル (エコー実装)
+    - SSH WebSocket ターミナル（ターゲットへの SSH ブリッジ）
 servers:
   - url: http://localhost:8080
     description: ローカル開発用サーバー
@@ -57,6 +57,10 @@ components:
           type: string
         name:
           type: string
+        path:
+          type: string
+          description: |
+            階層管理用のフォルダパス（例: "prod/network"）。空文字はルートを表します。
         host:
           type: string
           description: 接続先ホスト名または IP アドレス
@@ -68,6 +72,23 @@ components:
         protocol:
           type: string
           enum: ["ssh", "telnet"]
+    AccessGroup:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 階層を含むアクセスグループID（例: "prod/network"）
+        name:
+          type: string
+          description: 表示名
+        targets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Target'
+      required:
+        - id
+        - name
+        - targets
       required:
         - id
         - name
@@ -165,16 +186,141 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: ターゲット（サーバー）の追加
+      description: 認証済みユーザーが新しいターゲットを追加し、指定したアクセスグループに紐づけます（ユーザーはそのグループに所属している必要があります）。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: 表示名
+                group_id:
+                  type: string
+                  description: 紐づけ先のアクセスグループID
+                path:
+                  type: string
+                  description: 任意のフォルダパス。省略時は group_id が利用されます（UI のグルーピング用途）。
+                host:
+                  type: string
+                  description: ホスト名または IP
+                port:
+                  type: integer
+                  minimum: 1
+                  maximum: 65535
+                  default: 22
+                protocol:
+                  type: string
+                  enum: ["ssh", "telnet"]
+                  default: ssh
+              required:
+                - name
+                - group_id
+                - host
+      responses:
+        '201':
+          description: 作成されたターゲット
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Target'
+        '400':
+          description: リクエスト不正（name/host 不足、protocol 不正など）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証またはセッション無効
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 指定グループに所属していない
+        '404':
+          description: group_id が存在しない
+
+  /api/groups:
+    get:
+      summary: アクセスグループ一覧（所属 + ターゲット含む）
+      description: ログイン中のユーザーが所属するアクセスグループ一覧を返します。各グループには紐づくターゲット一覧が含まれます。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: アクセスグループ一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccessGroup'
+        '401':
+          description: 未認証またはセッション無効
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: アクセスグループの追加
+      description: 新しいアクセスグループを作成し、作成者をそのグループに追加します。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                path:
+                  type: string
+                  description: 階層プレフィックス（例: "prod"）。省略可。
+              required:
+                - name
+      responses:
+        '201':
+          description: 作成されたアクセスグループ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessGroup'
+        '400':
+          description: リクエスト不正
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証またはセッション無効
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /ws/ssh:
     get:
-      summary: SSH WebSocket ターミナル (エコー実装)
+      summary: SSH WebSocket ターミナル
       description: |
         WebSocket にアップグレードされるエンドポイントです。
         クエリパラメータ target_id で接続先ターゲットを指定します。ユーザーは当該ターゲットへのアクセス権が必要です。
+        ターゲットの protocol は ssh である必要があります（telnet の場合は 501 を返します）。
 
-        現在は Phase2 のスケルトンとして、受信したメッセージをそのまま返すエコー実装になっています。
-        将来的には、指定されたターゲットへの SSH/Telnet セッションにブリッジされます。
+        アップグレード後、**最初のテキストメッセージ**でターゲット SSH 用の認証情報を JSON で送信してください。
+        ```json
+        {"username":"...","password":"..."}
+        ```
+        認証情報が無効またはタイムアウト（15 秒）の場合は、サーバーがエラーテキストメッセージを送信し接続を閉じます。
+        認証情報受理後、サーバーがターゲットへ SSH 接続し、以降のバイナリメッセージは SSH セッションと双方向にブリッジされます。
       security:
         - cookieAuth: []
       parameters:
@@ -188,7 +334,7 @@ paths:
         '101':
           description: WebSocket プロトコルへの切り替え
         '400':
-          description: target_id 未指定
+          description: target_id 未指定、または WebSocket アップグレード失敗
         '401':
           description: 未認証またはセッション無効
           content:
@@ -199,3 +345,5 @@ paths:
           description: 指定ターゲットへのアクセス権なし
         '404':
           description: 指定された target_id のターゲットが存在しない
+        '501':
+          description: ターゲットのプロトコルが SSH 以外（現時点では SSH のみ対応）

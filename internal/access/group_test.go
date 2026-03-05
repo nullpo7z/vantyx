@@ -1,11 +1,27 @@
 package access
 
 import (
+	"path/filepath"
 	"testing"
+
+	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
 )
 
-func TestInMemoryAccessGroupStore_CreateAndMembership(t *testing.T) {
-	store := NewInMemoryAccessGroupStore()
+func newTestSQLiteAccessGroupStore(t *testing.T) *SQLiteAccessGroupStore {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "groups.db")
+	db, err := dbsqlite.Open(dbsqlite.Config{Path: dbPath})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := dbsqlite.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return NewSQLiteAccessGroupStore(db)
+}
+
+func TestSQLiteAccessGroupStore_CreateAndMembership(t *testing.T) {
+	store := newTestSQLiteAccessGroupStore(t)
 
 	g, err := store.Create("g1", "ops")
 	if err != nil {
@@ -15,12 +31,10 @@ func TestInMemoryAccessGroupStore_CreateAndMembership(t *testing.T) {
 		t.Fatalf("unexpected group: %+v", g)
 	}
 
-	err = store.AddUserToGroup("user1", "g1")
-	if err != nil {
+	if err := store.AddUserToGroup("user1", "g1"); err != nil {
 		t.Fatalf("AddUserToGroup returned error: %v", err)
 	}
-	err = store.AddTargetToGroup("g1", "target1")
-	if err != nil {
+	if err := store.AddTargetToGroup("g1", "target1"); err != nil {
 		t.Fatalf("AddTargetToGroup returned error: %v", err)
 	}
 
@@ -35,11 +49,15 @@ func TestInMemoryAccessGroupStore_CreateAndMembership(t *testing.T) {
 	}
 }
 
-func TestInMemoryAccessGroupStore_TargetIDsForUser_Dedup(t *testing.T) {
-	store := NewInMemoryAccessGroupStore()
+func TestSQLiteAccessGroupStore_TargetIDsForUser_Dedup(t *testing.T) {
+	store := newTestSQLiteAccessGroupStore(t)
 
-	_, _ = store.Create("g1", "ops")
-	_, _ = store.Create("g2", "dev")
+	if _, err := store.Create("g1", "ops"); err != nil {
+		t.Fatalf("Create g1: %v", err)
+	}
+	if _, err := store.Create("g2", "dev"); err != nil {
+		t.Fatalf("Create g2: %v", err)
+	}
 	_ = store.AddUserToGroup("u1", "g1")
 	_ = store.AddUserToGroup("u1", "g2")
 	_ = store.AddTargetToGroup("g1", "t1")
@@ -52,11 +70,10 @@ func TestInMemoryAccessGroupStore_TargetIDsForUser_Dedup(t *testing.T) {
 	}
 }
 
-func TestInMemoryAccessGroupStore_AddUserToGroup_UnknownGroup(t *testing.T) {
-	store := NewInMemoryAccessGroupStore()
+func TestSQLiteAccessGroupStore_AddUserToGroup_UnknownGroup(t *testing.T) {
+	store := newTestSQLiteAccessGroupStore(t)
 
-	err := store.AddUserToGroup("u1", "missing")
-	if err != ErrGroupNotFound {
+	if err := store.AddUserToGroup("u1", "missing"); err != ErrGroupNotFound {
 		t.Fatalf("expected ErrGroupNotFound, got %v", err)
 	}
 }

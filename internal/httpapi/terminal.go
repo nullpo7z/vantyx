@@ -7,7 +7,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/session"
+	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
 
 var wsUpgrader = websocket.Upgrader{
@@ -38,7 +40,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = a.TargetStore.Get(targetID)
+	target, err := a.TargetStore.Get(targetID)
 	if err != nil {
 		http.Error(w, "target not found", http.StatusNotFound)
 		return
@@ -54,9 +56,21 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if target.Protocol != access.ProtocolSSH {
+		http.Error(w, "only SSH targets supported", http.StatusNotImplemented)
+		return
+	}
+
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		http.Error(w, "failed to upgrade connection", http.StatusBadRequest)
+		return
+	}
+
+	creds, err := sshproxy.ReadCredentials(conn, 15*time.Second)
+	if err != nil {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: invalid or missing credentials (send JSON: {\"username\":\"...\",\"password\":\"...\"})"))
+		_ = conn.Close()
 		return
 	}
 
@@ -64,21 +78,8 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	_, err = a.TerminalSessionManager.Start(id, func(ctx context.Context) {
 		defer conn.Close()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				mt, msg, readErr := conn.ReadMessage()
-				if readErr != nil {
-					return
-				}
-				a.TerminalSessionManager.Touch(id)
-				if writeErr := conn.WriteMessage(mt, msg); writeErr != nil {
-					return
-				}
-			}
-		}
+		touch := func() { a.TerminalSessionManager.Touch(id) }
+		_ = sshproxy.RunBridge(ctx, conn, target.Host, target.Port, creds.Username, creds.Password, touch)
 	})
 	if err != nil {
 		_ = conn.Close()

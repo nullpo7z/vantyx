@@ -1,11 +1,27 @@
 package access
 
 import (
+	"path/filepath"
 	"testing"
+
+	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
 )
 
-func TestInMemoryTargetStore_CreateAndGet(t *testing.T) {
-	store := NewInMemoryTargetStore()
+func newTestSQLiteTargetStore(t *testing.T) *SQLiteTargetStore {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "targets.db")
+	db, err := dbsqlite.Open(dbsqlite.Config{Path: dbPath})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := dbsqlite.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return NewSQLiteTargetStore(db)
+}
+
+func TestSQLiteTargetStore_CreateAndGet(t *testing.T) {
+	store := newTestSQLiteTargetStore(t)
 
 	target, err := store.Create("t1", "router1", "192.168.1.1", 22, ProtocolSSH)
 	if err != nil {
@@ -29,21 +45,19 @@ func TestInMemoryTargetStore_CreateAndGet(t *testing.T) {
 	}
 }
 
-func TestInMemoryTargetStore_Create_Duplicate(t *testing.T) {
-	store := NewInMemoryTargetStore()
+func TestSQLiteTargetStore_Create_Duplicate(t *testing.T) {
+	store := newTestSQLiteTargetStore(t)
 
-	_, err := store.Create("t1", "r1", "host", 22, ProtocolSSH)
-	if err != nil {
+	if _, err := store.Create("t1", "r1", "host", 22, ProtocolSSH); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
-	_, err = store.Create("t1", "r2", "host2", 23, ProtocolTelnet)
-	if err != ErrTargetExists {
+	if _, err := store.Create("t1", "r2", "host2", 23, ProtocolTelnet); err != ErrTargetExists {
 		t.Fatalf("expected ErrTargetExists, got %v", err)
 	}
 }
 
-func TestInMemoryTargetStore_ListByIDs(t *testing.T) {
-	store := NewInMemoryTargetStore()
+func TestSQLiteTargetStore_ListByIDs(t *testing.T) {
+	store := newTestSQLiteTargetStore(t)
 
 	_, _ = store.Create("t1", "r1", "h1", 22, ProtocolSSH)
 	_, _ = store.Create("t2", "r2", "h2", 23, ProtocolTelnet)

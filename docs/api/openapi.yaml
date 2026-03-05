@@ -1,0 +1,187 @@
+openapi: 3.1.0
+info:
+  title: Vantyx API
+  version: 0.1.0
+  description: |
+    Vantyx バックエンドの公開 HTTP / WebSocket API 仕様。
+
+    現時点では以下の機能をカバーしています。
+
+    - ヘルスチェック
+    - ローカルユーザー認証
+    - セッションベースの自己情報取得
+    - アクセス可能なターゲット一覧の取得
+    - SSH WebSocket ターミナル (エコー実装)
+servers:
+  - url: http://localhost:8080
+    description: ローカル開発用サーバー
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: vantyx_session
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+        - message
+    LoginRequest:
+      type: object
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+      required:
+        - username
+        - password
+    LoginResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+        username:
+          type: string
+      required:
+        - user_id
+        - username
+    Target:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        host:
+          type: string
+          description: 接続先ホスト名または IP アドレス
+        port:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65535
+        protocol:
+          type: string
+          enum: ["ssh", "telnet"]
+      required:
+        - id
+        - name
+        - host
+        - port
+        - protocol
+
+paths:
+  /healthz:
+    get:
+      summary: ヘルスチェック
+      description: アプリケーションが稼働しているかを確認するためのシンプルなヘルスチェックエンドポイント。
+      responses:
+        '200':
+          description: 正常
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /api/login:
+    post:
+      summary: ログイン
+      description: ユーザー名とパスワードでログインし、`vantyx_session` Cookie を発行します。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 認証成功
+          headers:
+            Set-Cookie:
+              description: vantyx_session を含む Set-Cookie ヘッダ
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: リクエストボディ不正
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 認証失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/me:
+    get:
+      summary: 自分自身のユーザー情報取得
+      description: 現在のセッションに紐づくユーザー情報を返します。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: ユーザー情報
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: 未認証またはセッション無効
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/targets:
+    get:
+      summary: アクセス可能なターゲット一覧
+      description: ログイン中のユーザーがアクセス権を持つターゲット一覧を返します。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: ターゲット一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Target'
+        '401':
+          description: 未認証またはセッション無効
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /ws/ssh:
+    get:
+      summary: SSH WebSocket ターミナル (エコー実装)
+      description: |
+        WebSocket にアップグレードされるエンドポイントです。
+
+        現在は Phase2 のスケルトンとして、受信したメッセージをそのまま返すエコー実装になっています。
+        将来的には、指定されたターゲットへの SSH/Telnet セッションにブリッジされます。
+      security:
+        - cookieAuth: []
+      responses:
+        '101':
+          description: WebSocket プロトコルへの切り替え
+        '401':
+          description: 未認証またはセッション無効
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'

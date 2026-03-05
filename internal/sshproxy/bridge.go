@@ -24,7 +24,7 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 		Auth: []ssh.AuthMethod{
 			ssh.Password(password),
 		},
-		// #nosec G104 -- Phase 2: accept any host key; verify in Phase 3
+		// #nosec G106 -- Phase 2: accept any host key; verify in Phase 3
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         15 * time.Second,
 	}
@@ -171,7 +171,7 @@ type Credentials struct {
 // It sets a read deadline and returns an error if the message is missing or invalid.
 func ReadCredentials(conn *websocket.Conn, timeout time.Duration) (Credentials, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(timeout))
-	defer conn.SetReadDeadline(time.Time{})
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 
 	mt, msg, err := conn.ReadMessage()
 	if err != nil {

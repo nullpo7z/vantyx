@@ -135,7 +135,11 @@ func (s *TelnetEchoServer) Port() uint16 {
 	if !ok {
 		return 0
 	}
-	return uint16(addr.Port)
+	p := addr.Port
+	if p < 0 || p > 65535 {
+		return 0
+	}
+	return uint16(p)
 }
 
 // Close stops the listener.

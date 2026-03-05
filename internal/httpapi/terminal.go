@@ -18,16 +18,39 @@ var wsUpgrader = websocket.Upgrader{
 }
 
 // handleSSHWebSocket upgrades the connection and starts a goroutine-backed terminal session.
-// For Phase 2 start, this behaves as a simple echo server over WebSocket, wired through
-// the generic session.Manager for lifecycle management.
+// Requires query parameter target_id; the user must have access to that target.
+// For Phase 2, the session still behaves as an echo server; actual SSH bridging follows.
 func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("vantyx_session")
 	if err != nil || cookie.Value == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if _, err := a.SessionStore.Get(cookie.Value); err != nil {
+	sess, err := a.SessionStore.Get(cookie.Value)
+	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	targetID := r.URL.Query().Get("target_id")
+	if targetID == "" {
+		http.Error(w, "target_id required", http.StatusBadRequest)
+		return
+	}
+
+	_, err = a.TargetStore.Get(targetID)
+	if err != nil {
+		http.Error(w, "target not found", http.StatusNotFound)
+		return
+	}
+
+	allowed := a.AccessGroupStore.TargetIDsForUser(sess.UserID)
+	allowedSet := make(map[string]struct{})
+	for _, id := range allowed {
+		allowedSet[id] = struct{}{}
+	}
+	if _, ok := allowedSet[targetID]; !ok {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 

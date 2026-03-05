@@ -171,17 +171,31 @@ paths:
       summary: SSH WebSocket ターミナル (エコー実装)
       description: |
         WebSocket にアップグレードされるエンドポイントです。
+        クエリパラメータ target_id で接続先ターゲットを指定します。ユーザーは当該ターゲットへのアクセス権が必要です。
 
         現在は Phase2 のスケルトンとして、受信したメッセージをそのまま返すエコー実装になっています。
         将来的には、指定されたターゲットへの SSH/Telnet セッションにブリッジされます。
       security:
         - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: 接続先ターゲットの ID（GET /api/targets で取得可能）
       responses:
         '101':
           description: WebSocket プロトコルへの切り替え
+        '400':
+          description: target_id 未指定
         '401':
           description: 未認証またはセッション無効
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 指定ターゲットへのアクセス権なし
+        '404':
+          description: 指定された target_id のターゲットが存在しない

@@ -124,6 +124,7 @@ func requestLog(next http.Handler) http.Handler {
 				remote = strings.TrimSpace(xff)
 			}
 		}
+		// #nosec G706 -- audit log; path/remote from request
 		log.Printf("http method=%s path=%s status=%d remote=%s duration=%s",
 			r.Method, r.URL.Path, wrap.status, remote, time.Since(start).Round(time.Millisecond))
 	})

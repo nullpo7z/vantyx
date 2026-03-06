@@ -49,6 +49,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	targetID := r.URL.Query().Get("target_id")
 	if targetID == "" {
+		// #nosec G706 -- audit log; sess.UserID from session store
 		log.Printf("terminal ws bad_request user_id=%s err=target_id required", sess.UserID)
 		writeJSONError(w, "target_id required", http.StatusBadRequest)
 		return
@@ -56,6 +57,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	target, err := a.TargetStore.Get(targetID)
 	if err != nil {
+		// #nosec G706 -- audit log; IDs from store/query
 		log.Printf("terminal ws not_found user_id=%s target_id=%s", sess.UserID, targetID)
 		writeJSONError(w, "target not found", http.StatusNotFound)
 		return
@@ -67,12 +69,14 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		allowedSet[id] = struct{}{}
 	}
 	if _, ok := allowedSet[targetID]; !ok {
+		// #nosec G706 -- audit log; IDs from store/query
 		log.Printf("terminal ws forbidden user_id=%s target_id=%s", sess.UserID, targetID)
 		writeJSONError(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
 	if target.Protocol != access.ProtocolSSH {
+		// #nosec G706 -- audit log; target from store
 		log.Printf("terminal ws not_implemented user_id=%s target_id=%s protocol=%s", sess.UserID, targetID, target.Protocol)
 		writeJSONError(w, "only SSH targets supported", http.StatusNotImplemented)
 		return
@@ -80,6 +84,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
+		// #nosec G706 -- audit log; err from upgrader
 		log.Printf("terminal ws upgrade_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
 		writeJSONError(w, "failed to upgrade connection", http.StatusBadRequest)
 		return
@@ -87,11 +92,13 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	creds, err := sshproxy.ReadCredentials(conn, 15*time.Second)
 	if err != nil {
+		// #nosec G706 -- audit log; err from ReadCredentials
 		log.Printf("terminal ws credentials_invalid user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: invalid or missing credentials (send JSON: {\"username\":\"...\",\"password\":\"...\"})"))
 		_ = conn.Close()
 		return
 	}
+	// #nosec G706 -- audit log; creds from ReadCredentials
 	log.Printf("terminal ws credentials_ok user_id=%s target_id=%s ssh_user=%q", sess.UserID, targetID, creds.Username)
 
 	// terminalSessionIDGen is overridden in tests to trigger Start id-collision error path.
@@ -119,11 +126,13 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	if err != nil {
+		// #nosec G706 -- audit log; err from Start
 		log.Printf("terminal session start_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
 		_ = conn.Close()
 		http.Error(w, "failed to start terminal session", http.StatusInternalServerError)
 		return
 	}
+	// #nosec G706 -- audit log; target from store
 	log.Printf("terminal session start session_id=%s user_id=%s target_id=%s host=%s port=%d",
 		id, sess.UserID, targetID, target.Host, target.Port)
 }

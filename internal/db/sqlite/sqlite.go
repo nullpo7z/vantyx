@@ -51,7 +51,7 @@ func Open(cfg Config) (*sql.DB, error) {
 	}
 	if cfg.Path != "" && cfg.Path != ":memory:" {
 		dir := filepath.Dir(cfg.Path)
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0750); err != nil {
 			return nil, err
 		}
 	}

@@ -52,12 +52,14 @@ func main() {
 	}
 	absCert, err := filepath.Abs(certFile)
 	if err != nil {
+		// #nosec G706 -- certFile from env, not user input
 		slog.Error("TLS cert path", "path", certFile, "error", err)
 		os.Exit(1)
 	}
 	certFile = absCert
 	absKey, err := filepath.Abs(keyFile)
 	if err != nil {
+		// #nosec G706 -- keyFile from env, not user input
 		slog.Error("TLS key path", "path", keyFile, "error", err)
 		os.Exit(1)
 	}
@@ -74,6 +76,7 @@ func main() {
 	if v := os.Getenv("VANTYX_HTTPS_READ_TIMEOUT_SEC"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
+			// #nosec G706 -- v from env, not user input
 			slog.Error("VANTYX_HTTPS_READ_TIMEOUT_SEC parse failed, using default 15s", "value", v, "error", err)
 		} else {
 			readTimeout = time.Duration(n) * time.Second
@@ -148,6 +151,7 @@ func main() {
 	if v := os.Getenv("VANTYX_SHUTDOWN_TIMEOUT_SEC"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
+			// #nosec G706 -- v from env, not user input
 			slog.Error("VANTYX_SHUTDOWN_TIMEOUT_SEC parse failed, using default", "value", v, "error", err)
 		} else {
 			shutdownSec = n
@@ -248,6 +252,7 @@ func redirectToHTTPSHandler() http.HandlerFunc {
 			}
 			if len(allowedHosts) > 0 {
 				if _, ok := allowedHosts[requestHost]; !ok {
+					// #nosec G706 -- requestHost logged for security audit (ASVS V7.1.1)
 					slog.Warn("rejected invalid host header", "host", requestHost)
 					w.WriteHeader(http.StatusBadRequest)
 					_, _ = w.Write([]byte("Host not allowed"))
@@ -334,7 +339,7 @@ func generateSelfSigned(certFile, keyFile string) (*tls.Certificate, error) {
 		return nil, err
 	}
 
-	// #nosec G304 -- certFile cleaned in main (VANTYX_TLS_CERT_FILE). 0644 for least privilege (ASVS V14.1.1).
+	// #nosec G304,G302 -- certFile from env. 0644 for cert (public); key uses 0600 (ASVS V14.1.1).
 	certOut, err := os.OpenFile(certFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return nil, err

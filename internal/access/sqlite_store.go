@@ -482,6 +482,7 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 			args = append(args, string(id))
 		}
 		err := func() error {
+			// #nosec G202 -- placeholders is "?,?,?" from len(chunk); args are validated TargetIDs
 			rows, err := s.db.QueryContext(ctx, `
 				SELECT id, name, host, port, protocol, path
 				FROM targets

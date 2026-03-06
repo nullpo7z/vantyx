@@ -3,6 +3,8 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite" // SQLite driver
@@ -37,10 +39,21 @@ func dsn(path string) string {
 	return "file:" + path + "?_pragma=foreign_keys(on)"
 }
 
+// DefaultPath is the default SQLite file path when VANTYX_SQLITE_PATH is not set.
+// Use this so data persists across restarts. Callers (e.g. NewApp) set this when env is empty.
+const DefaultPath = "data/vantyx.db"
+
 // Open creates a *sql.DB for the given configuration and applies common pool settings.
+// If Path is empty, :memory: is used. For file paths, the parent directory is created if needed.
 func Open(cfg Config) (*sql.DB, error) {
 	if cfg.Path == "" {
 		cfg.Path = ":memory:"
+	}
+	if cfg.Path != "" && cfg.Path != ":memory:" {
+		dir := filepath.Dir(cfg.Path)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, err
+		}
 	}
 
 	db, err := sql.Open(sqlDriver, dsn(cfg.Path))

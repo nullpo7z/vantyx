@@ -4,9 +4,15 @@ services:
     ports:
       - "80:8080"   # HTTP → HTTPS リダイレクト（無効化不可）
       - "443:8443" # HTTPS (TLS)
+    environment:
+      # サーバーIP/ホスト名でアクセスする場合は SAN を追加（証明書再生成が必要）
+      # 例: VANTYX_TLS_SANS=192.168.1.10,vantyx.example.com
+      - VANTYX_TLS_SANS=10.10.20.105
     volumes:
       - vantyx_certs:/app/certs
+      - vantyx_data:/app/data
     # 証明書を自前で用意する場合: ./certs:/app/certs などに差し替え
 
 volumes:
   vantyx_certs:
+  vantyx_data:

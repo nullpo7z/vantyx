@@ -1,9 +1,12 @@
 package httpapi
 
 import (
+	"bufio"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,11 +16,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	api "github.com/nullpo7z/vantyx/docs/api"
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
 	"github.com/nullpo7z/vantyx/internal/session"
 )
+
+// adminUserID is the user ID that is allowed to access /api/spec and /docs.
+const adminUserID = "admin"
 
 // App encapsulates HTTP handlers and shared dependencies.
 type App struct {
@@ -38,10 +45,13 @@ var (
 )
 
 // NewApp constructs an App backed by SQLite.
+// If VANTYX_SQLITE_PATH is not set, data/vantyx.db is used so data persists across restarts.
 func NewApp() *App {
-	cfg := dbsqlite.Config{
-		Path: os.Getenv("VANTYX_SQLITE_PATH"),
+	path := os.Getenv("VANTYX_SQLITE_PATH")
+	if path == "" {
+		path = dbsqlite.DefaultPath
 	}
+	cfg := dbsqlite.Config{Path: path}
 	open := dbsqlite.Open
 	if newAppDBOpen != nil {
 		open = newAppDBOpen
@@ -82,10 +92,48 @@ func NewApp() *App {
 	}
 }
 
+// responseWriter wraps http.ResponseWriter to record status code for logging.
+// It implements http.Hijacker by delegating to the underlying ResponseWriter so WebSocket upgrade works.
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *responseWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := w.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, errors.New("responseWriter: underlying ResponseWriter does not implement http.Hijacker")
+}
+
+func requestLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		wrap := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(wrap, r)
+		remote := r.RemoteAddr
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.Index(xff, ","); i > 0 {
+				remote = strings.TrimSpace(xff[:i])
+			} else {
+				remote = strings.TrimSpace(xff)
+			}
+		}
+		log.Printf("http method=%s path=%s status=%d remote=%s duration=%s",
+			r.Method, r.URL.Path, wrap.status, remote, time.Since(start).Round(time.Millisecond))
+	})
+}
+
 // NewRouter constructs the main HTTP router for the Vantyx API.
 func (a *App) NewRouter() http.Handler {
 	r := chi.NewRouter()
 
+	r.Use(requestLog)
 	r.Use(a.sessionMiddleware)
 
 	// Health check
@@ -108,6 +156,10 @@ func (a *App) NewRouter() http.Handler {
 
 	// SSH/WebSocket terminal
 	r.Get("/ws/ssh", a.handleSSHWebSocket)
+
+	// Admin-only: API spec and reference (Swagger UI)
+	r.Get("/api/spec", a.handleAPISpec)
+	r.Get("/docs", a.handleDocs)
 
 	// SPA: serve web/dist when present (after npm run build)
 	if dir := staticDir(); dir != "" {
@@ -153,23 +205,37 @@ type loginResponse struct {
 	Username string `json:"username"`
 }
 
+type errorResponse struct {
+	Message string `json:"message"`
+}
+
+func writeJSONError(w http.ResponseWriter, message string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(errorResponse{Message: message})
+}
+
 func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		log.Printf("login failed username=%s err=invalid request body", req.Username)
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	u, err := a.UserStore.Authenticate(req.Username, req.Password)
 	if err != nil {
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		log.Printf("login failed username=%s err=invalid credentials", req.Username)
+		writeJSONError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
 	sess, err := a.SessionStore.Create(u.ID)
 	if err != nil {
-		http.Error(w, "failed to create session", http.StatusInternalServerError)
+		log.Printf("login failed username=%s err=session create %v", req.Username, err)
+		writeJSONError(w, "failed to create session", http.StatusInternalServerError)
 		return
 	}
+	log.Printf("login success user_id=%s username=%s", u.ID, u.Username)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "vantyx_session",
@@ -203,17 +269,17 @@ func (a *App) sessionMiddleware(next http.Handler) http.Handler {
 func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie("vantyx_session")
 	if err != nil || c.Value == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	sess, err := a.SessionStore.Get(c.Value)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	u, err := a.UserStore.GetByID(sess.UserID)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -223,6 +289,86 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 		UserID:   u.ID,
 		Username: u.Username,
 	})
+}
+
+// currentUserID returns the authenticated user's ID from the session cookie, or "" if not authenticated.
+func (a *App) currentUserID(r *http.Request) string {
+	c, err := r.Cookie("vantyx_session")
+	if err != nil || c.Value == "" {
+		return ""
+	}
+	sess, err := a.SessionStore.Get(c.Value)
+	if err != nil {
+		return ""
+	}
+	return sess.UserID
+}
+
+// requireAdmin writes 403 JSON and returns false if the current user is not admin; otherwise returns true.
+func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	userID := a.currentUserID(r)
+	if userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	if userID != adminUserID {
+		writeJSONError(w, "forbidden: admin only", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+func (a *App) handleAPISpec(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-yaml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(api.OpenAPIYAML)
+}
+
+const swaggerUIHTML = `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Vantyx API リファレンス</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <style>
+    .vantyx-notice { padding: 10px 16px; margin: 0; background: #fef3c7; border-bottom: 1px solid #f59e0b; color: #92400e; font-size: 14px; }
+    .vantyx-notice strong { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <p class="vantyx-notice">
+    <strong>Try it out で NetworkError が出る場合:</strong> 自己署名証明書を使っているときは、先にこのサイトの証明書を信頼してください。
+    <a href="/" target="_blank" rel="noopener">トップを新しいタブで開き</a>、「詳細」→「安全な接続を続行」などで例外を許可してから、このページを再読み込みして再度 Try it out を実行してください。
+  </p>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.onload = function() {
+      window.ui = SwaggerUIBundle({
+        url: window.location.origin + '/api/spec',
+        dom_id: '#swagger-ui',
+        presets: [
+          SwaggerUIBundle.presets.apis,
+          SwaggerUIBundle.SwaggerUIStandalonePreset
+        ],
+        requestInterceptor: function(req) { req.credentials = 'same-origin'; return req; }
+      });
+    };
+  </script>
+</body>
+</html>
+`
+
+func (a *App) handleDocs(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(swaggerUIHTML))
 }
 
 type targetResponse struct {
@@ -244,12 +390,12 @@ type groupResponse struct {
 func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie("vantyx_session")
 	if err != nil || c.Value == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	sess, err := a.SessionStore.Get(c.Value)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -301,13 +447,13 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 
 	var req createGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	req.Path = normalizeTargetPath(req.Path)
 	if req.Name == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
+		writeJSONError(w, "name is required", http.StatusBadRequest)
 		return
 	}
 
@@ -325,7 +471,7 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if !errors.Is(err, access.ErrGroupExists) {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -340,12 +486,12 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie("vantyx_session")
 	if err != nil || c.Value == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	sess, err := a.SessionStore.Get(c.Value)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -381,24 +527,24 @@ type createTargetRequest struct {
 // handleCreateTarget creates a new target and adds it to the specified access group.
 func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	c, err := r.Cookie("vantyx_session")
 	if err != nil || c.Value == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	sess, err := a.SessionStore.Get(c.Value)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	_ = sess // reserved for future per-user permission
 
 	var req createTargetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -406,15 +552,15 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	req.Path = normalizeTargetPath(req.Path)
 	req.GroupID = strings.TrimSpace(req.GroupID)
 	if req.Name == "" || req.Host == "" {
-		http.Error(w, "name and host are required", http.StatusBadRequest)
+		writeJSONError(w, "name and host are required", http.StatusBadRequest)
 		return
 	}
 	if req.GroupID == "" {
-		http.Error(w, "group_id is required", http.StatusBadRequest)
+		writeJSONError(w, "group_id is required", http.StatusBadRequest)
 		return
 	}
 	if _, err := a.AccessGroupStore.Get(req.GroupID); err != nil {
-		http.Error(w, "group not found", http.StatusNotFound)
+		writeJSONError(w, "group not found", http.StatusNotFound)
 		return
 	}
 	allowedGroups := a.AccessGroupStore.GroupIDsForUser(sess.UserID)
@@ -426,7 +572,7 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !allowed {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeJSONError(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if req.Port == 0 {
@@ -436,7 +582,7 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	if req.Protocol == "telnet" {
 		protocol = access.ProtocolTelnet
 	} else if req.Protocol != "" && req.Protocol != "ssh" {
-		http.Error(w, "protocol must be ssh or telnet", http.StatusBadRequest)
+		writeJSONError(w, "protocol must be ssh or telnet", http.StatusBadRequest)
 		return
 	}
 
@@ -455,12 +601,12 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if !errors.Is(err, access.ErrTargetExists) {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 	if err := a.AccessGroupStore.AddTargetToGroup(req.GroupID, id); err != nil {
-		http.Error(w, "failed to assign target to group", http.StatusInternalServerError)
+		writeJSONError(w, "failed to assign target to group", http.StatusInternalServerError)
 		return
 	}
 

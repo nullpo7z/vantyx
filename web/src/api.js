@@ -15,19 +15,28 @@ const API = {
 
   async me() {
     const res = await fetch('/api/me', { credentials: 'include' })
-    if (!res.ok) throw new Error('Unauthorized')
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText || 'Unauthorized' }))
+      throw new Error(err.message || 'Unauthorized')
+    }
     return res.json()
   },
 
   async targets() {
     const res = await fetch('/api/targets', { credentials: 'include' })
-    if (!res.ok) throw new Error('Failed to load targets')
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load targets')
+    }
     return res.json()
   },
 
   async groups() {
     const res = await fetch('/api/groups', { credentials: 'include' })
-    if (!res.ok) throw new Error('Failed to load groups')
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load groups')
+    }
     return res.json()
   },
 

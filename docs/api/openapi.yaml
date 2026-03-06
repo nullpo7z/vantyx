@@ -1,20 +1,27 @@
 openapi: 3.1.0
 info:
   title: Vantyx API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     Vantyx バックエンドの公開 HTTP / WebSocket API 仕様。
 
-    現時点では以下の機能をカバーしています。
-
-    - ヘルスチェック
-    - ローカルユーザー認証
-    - セッションベースの自己情報取得
-    - アクセス可能なターゲット一覧の取得
-    - SSH WebSocket ターミナル（ターゲットへの SSH ブリッジ）
+    現時点でカバーしている機能:
+    - ヘルスチェック (GET /healthz)
+    - ローカルユーザー認証 (POST /api/login) と Cookie セッション
+    - 自己情報取得 (GET /api/me)
+    - アクセスグループの一覧・作成 (GET/POST /api/groups)
+    - ターゲットの一覧・作成 (GET/POST /api/targets)
+    - SSH WebSocket ターミナル (GET /ws/ssh)。認証後、ターゲットへの SSH をブリッジ。セッション永続化の土台（リングバッファ）あり。
+    エラー応答はすべて application/json の ErrorResponse (message) で統一しています。
 servers:
+  # Swagger UI の Try it out を「アクセスしているオリジン」に合わせるため、相対 URL を優先します。
+  # 例: https://<server-ip>/docs を開いた場合、/api/login は https://<server-ip>/api/login へ送信されます。
+  - url: /
+    description: "同一オリジン（推奨: https://<server-host>/）"
+  - url: https://localhost:8443
+    description: "ローカル開発用 HTTPS（go run: :8443）"
   - url: http://localhost:8080
-    description: ローカル開発用サーバー
+    description: ローカル開発用 HTTP（常に HTTPS へ 301 リダイレクト）
 
 components:
   securitySchemes:
@@ -52,6 +59,7 @@ components:
         - username
     Target:
       type: object
+      description: 接続先ターゲット（サーバー）の情報。
       properties:
         id:
           type: string
@@ -59,8 +67,7 @@ components:
           type: string
         path:
           type: string
-          description: |
-            階層管理用のフォルダパス（例: "prod/network"）。空文字はルートを表します。
+          description: "階層管理用のフォルダパス（例: prod/network）。空の場合はルート。"
         host:
           type: string
           description: 接続先ホスト名または IP アドレス
@@ -72,12 +79,19 @@ components:
         protocol:
           type: string
           enum: ["ssh", "telnet"]
+      required:
+        - id
+        - name
+        - host
+        - port
+        - protocol
     AccessGroup:
       type: object
+      description: アクセスグループ。ユーザーが所属し、ターゲットを紐づける単位。
       properties:
         id:
           type: string
-          description: 階層を含むアクセスグループID（例: "prod/network"）
+          description: "階層を含むアクセスグループID（例: prod/network）"
         name:
           type: string
           description: 表示名
@@ -89,12 +103,6 @@ components:
         - id
         - name
         - targets
-      required:
-        - id
-        - name
-        - host
-        - port
-        - protocol
 
 paths:
   /healthz:
@@ -140,6 +148,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: 認証失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: セッション作成失敗
           content:
             application/json:
               schema:
@@ -244,8 +258,22 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: 指定グループに所属していない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: group_id が存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: ターゲット作成またはグループ紐づけの内部エラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/groups:
     get:
@@ -284,7 +312,7 @@ paths:
                   type: string
                 path:
                   type: string
-                  description: 階層プレフィックス（例: "prod"）。省略可。
+                  description: "階層プレフィックス（例: prod）。省略可。"
               required:
                 - name
       responses:
@@ -295,13 +323,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/AccessGroup'
         '400':
-          description: リクエスト不正
+          description: リクエスト不正（name 不足、invalid request body など）
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: 未認証またはセッション無効
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: グループ作成の内部エラー
           content:
             application/json:
               schema:
@@ -319,8 +353,9 @@ paths:
         ```json
         {"username":"...","password":"..."}
         ```
-        認証情報が無効またはタイムアウト（15 秒）の場合は、サーバーがエラーテキストメッセージを送信し接続を閉じます。
-        認証情報受理後、サーバーがターゲットへ SSH 接続し、以降のバイナリメッセージは SSH セッションと双方向にブリッジされます。
+        認証情報が無効またはタイムアウト（15 秒）の場合は、サーバーがテキストメッセージ "error: ..." を送信し接続を閉じます。
+        認証情報受理後、サーバーが空のテキストメッセージを 1 回送信し、続けてターゲットへ SSH 接続。以降のメッセージは SSH セッションと双方向にブリッジされます。
+        セッションはバックエンドで保持され、出力はリングバッファに tee されます（レジューム用の API は今後の拡張）。
       security:
         - cookieAuth: []
       parameters:
@@ -329,12 +364,16 @@ paths:
           required: true
           schema:
             type: string
-          description: 接続先ターゲットの ID（GET /api/targets で取得可能）
+          description: 接続先ターゲットの ID（GET /api/groups または GET /api/targets で取得可能）
       responses:
         '101':
           description: WebSocket プロトコルへの切り替え
         '400':
           description: target_id 未指定、または WebSocket アップグレード失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: 未認証またはセッション無効
           content:
@@ -343,7 +382,19 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: 指定ターゲットへのアクセス権なし
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: 指定された target_id のターゲットが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '501':
           description: ターゲットのプロトコルが SSH 以外（現時点では SSH のみ対応）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'

@@ -6,9 +6,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': { target: 'http://localhost:8080', changeOrigin: false },
-      '/ws': { target: 'http://localhost:8080', ws: true },
-      '/healthz': { target: 'http://localhost:8080' },
+      // バックエンドは :8080 でリダイレクトのみのため、API を提供する :8443 にプロキシする
+      '/api': { target: 'https://localhost:8443', changeOrigin: true, secure: false },
+      '/ws': { target: 'https://localhost:8443', ws: true, secure: false },
+      '/healthz': { target: 'https://localhost:8443', secure: false },
     },
   },
 })

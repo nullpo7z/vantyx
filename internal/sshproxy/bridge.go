@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// sessionFactory opens an SSH connection and returns stdin/stdout/stderr pipes and a cleanup function.
+// sessionFactory opens an SSH connection and returns stdin/stdout/stderr pipes, a window-change hook, and a cleanup function.
 // Used so tests can inject a fake that fails at specific steps for coverage.
 var sessionFactory = defaultSessionFactory
 
@@ -26,10 +27,10 @@ var (
 	testHookShell      func(*ssh.Session) error
 )
 
-func defaultSessionFactory(addr string, config *ssh.ClientConfig) (stdin io.WriteCloser, stdout, stderr io.Reader, cleanup func(), err error) {
+func defaultSessionFactory(addr string, config *ssh.ClientConfig) (stdin io.WriteCloser, stdout, stderr io.Reader, windowChange func(cols, rows int) error, cleanup func(), err error) {
 	client, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	var sess *ssh.Session
 	if testHookNewSession != nil {
@@ -39,7 +40,7 @@ func defaultSessionFactory(addr string, config *ssh.ClientConfig) (stdin io.Writ
 	}
 	if err != nil {
 		_ = client.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if testHookStdinPipe != nil {
 		stdin, err = testHookStdinPipe(sess)
@@ -49,7 +50,7 @@ func defaultSessionFactory(addr string, config *ssh.ClientConfig) (stdin io.Writ
 	if err != nil {
 		_ = sess.Close()
 		_ = client.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if testHookStdoutPipe != nil {
 		stdout, err = testHookStdoutPipe(sess)
@@ -59,7 +60,7 @@ func defaultSessionFactory(addr string, config *ssh.ClientConfig) (stdin io.Writ
 	if err != nil {
 		_ = sess.Close()
 		_ = client.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if testHookStderrPipe != nil {
 		stderr, err = testHookStderrPipe(sess)
@@ -69,7 +70,7 @@ func defaultSessionFactory(addr string, config *ssh.ClientConfig) (stdin io.Writ
 	if err != nil {
 		_ = sess.Close()
 		_ = client.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          1,
@@ -79,12 +80,13 @@ func defaultSessionFactory(addr string, config *ssh.ClientConfig) (stdin io.Writ
 	if testHookRequestPty != nil {
 		err = testHookRequestPty(sess)
 	} else {
-		err = sess.RequestPty("xterm", 80, 40, modes)
+		// RequestPty takes (height=rows, width=cols). We'll resize promptly from the browser.
+		err = sess.RequestPty("xterm", 40, 120, modes)
 	}
 	if err != nil {
 		_ = sess.Close()
 		_ = client.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if testHookShell != nil {
 		err = testHookShell(sess)
@@ -94,13 +96,19 @@ func defaultSessionFactory(addr string, config *ssh.ClientConfig) (stdin io.Writ
 	if err != nil {
 		_ = sess.Close()
 		_ = client.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
+	}
+	windowChange = func(cols, rows int) error {
+		if cols <= 0 || rows <= 0 {
+			return nil
+		}
+		return sess.WindowChange(rows, cols)
 	}
 	cleanup = func() {
 		_ = sess.Close()
 		_ = client.Close()
 	}
-	return stdin, stdout, stderr, cleanup, nil
+	return stdin, stdout, stderr, windowChange, cleanup, nil
 }
 
 // RunBridge connects to the target host via SSH with password auth, opens a PTY shell,
@@ -122,7 +130,7 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 	}
 
 	addr := net.JoinHostPort(host, portString(port))
-	stdin, stdout, stderr, cleanup, err := sessionFactory(addr, config)
+	stdin, stdout, stderr, windowChange, cleanup, err := sessionFactory(addr, config)
 	if err != nil {
 		return err
 	}
@@ -135,6 +143,11 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		type resizeMsg struct {
+			Type string `json:"type"`
+			Cols int    `json:"cols"`
+			Rows int    `json:"rows"`
+		}
 		for {
 			mt, msg, err := conn.ReadMessage()
 			if err != nil {
@@ -147,6 +160,14 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 			}
 			if touch != nil {
 				touch()
+			}
+			// Control message: resize (do not write to stdin)
+			if mt == websocket.TextMessage && windowChange != nil && len(msg) > 0 && msg[0] == '{' && strings.Contains(string(msg), `"type":"resize"`) {
+				var rm resizeMsg
+				if jsonErr := json.Unmarshal(msg, &rm); jsonErr == nil && rm.Type == "resize" && rm.Cols > 0 && rm.Rows > 0 {
+					_ = windowChange(rm.Cols, rm.Rows)
+					continue
+				}
 			}
 			if isDataMessage(mt) {
 				if _, err := stdin.Write(msg); err != nil {

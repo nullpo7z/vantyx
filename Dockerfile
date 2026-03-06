@@ -38,7 +38,7 @@ COPY --from=builder /out/vantyx /app/vantyx
 COPY --from=frontend /src/web/dist /app/web/dist
 COPY scripts/docker-entrypoint.sh /entrypoint.sh
 
-RUN mkdir -p /app/certs && chown -R nonroot:nonroot /app/certs \
+RUN mkdir -p /app/certs /app/data && chown -R nonroot:nonroot /app/certs /app/data \
 	&& chmod +x /entrypoint.sh
 
 EXPOSE 80 443

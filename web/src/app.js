@@ -1,6 +1,5 @@
 import API from './api.js'
 import { renderLogin } from './login.js'
-import { openTerminal } from './terminal.js'
 
 export function renderApp(container) {
   container.innerHTML = `
@@ -11,6 +10,7 @@ export function renderApp(container) {
           <nav class="flex items-center gap-6">
             <a href="#" id="nav-targets" class="text-sm font-semibold border-b-2 border-white pb-1 transition-opacity">ホーム</a>
             <a href="#" id="nav-groups" class="text-sm opacity-80 hover:opacity-100 transition-opacity">サーバー管理</a>
+            <a href="/docs" id="nav-api-ref" target="_blank" rel="noopener noreferrer" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">API リファレンス</a>
           </nav>
         </div>
         <div class="flex items-center gap-4">
@@ -25,7 +25,7 @@ export function renderApp(container) {
         </div>
       </main>
       <div id="add-target-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
-      <div id="terminal-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
+      <div id="ssh-credential-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
     </div>
   `
 
@@ -39,6 +39,14 @@ export function renderApp(container) {
   let groupsCache = null
   let selectedGroupId = ''
   let expandedGroups = new Set()
+  /** 新しいタブに渡す SSH 認証情報（BroadcastChannel 用） */
+  const pendingTerminalCreds = Object.create(null)
+
+  function randomToken() {
+    const b = new Uint8Array(16)
+    crypto.getRandomValues(b)
+    return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+  }
 
   function showUserInfo() {
     if (!meData) return
@@ -125,6 +133,81 @@ export function renderApp(container) {
     })
   }
 
+  function showSSHCredentialModal(targetId, targetName) {
+    const modal = document.getElementById('ssh-credential-modal')
+    modal.classList.remove('hidden')
+    modal.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+            <h3 class="font-semibold text-slate-800">SSH 認証情報</h3>
+            <button id="ssh-cred-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <form id="ssh-cred-form">
+            <div class="px-6 py-5 space-y-5">
+              <p class="text-sm text-slate-600">${escapeHtml(targetName || targetId)} に接続するための認証情報を入力してください。</p>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名</label>
+                <input type="text" id="ssh-cred-username" autocomplete="username" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード</label>
+                <input type="password" id="ssh-cred-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
+              </div>
+              <p id="ssh-cred-error" class="text-sm text-red-600 hidden"></p>
+            </div>
+            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
+              <button type="button" id="ssh-cred-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
+              <button type="submit" id="ssh-cred-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">接続</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `
+    const close = () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    modal.querySelector('#ssh-cred-close').addEventListener('click', close)
+    modal.querySelector('#ssh-cred-cancel').addEventListener('click', close)
+    modal.querySelector('#ssh-cred-form').addEventListener('submit', (e) => {
+      e.preventDefault()
+      const errorEl = modal.querySelector('#ssh-cred-error')
+      const username = modal.querySelector('#ssh-cred-username').value.trim()
+      const password = modal.querySelector('#ssh-cred-password').value
+      if (!username) {
+        errorEl.textContent = 'ユーザー名を入力してください'
+        errorEl.classList.remove('hidden')
+        return
+      }
+      const token = randomToken()
+      pendingTerminalCreds[token] = { targetId, targetName, username, password }
+      const url = `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&channel=${encodeURIComponent(token)}`
+      window.open(url, '_blank', 'noopener,noreferrer')
+
+      // 新しいタブとは BroadcastChannel で認証情報を受け渡しする（noopener でも動く）
+      const bc = new BroadcastChannel(`vantyx-terminal-${token}`)
+      const timeoutId = window.setTimeout(() => {
+        try { bc.close() } catch { /* ignore */ }
+        delete pendingTerminalCreds[token]
+      }, 15_000)
+      bc.onmessage = (ev) => {
+        if (ev?.data?.type !== 'ready') return
+        if (ev?.data?.target_id !== targetId) return
+        const creds = pendingTerminalCreds[token]
+        if (!creds) return
+        try {
+          bc.postMessage({ type: 'credentials', username: creds.username, password: creds.password })
+        } finally {
+          window.clearTimeout(timeoutId)
+          try { bc.close() } catch { /* ignore */ }
+          delete pendingTerminalCreds[token]
+        }
+      }
+      close()
+    })
+  }
+
   async function showTreeView(mode = 'manage', useCache = false) {
     const isManageMode = mode === 'manage'
     const pageTitle = isManageMode ? 'サーバー管理' : 'ホーム'
@@ -202,16 +285,19 @@ export function renderApp(container) {
           })
         })
       } else {
-        mainContent.querySelectorAll('.connect-btn-in-group').forEach((btn) => {
+        // SSH: 認証モーダル表示 → 入力後に新しいタブを開き、postMessage で認証情報を渡す。
+        mainContent.querySelectorAll('.terminal-open-btn').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.preventDefault()
+            const id = btn.dataset.terminalTargetId || ''
+            const name = btn.dataset.terminalTargetName || ''
+            if (id) showSSHCredentialModal(id, name)
+          })
+        })
+        // 非 SSH はボタンのみでアラート。
+        mainContent.querySelectorAll('.connect-btn-in-group:not(.terminal-open-btn)').forEach((btn) => {
           btn.addEventListener('click', () => {
-            const targetId = btn.dataset.targetId
-            const targetName = btn.dataset.targetName
-            const protocol = btn.dataset.protocol
-            if (protocol !== 'ssh') {
-              alert('このターゲットは SSH のみ対応しています。Telnet は未対応です。')
-              return
-            }
-            openTerminal(container, targetId, targetName)
+            alert('このターゲットは SSH のみ対応しています。Telnet は未対応です。')
           })
         })
       }
@@ -372,12 +458,15 @@ export function renderApp(container) {
               class="edit-btn-in-group rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 border border-slate-300 shadow-sm transition-colors disabled:opacity-50">
               編集
             </button>
-            ` : `
-            <button data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-protocol="${escapeHtml(t.protocol)}"
+            ` : (t.protocol === 'ssh'
+            ? `<button type="button" data-terminal-target-id="${escapeHtml(t.id)}" data-terminal-target-name="${escapeHtml(t.name || '')}"
+              class="connect-btn-in-group terminal-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50">
+              接続
+            </button>`
+            : `<button data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-protocol="${escapeHtml(t.protocol)}"
               class="connect-btn-in-group rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50">
               接続
-            </button>
-            `}
+            </button>`)}
           </td>
         </tr>
       `,
@@ -484,6 +573,9 @@ export function renderApp(container) {
     try {
       meData = await API.me()
       userNameEl.textContent = meData.username
+      if (meData.user_id === 'admin') {
+        document.getElementById('nav-api-ref')?.classList.remove('hidden')
+      }
     } catch {
       renderLogin(container)
       return

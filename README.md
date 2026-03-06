@@ -11,12 +11,14 @@ docker compose up --build
 - **HTTP (80)**: 常に **HTTPS へ 301 リダイレクト**（無効化不可）
 - **HTTPS (443)**: アプリ本体（API + SPA）。コンテナ内では 8080/8443 で待ち受け、ホストの 80/443 にマッピングしています。
 - **TLS**: 初回起動時に `/app/certs` に証明書が無い場合は **自己署名証明書** を自動生成します。ボリューム `vantyx_certs` で永続化されるため、2 回目以降は同じ証明書を使います。本番では `./certs` をマウントして自身の証明書を配置しても構いません（`VANTYX_TLS_CERT_FILE`, `VANTYX_TLS_KEY_FILE` でパス変更可）。
-- ブラウザでは **https://localhost** でアクセスし、自己署名の場合は警告を許可してください。
+- ブラウザでは **https://localhost** または **https://<サーバーIP>** でアクセスできます。自己署名の場合は警告を許可してください。
+- **サーバーIPでの TLS**: 自己署名証明書に IP アドレスを含めるには `VANTYX_TLS_SANS` を指定します（例: `VANTYX_TLS_SANS=192.168.1.10`）。証明書は初回生成後に固定されるため、設定を変えた場合は `vantyx_certs` ボリュームを削除して再生成してください。
 - 初期ユーザー: `admin` / `admin123!`
+- **データ永続化**: SQLite は環境変数 `VANTYX_SQLITE_PATH` でファイルパスを指定できます。未設定時は `data/vantyx.db` を使い、起動ディレクトリに `data/` を作成して永続化します。Docker ではボリュームでこのパスをマウントするとデータが残ります。
 
 ## 開発（ローカル）
 
-- バックエンド: `VANTYX_TLS_CERT_FILE=./certs/tls.crt VANTYX_TLS_KEY_FILE=./certs/tls.key go run ./cmd/vantyx-server`（初回は `./certs` に自己署名を自動生成。HTTP :8080 → HTTPS へリダイレクト、HTTPS :8443）
+- バックエンド: `VANTYX_TLS_CERT_FILE=./certs/tls.crt VANTYX_TLS_KEY_FILE=./certs/tls.key go run ./cmd/vantyx-server`（初回は `./certs` に自己署名を自動生成。HTTP :8080 → HTTPS へリダイレクト、HTTPS :8443）。DB は未設定時 `data/vantyx.db` に永続化されます。
 - フロントエンド: `cd web && npm run dev`（:5173、/api と /ws はバックエンドにプロキシ）
 
 詳細は [web/README.md](web/README.md) を参照してください。

@@ -147,6 +147,8 @@ func generateSelfSigned(certFile, keyFile string) (*tls.Certificate, error) {
 		return nil, err
 	}
 
+	dnsNames, ipAddrs := collectCertSANs()
+
 	template := x509.Certificate{
 		SerialNumber:          bigInt(1),
 		Subject:               pkix.Name{CommonName: "vantyx"},
@@ -155,8 +157,8 @@ func generateSelfSigned(certFile, keyFile string) (*tls.Certificate, error) {
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost"},
-		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		DNSNames:              dnsNames,
+		IPAddresses:           ipAddrs,
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
@@ -194,3 +196,87 @@ func generateSelfSigned(certFile, keyFile string) (*tls.Certificate, error) {
 }
 
 func bigInt(n int64) *big.Int { return big.NewInt(n) }
+
+// collectCertSANs returns DNS/IP SAN entries for the self-signed cert.
+//
+//   - Always includes localhost and loopback.
+//   - Adds all non-loopback interface IPs (useful when running the binary directly on a server).
+//   - Allows explicit override via env VANTYX_TLS_SANS (comma-separated list of DNS names or IPs).
+//     Example: VANTYX_TLS_SANS="192.168.1.10,server.local"
+//
+// Note: In Docker, interface IPs are usually container IPs; set VANTYX_TLS_SANS to the host IP or DNS name if needed.
+func collectCertSANs() ([]string, []net.IP) {
+	dnsSet := map[string]struct{}{"localhost": {}}
+	ipSet := map[string]net.IP{
+		net.IPv4(127, 0, 0, 1).String(): net.IPv4(127, 0, 0, 1),
+		net.IPv6loopback.String():       net.IPv6loopback,
+	}
+
+	// Add interface IPs (best-effort).
+	if ifaces, err := net.Interfaces(); err == nil {
+		for _, iface := range ifaces {
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+			for _, a := range addrs {
+				var ip net.IP
+				switch v := a.(type) {
+				case *net.IPNet:
+					ip = v.IP
+				case *net.IPAddr:
+					ip = v.IP
+				}
+				if ip == nil {
+					continue
+				}
+				ip = ip.To16()
+				if ip == nil {
+					continue
+				}
+				if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+					continue
+				}
+				ipSet[ip.String()] = ip
+			}
+		}
+	}
+
+	// Add explicit SANs.
+	if v := strings.TrimSpace(os.Getenv("VANTYX_TLS_SANS")); v != "" {
+		parts := strings.Split(v, ",")
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if ip := net.ParseIP(p); ip != nil {
+				ipSet[ip.String()] = ip
+				continue
+			}
+			// Reject obvious invalid entries early.
+			if strings.ContainsAny(p, " \t\r\n") {
+				continue
+			}
+			dnsSet[p] = struct{}{}
+		}
+	}
+
+	dns := make([]string, 0, len(dnsSet))
+	for n := range dnsSet {
+		dns = append(dns, n)
+	}
+	ips := make([]net.IP, 0, len(ipSet))
+	for _, ip := range ipSet {
+		ips = append(ips, ip)
+	}
+
+	// Ensure we return something valid.
+	if len(dns) == 0 && len(ips) == 0 {
+		// Should not happen, but keep cert generation safe.
+		dns = []string{"localhost"}
+		ips = []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
+	}
+
+	return dns, ips
+}

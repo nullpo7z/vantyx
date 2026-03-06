@@ -30,6 +30,9 @@ go.work.sum
 .DS_Store
 Thumbs.db
 
+# SQLite DB (default path when VANTYX_SQLITE_PATH is unset)
+/data/
+
 # Local env and secrets
 .env
 .env.local

@@ -14,8 +14,7 @@ web/node_modules
 web/dist
 web/.cache
 
-# Docs and plans (optional; remove if you want them in image)
-docs
+# Docs and plans (optional; docs/api は OpenAPI embed のためビルドに必要)
 *.md
 !web/README.md
 

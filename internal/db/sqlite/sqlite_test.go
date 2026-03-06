@@ -78,12 +78,16 @@ func TestOpen_ZeroConnMaxLifetime(t *testing.T) {
 	}
 }
 
-func TestOpen_PingFails(t *testing.T) {
-	// Path in a non-existent directory so that the driver fails on first use (Ping).
-	path := filepath.Join(t.TempDir(), "gone", "x.db")
-	_, err := Open(Config{Path: path})
-	if err == nil {
-		t.Fatal("expected error when opening in non-existent directory")
+func TestOpen_CreatesParentDir(t *testing.T) {
+	// Parent directory is created if missing, then DB is opened.
+	path := filepath.Join(t.TempDir(), "sub", "db.db")
+	db, err := Open(Config{Path: path})
+	if err != nil {
+		t.Fatalf("Open with missing parent dir: %v", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		t.Fatalf("Ping: %v", err)
 	}
 }
 

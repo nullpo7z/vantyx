@@ -535,7 +535,7 @@ func TestRunBridge_ShellFails(t *testing.T) {
 type errWriter struct{ err error }
 
 func (e *errWriter) Write([]byte) (int, error) { return 0, e.err }
-func (e *errWriter) Close() error             { return nil }
+func (e *errWriter) Close() error              { return nil }
 
 type eofReader struct{}
 
@@ -543,9 +543,9 @@ func (eofReader) Read([]byte) (int, error) { return 0, io.EOF }
 
 // onceReader returns data on first Read, then EOF.
 type onceReader struct {
-	data   []byte
-	done   bool
-	delay  time.Duration // if set, block before returning data (so test can close conn first)
+	data    []byte
+	done    bool
+	delay   time.Duration // if set, block before returning data (so test can close conn first)
 	delayed bool
 }
 
@@ -799,4 +799,3 @@ func TestRunBridge_ReadMessageFails(t *testing.T) {
 		t.Fatal("RunBridge did not return")
 	}
 }
-

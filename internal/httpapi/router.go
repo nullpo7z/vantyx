@@ -32,9 +32,9 @@ type App struct {
 
 // newAppDBOpen, newAppMigrate, and newAppUserStore are set in tests to inject failures for coverage.
 var (
-	newAppDBOpen     func(dbsqlite.Config) (*sql.DB, error)
-	newAppMigrate    func(*sql.DB) error
-	newAppUserStore  func(*sql.DB) auth.UserStore
+	newAppDBOpen    func(dbsqlite.Config) (*sql.DB, error)
+	newAppMigrate   func(*sql.DB) error
+	newAppUserStore func(*sql.DB) auth.UserStore
 )
 
 // NewApp constructs an App backed by SQLite.
@@ -235,8 +235,8 @@ type targetResponse struct {
 }
 
 type groupResponse struct {
-	ID      string         `json:"id"`
-	Name    string         `json:"name"`
+	ID      string           `json:"id"`
+	Name    string           `json:"name"`
 	Targets []targetResponse `json:"targets"`
 }
 
@@ -517,4 +517,3 @@ func normalizeTargetPath(p string) string {
 	}
 	return strings.Join(out, "/")
 }
-

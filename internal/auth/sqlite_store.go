@@ -161,4 +161,3 @@ func (s *SQLiteSessionStore) Delete(id string) {
 	defer cancel()
 	_, _ = s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id)
 }
-

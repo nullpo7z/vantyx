@@ -18,12 +18,12 @@ var sessionFactory = defaultSessionFactory
 
 // Test hooks for defaultSessionFactory error paths (set from bridge_test.go).
 var (
-	testHookNewSession  func(*ssh.Client) (*ssh.Session, error)
-	testHookStdinPipe   func(*ssh.Session) (io.WriteCloser, error)
-	testHookStdoutPipe  func(*ssh.Session) (io.Reader, error)
-	testHookStderrPipe  func(*ssh.Session) (io.Reader, error)
-	testHookRequestPty  func(*ssh.Session) error
-	testHookShell       func(*ssh.Session) error
+	testHookNewSession func(*ssh.Client) (*ssh.Session, error)
+	testHookStdinPipe  func(*ssh.Session) (io.WriteCloser, error)
+	testHookStdoutPipe func(*ssh.Session) (io.Reader, error)
+	testHookStderrPipe func(*ssh.Session) (io.Reader, error)
+	testHookRequestPty func(*ssh.Session) error
+	testHookShell      func(*ssh.Session) error
 )
 
 func defaultSessionFactory(addr string, config *ssh.ClientConfig) (stdin io.WriteCloser, stdout, stderr io.Reader, cleanup func(), err error) {

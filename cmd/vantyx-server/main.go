@@ -28,10 +28,10 @@ import (
 )
 
 const (
-	defaultCertFile     = "/app/certs/tls.crt"
-	defaultKeyFile      = "/app/certs/tls.key"
-	defaultRedirect     = ":8080"
-	defaultHTTPS        = ":8443"
+	defaultCertFile           = "/app/certs/tls.crt"
+	defaultKeyFile            = "/app/certs/tls.key"
+	defaultRedirect           = ":8080"
+	defaultHTTPS              = ":8443"
 	hstsMaxAge                = "31536000"
 	hstsIncludeSubdomains     = "includeSubDomains"
 	defaultShutdownTimeoutSec = 10

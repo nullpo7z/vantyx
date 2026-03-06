@@ -1,23 +1,44 @@
 package access
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
+
+// UserID identifies a user (e.g. session user).
+type UserID string
+
+// GroupID identifies an access group.
+type GroupID string
+
+// TargetID identifies a target (device).
+type TargetID string
+
+// ListOpts limits and paginates list results to avoid DoS from huge result sets.
+// If nil, a default limit is applied by the implementation.
+type ListOpts struct {
+	Limit  int // max number of items to return; <= 0 means implementation default
+	Offset int // number of items to skip
+}
+
+const defaultListLimit = 10000
 
 // AccessGroup represents a group that can be granted access to targets.
 type AccessGroup struct {
-	ID   string
+	ID   GroupID
 	Name string
 }
 
 // AccessGroupStore defines the behavior required for managing access groups
 // and their relationships to users and targets.
 type AccessGroupStore interface {
-	Create(id, name string) (*AccessGroup, error)
-	Get(id string) (*AccessGroup, error)
-	AddUserToGroup(userID, groupID string) error
-	AddTargetToGroup(groupID, targetID string) error
-	GroupIDsForUser(userID string) []string
-	TargetIDsForGroup(groupID string) []string
-	TargetIDsForUser(userID string) []string
+	Create(ctx context.Context, id GroupID, name string) (*AccessGroup, error)
+	Get(ctx context.Context, id GroupID) (*AccessGroup, error)
+	AddUserToGroup(ctx context.Context, userID UserID, groupID GroupID) error
+	AddTargetToGroup(ctx context.Context, groupID GroupID, targetID TargetID) error
+	GroupIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]GroupID, error)
+	TargetIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]TargetID, error)
+	TargetIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]TargetID, error)
 }
 
 var (

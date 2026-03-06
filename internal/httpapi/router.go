@@ -44,6 +44,29 @@ var (
 	newAppUserStore func(*sql.DB) auth.UserStore
 )
 
+// accessStoreConfigFromEnv builds access.StoreConfig from env (Twelve-Factor Config).
+// VANTYX_ACCESS_QUERY_TIMEOUT: duration e.g. "5s"; VANTYX_ACCESS_DEFAULT_LIST_LIMIT: integer.
+// Returns nil if neither is set so store constructors use defaults.
+func accessStoreConfigFromEnv() *access.StoreConfig {
+	timeoutStr := os.Getenv("VANTYX_ACCESS_QUERY_TIMEOUT")
+	limitStr := os.Getenv("VANTYX_ACCESS_DEFAULT_LIST_LIMIT")
+	if timeoutStr == "" && limitStr == "" {
+		return nil
+	}
+	cfg := &access.StoreConfig{}
+	if timeoutStr != "" {
+		if d, err := time.ParseDuration(timeoutStr); err == nil && d > 0 {
+			cfg.QueryTimeout = d
+		}
+	}
+	if limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
+			cfg.DefaultListLimit = n
+		}
+	}
+	return cfg
+}
+
 // NewApp constructs an App backed by SQLite.
 // If VANTYX_SQLITE_PATH is not set, data/vantyx.db is used so data persists across restarts.
 func NewApp() *App {
@@ -73,8 +96,9 @@ func NewApp() *App {
 		userStore = newAppUserStore(db)
 	}
 	sessionStore := auth.NewSQLiteSessionStore(db, 24*time.Hour)
-	targetStore := access.NewSQLiteTargetStore(db)
-	groupStore := access.NewSQLiteAccessGroupStore(db)
+	storeCfg := accessStoreConfigFromEnv()
+	targetStore := access.NewSQLiteTargetStore(db, storeCfg)
+	groupStore := access.NewSQLiteAccessGroupStore(db, storeCfg)
 	terminalSessions := session.NewManager()
 
 	// Ensure admin user exists.
@@ -400,19 +424,30 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	groupIDs := a.AccessGroupStore.GroupIDsForUser(sess.UserID)
+	ctx := r.Context()
+	groupIDs, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(sess.UserID), nil)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	out := make([]groupResponse, 0, len(groupIDs))
 	for _, gid := range groupIDs {
-		g, err := a.AccessGroupStore.Get(gid)
+		g, err := a.AccessGroupStore.Get(ctx, gid)
 		if err != nil {
 			continue
 		}
-		tids := a.AccessGroupStore.TargetIDsForGroup(gid)
-		targets := a.TargetStore.ListByIDs(tids)
+		tids, err := a.AccessGroupStore.TargetIDsForGroup(ctx, gid, nil)
+		if err != nil {
+			continue
+		}
+		targets, err := a.TargetStore.ListByIDs(ctx, tids, nil)
+		if err != nil {
+			continue
+		}
 		tout := make([]targetResponse, 0, len(targets))
 		for _, t := range targets {
 			tout = append(tout, targetResponse{
-				ID:       t.ID,
+				ID:       string(t.ID),
 				Name:     t.Name,
 				Host:     t.Host,
 				Port:     t.Port,
@@ -420,7 +455,7 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 				Path:     t.Path,
 			})
 		}
-		out = append(out, groupResponse{ID: g.ID, Name: g.Name, Targets: tout})
+		out = append(out, groupResponse{ID: string(g.ID), Name: g.Name, Targets: tout})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -462,12 +497,13 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	if req.Path != "" {
 		base = req.Path + "/" + base
 	}
+	ctx := r.Context()
 	id := base
 	for i := 0; ; i++ {
 		if i > 0 {
 			id = base + "-" + strconv.Itoa(i)
 		}
-		_, err := a.AccessGroupStore.Create(id, req.Name)
+		_, err := a.AccessGroupStore.Create(ctx, access.GroupID(id), req.Name)
 		if err == nil {
 			break
 		}
@@ -476,7 +512,10 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	_ = a.AccessGroupStore.AddUserToGroup(sess.UserID, id)
+	if err := a.AccessGroupStore.AddUserToGroup(ctx, access.UserID(sess.UserID), access.GroupID(id)); err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -496,13 +535,21 @@ func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ids := a.AccessGroupStore.TargetIDsForUser(sess.UserID)
-	targets := a.TargetStore.ListByIDs(ids)
-
+	ctx := r.Context()
+	ids, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	targets, err := a.TargetStore.ListByIDs(ctx, ids, nil)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	out := make([]targetResponse, 0, len(targets))
 	for _, t := range targets {
 		out = append(out, targetResponse{
-			ID:       t.ID,
+			ID:       string(t.ID),
 			Name:     t.Name,
 			Host:     t.Host,
 			Port:     t.Port,
@@ -560,14 +607,19 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "group_id is required", http.StatusBadRequest)
 		return
 	}
-	if _, err := a.AccessGroupStore.Get(req.GroupID); err != nil {
+	ctx := r.Context()
+	if _, err := a.AccessGroupStore.Get(ctx, access.GroupID(req.GroupID)); err != nil {
 		writeJSONError(w, "group not found", http.StatusNotFound)
 		return
 	}
-	allowedGroups := a.AccessGroupStore.GroupIDsForUser(sess.UserID)
+	allowedGroups, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(sess.UserID), nil)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	allowed := false
 	for _, gid := range allowedGroups {
-		if gid == req.GroupID {
+		if gid == access.GroupID(req.GroupID) {
 			allowed = true
 			break
 		}
@@ -597,7 +649,7 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		if path == "" {
 			path = req.GroupID
 		}
-		_, err := a.TargetStore.CreateWithPath(id, req.Name, req.Host, req.Port, protocol, path)
+		_, err := a.TargetStore.CreateWithPath(ctx, access.TargetID(id), req.Name, req.Host, req.Port, protocol, access.GroupID(req.GroupID), path)
 		if err == nil {
 			break
 		}
@@ -606,16 +658,16 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := a.AccessGroupStore.AddTargetToGroup(req.GroupID, id); err != nil {
+	if err := a.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID(req.GroupID), access.TargetID(id)); err != nil {
 		writeJSONError(w, "failed to assign target to group", http.StatusInternalServerError)
 		return
 	}
 
-	t, _ := a.TargetStore.Get(id)
+	t, _ := a.TargetStore.Get(ctx, access.TargetID(id))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(targetResponse{
-		ID:       t.ID,
+		ID:       string(t.ID),
 		Name:     t.Name,
 		Host:     t.Host,
 		Port:     t.Port,

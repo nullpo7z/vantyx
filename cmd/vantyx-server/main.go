@@ -2,20 +2,25 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"log"
+	"fmt"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,21 +28,40 @@ import (
 )
 
 const (
-	defaultCertFile = "/app/certs/tls.crt"
-	defaultKeyFile  = "/app/certs/tls.key"
-	defaultRedirect = ":8080"
-	defaultHTTPS    = ":8443"
+	defaultCertFile     = "/app/certs/tls.crt"
+	defaultKeyFile      = "/app/certs/tls.key"
+	defaultRedirect     = ":8080"
+	defaultHTTPS        = ":8443"
+	hstsMaxAge                = "31536000"
+	hstsIncludeSubdomains     = "includeSubDomains"
+	defaultShutdownTimeoutSec = 10
+	// Minimal CSP: script/style only from self; no framing (ASVS V14.4.3, V14.4.4).
+	cspValue = "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'self'"
 )
 
 func main() {
-	certFile := defaultCertFile
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	certFile := filepath.Clean(defaultCertFile)
 	if v := os.Getenv("VANTYX_TLS_CERT_FILE"); v != "" {
-		certFile = v
+		certFile = filepath.Clean(v)
 	}
-	keyFile := defaultKeyFile
+	keyFile := filepath.Clean(defaultKeyFile)
 	if v := os.Getenv("VANTYX_TLS_KEY_FILE"); v != "" {
-		keyFile = v
+		keyFile = filepath.Clean(v)
 	}
+	absCert, err := filepath.Abs(certFile)
+	if err != nil {
+		slog.Error("TLS cert path", "path", certFile, "error", err)
+		os.Exit(1)
+	}
+	certFile = absCert
+	absKey, err := filepath.Abs(keyFile)
+	if err != nil {
+		slog.Error("TLS key path", "path", keyFile, "error", err)
+		os.Exit(1)
+	}
+	keyFile = absKey
 	redirectAddr := defaultRedirect
 	if v := os.Getenv("VANTYX_HTTP_REDIRECT_ADDR"); v != "" {
 		redirectAddr = v
@@ -46,76 +70,215 @@ func main() {
 	if v := os.Getenv("VANTYX_HTTPS_ADDR"); v != "" {
 		httpsAddr = v
 	}
+	readTimeout := 15 * time.Second
+	if v := os.Getenv("VANTYX_HTTPS_READ_TIMEOUT_SEC"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			slog.Error("VANTYX_HTTPS_READ_TIMEOUT_SEC parse failed, using default 15s", "value", v, "error", err)
+		} else {
+			readTimeout = time.Duration(n) * time.Second
+		}
+	}
+
+	if os.Getenv("VANTYX_EXTERNAL_HOST") == "" && strings.TrimSpace(os.Getenv("VANTYX_ALLOWED_HOSTS")) == "" {
+		slog.Error("redirect requires VANTYX_EXTERNAL_HOST or VANTYX_ALLOWED_HOSTS for safe redirect target; set at least one to avoid redirecting to localhost")
+		os.Exit(1)
+	}
 
 	tlsCert, err := loadOrGenerateCert(certFile, keyFile)
 	if err != nil {
-		log.Fatalf("TLS cert: %v", err)
+		slog.Error("TLS cert", "error", err, "hint", "if using self-signed cert, ensure the cert directory exists and is writable (e.g. pre-create /app/certs with correct ownership in non-root containers)")
+		os.Exit(1)
 	}
 
 	app := httpapi.NewApp()
+	httpsHandler := securityHeadersMiddleware(corsMiddleware(app.NewRouter()))
+	// ReadTimeout covers the whole request including body; increase via VANTYX_HTTPS_READ_TIMEOUT_SEC for large uploads, or use TimeoutHandler/MaxBytesReader in router.
 	httpsServer := &http.Server{
-		Addr:         httpsAddr,
-		Handler:      app.NewRouter(),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		Addr:              httpsAddr,
+		Handler:           httpsHandler,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{*tlsCert},
-			MinVersion:   tls.VersionTLS12,
+			MinVersion:   tls.VersionTLS13,
 		},
 	}
 
 	redirectServer := &http.Server{
-		Addr:         redirectAddr,
-		Handler:      http.HandlerFunc(redirectToHTTPS),
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 5 * time.Second,
+		Addr:              redirectAddr,
+		Handler:           redirectToHTTPSHandler(),
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	serverErrCh := make(chan error, 2)
 	go func() {
 		// #nosec G706 -- redirectAddr from env (VANTYX_HTTP_REDIRECT_ADDR)
-		log.Printf("starting HTTP redirect server on %s", redirectAddr)
+		slog.Info("starting HTTP redirect server", "addr", redirectAddr)
 		if err := redirectServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("redirect server failed: %v", err)
+			serverErrCh <- err
 		}
 	}()
 	go func() {
 		// #nosec G706 -- httpsAddr from env (VANTYX_HTTPS_ADDR)
-		log.Printf("starting HTTPS server on %s", httpsAddr)
+		slog.Info("starting HTTPS server", "addr", httpsAddr)
 		if err := httpsServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("https server failed: %v", err)
+			serverErrCh <- err
 		}
 	}()
 
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)
-	<-stopCh
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	var hasServerError bool
+	select {
+	case sig := <-stopCh:
+		slog.Info("received signal", "signal", sig)
+	case err := <-serverErrCh:
+		slog.Error("server failed", "error", err)
+		hasServerError = true
+	}
+
+	shutdownSec := defaultShutdownTimeoutSec
+	if v := os.Getenv("VANTYX_SHUTDOWN_TIMEOUT_SEC"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			slog.Error("VANTYX_SHUTDOWN_TIMEOUT_SEC parse failed, using default", "value", v, "error", err)
+		} else {
+			shutdownSec = n
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(shutdownSec)*time.Second)
 	defer cancel()
 
-	if err := redirectServer.Shutdown(ctx); err != nil {
-		log.Printf("redirect server shutdown: %v", err)
+	// Shutdown both servers in parallel so each gets the full timeout window (no serial bias).
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		errCh <- redirectServer.Shutdown(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		errCh <- httpsServer.Shutdown(ctx)
+	}()
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			slog.Error("server shutdown", "error", err)
+		}
 	}
-	if err := httpsServer.Shutdown(ctx); err != nil {
-		log.Printf("https server shutdown: %v", err)
+	slog.Info("server shutdown completed")
+	if hasServerError {
+		os.Exit(1)
 	}
-	log.Println("server shutdown completed")
 }
 
-// redirectToHTTPS always responds with 301 to the same path on HTTPS (cannot be disabled).
-func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
-	host := r.Host
-	if strings.HasSuffix(host, ":80") {
-		host = host[:len(host)-3]
-	} else if strings.HasSuffix(host, ":8080") {
-		host = host[:len(host)-5]
+// securityHeadersMiddleware sets security headers on all HTTPS responses (ASVS V8.2.1, V8.2.2, V14.4.1, V14.4.3, V14.4.4, V14.4.6).
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Strict-Transport-Security", "max-age="+hstsMaxAge+"; "+hstsIncludeSubdomains)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", cspValue)
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Cache-Control", "no-store, max-age=0")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// corsMiddleware adds CORS headers when VANTYX_CORS_ALLOWED_ORIGINS is set (ASVS V14.4.2). Comma-separated list, e.g. https://app.example.com.
+func corsMiddleware(next http.Handler) http.Handler {
+	origins := make(map[string]struct{})
+	if v := strings.TrimSpace(os.Getenv("VANTYX_CORS_ALLOWED_ORIGINS")); v != "" {
+		for _, o := range strings.Split(v, ",") {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				origins[o] = struct{}{}
+			}
+		}
 	}
-	u := "https://" + host + r.URL.RequestURI()
-	http.Redirect(w, r, u, http.StatusMovedPermanently)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(origins) > 0 {
+			w.Header().Add("Vary", "Origin")
+		}
+		origin := r.Header.Get("Origin")
+		if _, ok := origins[origin]; ok {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// redirectToHTTPSHandler returns a handler that 301-redirects to HTTPS. When VANTYX_EXTERNAL_HOST is set it is used (ASVS V5.1.4). When unset, r.Host is allowed only if it is in VANTYX_ALLOWED_HOSTS (comma-separated); otherwise 400 Bad Request or safe default localhost.
+func redirectToHTTPSHandler() http.HandlerFunc {
+	allowedHosts := make(map[string]struct{})
+	if v := strings.TrimSpace(os.Getenv("VANTYX_ALLOWED_HOSTS")); v != "" {
+		for _, h := range strings.Split(v, ",") {
+			h = strings.TrimSpace(strings.ToLower(h))
+			if h != "" {
+				allowedHosts[h] = struct{}{}
+			}
+		}
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		targetHost := os.Getenv("VANTYX_EXTERNAL_HOST")
+		if targetHost == "" {
+			requestHost := r.Host
+			if h, _, err := net.SplitHostPort(r.Host); err == nil && h != "" {
+				requestHost = h
+			}
+			requestHost = strings.TrimSpace(strings.ToLower(requestHost))
+			if requestHost == "" {
+				requestHost = "localhost"
+			}
+			if len(allowedHosts) > 0 {
+				if _, ok := allowedHosts[requestHost]; !ok {
+					slog.Warn("rejected invalid host header", "host", requestHost)
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte("Host not allowed"))
+					return
+				}
+			} else {
+				requestHost = "localhost"
+			}
+			addr := os.Getenv("VANTYX_HTTPS_ADDR")
+			if addr == "" {
+				addr = defaultHTTPS
+			}
+			port := "8443"
+			if _, p, err := net.SplitHostPort(addr); err == nil && p != "" {
+				port = p
+			}
+			targetHost = net.JoinHostPort(requestHost, port)
+		}
+		u := &url.URL{
+			Scheme:   "https",
+			Host:     targetHost,
+			Path:     r.URL.Path,
+			RawQuery: r.URL.RawQuery,
+		}
+		// Do not set HSTS on HTTP responses (RFC 6797 §7.2: MUST NOT on non-secure transport).
+		http.Redirect(w, r, u.String(), http.StatusMovedPermanently)
+	}
 }
 
 func loadOrGenerateCert(certFile, keyFile string) (*tls.Certificate, error) {
-	// #nosec G703 -- certFile from env (VANTYX_TLS_CERT_FILE), not user input
+	// Paths are normalized with filepath.Clean in main (ASVS V5.2.1).
 	_, errCert := os.Stat(certFile)
 	// #nosec G703 -- keyFile from env (VANTYX_TLS_KEY_FILE), not user input
 	_, errKey := os.Stat(keyFile)
@@ -125,36 +288,41 @@ func loadOrGenerateCert(certFile, keyFile string) (*tls.Certificate, error) {
 			return nil, err
 		}
 		// #nosec G706 -- certFile from env (VANTYX_TLS_CERT_FILE)
-		log.Printf("loaded TLS cert from %s", certFile)
+		slog.Info("loaded TLS cert", "path", certFile)
 		return &cert, nil
 	}
 	if errCert == nil || errKey == nil {
 		return nil, os.ErrNotExist
 	}
-	log.Println("TLS cert/key not found; generating self-signed certificate")
+	slog.Info("TLS cert/key not found; generating self-signed certificate")
 	return generateSelfSigned(certFile, keyFile)
 }
 
 func generateSelfSigned(certFile, keyFile string) (*tls.Certificate, error) {
 	dir := filepath.Dir(certFile)
-	// #nosec G703 -- paths from env (VANTYX_TLS_*), not user input
 	if err := os.MkdirAll(dir, 0750); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create cert dir %s: %w (pre-create directory with correct ownership when running as non-root)", dir, err)
 	}
 
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
 	}
 
 	dnsNames, ipAddrs := collectCertSANs()
 
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return nil, err
+	}
+
 	template := x509.Certificate{
-		SerialNumber:          bigInt(1),
+		SerialNumber:          serialNumber,
 		Subject:               pkix.Name{CommonName: "vantyx"},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		DNSNames:              dnsNames,
@@ -166,8 +334,8 @@ func generateSelfSigned(certFile, keyFile string) (*tls.Certificate, error) {
 		return nil, err
 	}
 
-	// #nosec G304,G703 -- certFile from env (VANTYX_TLS_CERT_FILE), not user input
-	certOut, err := os.Create(certFile)
+	// #nosec G304 -- certFile cleaned in main (VANTYX_TLS_CERT_FILE). 0644 for least privilege (ASVS V14.1.1).
+	certOut, err := os.OpenFile(certFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -179,12 +347,16 @@ func generateSelfSigned(certFile, keyFile string) (*tls.Certificate, error) {
 		return nil, err
 	}
 
-	// #nosec G304,G703 -- keyFile from env (VANTYX_TLS_KEY_FILE), not user input
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	// #nosec G304 -- keyFile cleaned in main (VANTYX_TLS_KEY_FILE)
 	keyOut, err := os.OpenFile(keyFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return nil, err
 	}
-	if err := pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}); err != nil {
+	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
 		_ = keyOut.Close()
 		return nil, err
 	}
@@ -192,19 +364,21 @@ func generateSelfSigned(certFile, keyFile string) (*tls.Certificate, error) {
 		return nil, err
 	}
 
-	return loadOrGenerateCert(certFile, keyFile)
+	// Load the written files so we return a tls.Certificate without recursing into loadOrGenerateCert.
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, err
+	}
+	// #nosec G706 -- certFile from env (VANTYX_TLS_CERT_FILE)
+	slog.Info("generated and loaded self-signed TLS cert", "path", certFile)
+	return &cert, nil
 }
 
-func bigInt(n int64) *big.Int { return big.NewInt(n) }
-
 // collectCertSANs returns DNS/IP SAN entries for the self-signed cert.
+// Only localhost/loopback and entries from VANTYX_TLS_SANS are included (ASVS V14.1.2: no interface IPs to avoid leaking container network topology).
 //
 //   - Always includes localhost and loopback.
-//   - Adds all non-loopback interface IPs (useful when running the binary directly on a server).
-//   - Allows explicit override via env VANTYX_TLS_SANS (comma-separated list of DNS names or IPs).
-//     Example: VANTYX_TLS_SANS="192.168.1.10,server.local"
-//
-// Note: In Docker, interface IPs are usually container IPs; set VANTYX_TLS_SANS to the host IP or DNS name if needed.
+//   - VANTYX_TLS_SANS: comma-separated DNS names or IPs, e.g. VANTYX_TLS_SANS="192.168.1.10,server.local"
 func collectCertSANs() ([]string, []net.IP) {
 	dnsSet := map[string]struct{}{"localhost": {}}
 	ipSet := map[string]net.IP{
@@ -212,37 +386,7 @@ func collectCertSANs() ([]string, []net.IP) {
 		net.IPv6loopback.String():       net.IPv6loopback,
 	}
 
-	// Add interface IPs (best-effort).
-	if ifaces, err := net.Interfaces(); err == nil {
-		for _, iface := range ifaces {
-			addrs, err := iface.Addrs()
-			if err != nil {
-				continue
-			}
-			for _, a := range addrs {
-				var ip net.IP
-				switch v := a.(type) {
-				case *net.IPNet:
-					ip = v.IP
-				case *net.IPAddr:
-					ip = v.IP
-				}
-				if ip == nil {
-					continue
-				}
-				ip = ip.To16()
-				if ip == nil {
-					continue
-				}
-				if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-					continue
-				}
-				ipSet[ip.String()] = ip
-			}
-		}
-	}
-
-	// Add explicit SANs.
+	// Add explicit SANs from env only.
 	if v := strings.TrimSpace(os.Getenv("VANTYX_TLS_SANS")); v != "" {
 		parts := strings.Split(v, ",")
 		for _, p := range parts {

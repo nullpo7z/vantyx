@@ -31,11 +31,12 @@ func TestHandleSSHWebSocket_UnauthorizedWithoutCookie(t *testing.T) {
 	app := newTestAppForTerminal(t)
 	router := app.NewRouter()
 
+	ctx := context.Background()
 	// Ensure target_id=demo exists for this test (admin has access via a group).
-	_, _ = app.AccessGroupStore.Create("g1", "G1")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
-	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	srv := httptest.NewServer(router)
 	defer srv.Close()
@@ -100,10 +101,11 @@ func TestHandleSSHWebSocket_ForbiddenTarget(t *testing.T) {
 	router := app.NewRouter()
 
 	// Seed demo for group g1 (admin). "other" user does not belong to this group.
-	_, _ = app.AccessGroupStore.Create("g1", "G1")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
-	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	_, _ = app.UserStore.CreateUser("other", "other", "pass")
 	httpSess, err := app.SessionStore.Create("other")
@@ -125,10 +127,11 @@ func TestHandleSSHWebSocket_NonSSHTargetReturns501(t *testing.T) {
 	app := newTestAppForTerminal(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("g1", "G1")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.CreateWithPath("telnet1", "Telnet Host", "127.0.0.1", 23, access.ProtocolTelnet, "g1")
-	_ = app.AccessGroupStore.AddTargetToGroup("g1", "telnet1")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("telnet1"), "Telnet Host", "127.0.0.1", 23, access.ProtocolTelnet, access.GroupID("g1"), "g1")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("telnet1"))
 
 	httpSess, err := app.SessionStore.Create("admin")
 	if err != nil {
@@ -149,10 +152,11 @@ func TestHandleSSHWebSocket_UpgradeFailsWithoutWebSocketRequest(t *testing.T) {
 	app := newTestAppForTerminal(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("g1", "G1")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
-	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
 	if err != nil {
@@ -194,10 +198,11 @@ func TestHandleSSHWebSocket_InvalidCredentialsReturnsError(t *testing.T) {
 	router := app.NewRouter()
 
 	// Seed demo for admin in group g1.
-	_, _ = app.AccessGroupStore.Create("g1", "G1")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
-	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
 	if err != nil {
@@ -235,10 +240,11 @@ func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
 	router := app.NewRouter()
 
 	// Seed demo for admin in group g1.
-	_, _ = app.AccessGroupStore.Create("g1", "G1")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
-	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
 	if err != nil {
@@ -287,10 +293,11 @@ func TestHandleSSHWebSocket_StartFailsReturns500(t *testing.T) {
 	app.TerminalSessionManager = startFailingStub{}
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("g1", "G1")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
-	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, _ := app.SessionStore.Create("admin")
 
@@ -317,10 +324,11 @@ func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {
 	app := newTestAppForTerminal(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("g1", "G1")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
-	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
 	if err != nil {

@@ -32,6 +32,7 @@ Thumbs.db
 
 # SQLite DB (default path when VANTYX_SQLITE_PATH is unset)
 /data/
+cmd/vantyx-server/data/
 
 # Local env and secrets
 .env

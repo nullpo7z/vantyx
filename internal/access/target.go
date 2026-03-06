@@ -1,6 +1,9 @@
 package access
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 // Protocol is the connection protocol for a target.
 type Protocol string
@@ -12,7 +15,7 @@ const (
 
 // Target represents a device that users can connect to via SSH or Telnet.
 type Target struct {
-	ID       string
+	ID       TargetID
 	Name     string
 	Host     string
 	Port     uint16
@@ -24,10 +27,10 @@ type Target struct {
 
 // TargetStore defines the behavior required for managing targets.
 type TargetStore interface {
-	Create(id, name, host string, port uint16, protocol Protocol) (*Target, error)
-	CreateWithPath(id, name, host string, port uint16, protocol Protocol, path string) (*Target, error)
-	Get(id string) (*Target, error)
-	ListByIDs(ids []string) []*Target
+	Create(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol) (*Target, error)
+	CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string) (*Target, error)
+	Get(ctx context.Context, id TargetID) (*Target, error)
+	ListByIDs(ctx context.Context, ids []TargetID, opts *ListOpts) ([]*Target, error)
 }
 
 var (

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -159,13 +160,14 @@ func TestApp_Targets_SuccessWithValidSession(t *testing.T) {
 }
 
 func TestApp_Targets_WithTargets(t *testing.T) {
+	ctx := context.Background()
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("default", "Default")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
-	_, _ = app.TargetStore.CreateWithPath("t1", "Host1", "192.168.1.1", 22, access.ProtocolSSH, "default")
-	_ = app.AccessGroupStore.AddTargetToGroup("default", "t1")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Host1", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("default"), "default")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("default"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
 	req := httptest.NewRequest(http.MethodGet, "/api/targets", nil)
@@ -190,9 +192,10 @@ func TestApp_CreateTarget_Success(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
+	ctx := context.Background()
 	// create default group and add admin
-	_, _ = app.AccessGroupStore.Create("default", "Default")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
 
 	sess, err := app.SessionStore.Create("admin")
 	if err != nil {
@@ -221,10 +224,13 @@ func TestApp_CreateTarget_Success(t *testing.T) {
 	if created.Path != "default" {
 		t.Fatalf("expected path to default group_id, got %q", created.Path)
 	}
-	ids := app.AccessGroupStore.TargetIDsForUser("admin")
+	ids, err := app.AccessGroupStore.TargetIDsForUser(ctx, access.UserID("admin"), nil)
+	if err != nil {
+		t.Fatalf("TargetIDsForUser: %v", err)
+	}
 	found := false
 	for _, id := range ids {
-		if id == created.ID {
+		if id == access.TargetID(created.ID) {
 			found = true
 			break
 		}
@@ -235,12 +241,13 @@ func TestApp_CreateTarget_Success(t *testing.T) {
 }
 
 func TestApp_CreateTarget_WithPath(t *testing.T) {
+	ctx := context.Background()
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("default", "Default")
-	_, _ = app.AccessGroupStore.Create("prod/network", "Prod Network") // path "prod/network" used as group_id in target row
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("prod/network"), "Prod Network") // path "prod/network" used as group_id in target row
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
 
 	sess, err := app.SessionStore.Create("admin")
 	if err != nil {
@@ -269,11 +276,12 @@ func TestApp_CreateTarget_WithPath(t *testing.T) {
 }
 
 func TestApp_Groups_List(t *testing.T) {
+	ctx := context.Background()
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("default", "Default")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
 
 	sess, err := app.SessionStore.Create("admin")
 	if err != nil {
@@ -402,8 +410,9 @@ func TestApp_CreateTarget_InvalidProtocol_BadRequest(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("default", "Default")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
 
 	sess, err := app.SessionStore.Create("admin")
 	if err != nil {
@@ -493,11 +502,12 @@ func TestApp_CreateGroup_InvalidBody(t *testing.T) {
 }
 
 func TestApp_Groups_GetSkipsMissing(t *testing.T) {
+	ctx := context.Background()
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("g1", "G1")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
 	// Create "ghost" group then delete it; with FK CASCADE user_groups row is removed too.
 	// So we create g1 and ghost, add admin to both, then delete ghost so Get("ghost") is never called.
 	// To cover "Get err != nil continue": we need GroupIDsForUser to return an id where Get fails.
@@ -584,7 +594,7 @@ type accessGroupStoreFailingCreate struct {
 	access.AccessGroupStore
 }
 
-func (a *accessGroupStoreFailingCreate) Create(id, name string) (*access.AccessGroup, error) {
+func (a *accessGroupStoreFailingCreate) Create(ctx context.Context, id access.GroupID, name string) (*access.AccessGroup, error) {
 	return nil, errors.New("injected create error")
 }
 
@@ -612,19 +622,20 @@ type accessGroupStoreGetFailsForID struct {
 	failID string
 }
 
-func (a *accessGroupStoreGetFailsForID) Get(id string) (*access.AccessGroup, error) {
-	if id == a.failID {
+func (a *accessGroupStoreGetFailsForID) Get(ctx context.Context, id access.GroupID) (*access.AccessGroup, error) {
+	if string(id) == a.failID {
 		return nil, errors.New("injected get error")
 	}
-	return a.AccessGroupStore.Get(id)
+	return a.AccessGroupStore.Get(ctx, id)
 }
 
 func TestApp_Groups_GetFailsSkipsGroup(t *testing.T) {
 	app := newTestApp(t)
-	_, _ = app.AccessGroupStore.Create("g1", "G1")
-	_, _ = app.AccessGroupStore.Create("g2", "G2")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g2")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g2"))
 	app.AccessGroupStore = &accessGroupStoreGetFailsForID{AccessGroupStore: app.AccessGroupStore, failID: "g2"}
 
 	router := app.NewRouter()
@@ -653,7 +664,7 @@ type accessGroupStoreFailingAddTargetToGroup struct {
 	access.AccessGroupStore
 }
 
-func (a *accessGroupStoreFailingAddTargetToGroup) AddTargetToGroup(groupID, targetID string) error {
+func (a *accessGroupStoreFailingAddTargetToGroup) AddTargetToGroup(ctx context.Context, groupID access.GroupID, targetID access.TargetID) error {
 	return errors.New("injected add target error")
 }
 
@@ -662,7 +673,7 @@ type targetStoreFailingCreate struct {
 	access.TargetStore
 }
 
-func (t *targetStoreFailingCreate) CreateWithPath(id, name, host string, port uint16, protocol access.Protocol, path string) (*access.Target, error) {
+func (t *targetStoreFailingCreate) CreateWithPath(ctx context.Context, id access.TargetID, name, host string, port uint16, protocol access.Protocol, groupID access.GroupID, path string) (*access.Target, error) {
 	return nil, errors.New("injected create target error")
 }
 
@@ -671,8 +682,9 @@ func TestApp_CreateTarget_StoreCreateFails(t *testing.T) {
 	app.TargetStore = &targetStoreFailingCreate{TargetStore: app.TargetStore}
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("default", "Default")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
 	sess, _ := app.SessionStore.Create("admin")
 
 	body := []byte(`{"name":"Srv","host":"h","port":22,"protocol":"ssh","group_id":"default"}`)
@@ -692,8 +704,9 @@ func TestApp_CreateTarget_AddTargetToGroupFails(t *testing.T) {
 	app.AccessGroupStore = &accessGroupStoreFailingAddTargetToGroup{AccessGroupStore: app.AccessGroupStore}
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("default", "Default")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
 	sess, _ := app.SessionStore.Create("admin")
 
 	body := []byte(`{"name":"Srv","host":"h","port":22,"protocol":"ssh","group_id":"default"}`)
@@ -806,8 +819,9 @@ func TestApp_CreateTarget_EmptyName(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("default", "Default")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
 	sess, _ := app.SessionStore.Create("admin")
 
 	body := []byte(`{"name":"","host":"h","port":22,"protocol":"ssh","group_id":"default"}`)
@@ -860,9 +874,10 @@ func TestApp_CreateTarget_Forbidden(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("other", "Other")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
-	_, _ = app.AccessGroupStore.Create("default", "Default")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("other"), "Other")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
 	sess, _ := app.SessionStore.Create("admin")
 
 	body := []byte(`{"name":"srv","host":"h","port":22,"protocol":"ssh","group_id":"other"}`)
@@ -881,8 +896,9 @@ func TestApp_CreateTarget_InvalidBody(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("default", "Default")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
 	sess, _ := app.SessionStore.Create("admin")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/targets", bytes.NewReader([]byte("not json")))
@@ -900,8 +916,9 @@ func TestApp_CreateTarget_TelnetProtocol(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("default", "Default")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
 	sess, _ := app.SessionStore.Create("admin")
 
 	body := []byte(`{"name":"TelnetHost","host":"10.0.0.3","port":23,"protocol":"telnet","group_id":"default"}`)
@@ -928,8 +945,9 @@ func TestApp_CreateTarget_PortZeroDefaultsTo22(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("default", "Default")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
 	sess, _ := app.SessionStore.Create("admin")
 
 	body := []byte(`{"name":"NoPort","host":"10.0.0.4","protocol":"ssh","group_id":"default"}`)
@@ -1069,7 +1087,8 @@ func TestApp_CreateGroup_DuplicateIDRetries(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("ops", "Ops") // first group gets "ops"
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("ops"), "Ops") // first group gets "ops"
 	sess, _ := app.SessionStore.Create("admin")
 
 	body := []byte(`{"name":"ops","path":""}`) // same slug "ops" -> Create fails, retry "ops-1"
@@ -1096,8 +1115,9 @@ func TestApp_CreateGroup_RetryUntilSuccess(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("ops", "Ops")
-	_, _ = app.AccessGroupStore.Create("ops-1", "Ops")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("ops"), "Ops")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("ops-1"), "Ops")
 	sess, _ := app.SessionStore.Create("admin")
 
 	body := []byte(`{"name":"ops","path":""}`)
@@ -1124,8 +1144,9 @@ func TestApp_CreateTarget_DuplicateIDRetries(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("default", "Default")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "default")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
 	sess, _ := app.SessionStore.Create("admin")
 
 	body := []byte(`{"name":"Router","host":"10.0.0.1","port":22,"protocol":"ssh","group_id":"default"}`)
@@ -1160,10 +1181,11 @@ func TestApp_Groups_WithTargets(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("g1", "G1")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.CreateWithPath("t1", "Host1", "192.168.1.1", 22, access.ProtocolSSH, "g1")
-	_ = app.AccessGroupStore.AddTargetToGroup("g1", "t1")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Host1", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
 	req := httptest.NewRequest(http.MethodGet, "/api/groups", nil)
@@ -1188,16 +1210,17 @@ func TestApp_Groups_TwoGroupsWithTargets(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
-	_, _ = app.AccessGroupStore.Create("g1", "G1")
-	_, _ = app.AccessGroupStore.Create("g2", "G2")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_ = app.AccessGroupStore.AddUserToGroup("admin", "g2")
-	_, _ = app.TargetStore.CreateWithPath("t1", "H1", "1.1.1.1", 22, access.ProtocolSSH, "g1")
-	_, _ = app.TargetStore.CreateWithPath("t2", "H2", "2.2.2.2", 22, access.ProtocolSSH, "g1")
-	_, _ = app.TargetStore.CreateWithPath("t3", "H3", "3.3.3.3", 22, access.ProtocolSSH, "g2")
-	_ = app.AccessGroupStore.AddTargetToGroup("g1", "t1")
-	_ = app.AccessGroupStore.AddTargetToGroup("g1", "t2")
-	_ = app.AccessGroupStore.AddTargetToGroup("g2", "t3")
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g2"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g1"), "g1")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t3"), "H3", "3.3.3.3", 22, access.ProtocolSSH, access.GroupID("g2"), "g2")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t2"))
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g2"), access.TargetID("t3"))
 
 	sess, _ := app.SessionStore.Create("admin")
 	req := httptest.NewRequest(http.MethodGet, "/api/groups", nil)

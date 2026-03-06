@@ -55,7 +55,8 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target, err := a.TargetStore.Get(targetID)
+	ctx := r.Context()
+	target, err := a.TargetStore.Get(ctx, access.TargetID(targetID))
 	if err != nil {
 		// #nosec G706 -- audit log; IDs from store/query
 		log.Printf("terminal ws not_found user_id=%s target_id=%s", sess.UserID, targetID)
@@ -63,12 +64,16 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allowed := a.AccessGroupStore.TargetIDsForUser(sess.UserID)
-	allowedSet := make(map[string]struct{})
+	allowed, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	allowedSet := make(map[access.TargetID]struct{})
 	for _, id := range allowed {
 		allowedSet[id] = struct{}{}
 	}
-	if _, ok := allowedSet[targetID]; !ok {
+	if _, ok := allowedSet[access.TargetID(targetID)]; !ok {
 		// #nosec G706 -- audit log; IDs from store/query
 		log.Printf("terminal ws forbidden user_id=%s target_id=%s", sess.UserID, targetID)
 		writeJSONError(w, "forbidden", http.StatusForbidden)

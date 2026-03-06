@@ -1,6 +1,7 @@
 package access
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -18,17 +19,18 @@ func newTestSQLiteTargetStore(t *testing.T) *SQLiteTargetStore {
 		t.Fatalf("migrate: %v", err)
 	}
 	// FK: targets.group_id references access_groups; create one group.
-	groupStore := NewSQLiteAccessGroupStore(db)
-	if _, err := groupStore.Create("g1", "default"); err != nil {
+	groupStore := NewSQLiteAccessGroupStore(db, nil)
+	if _, err := groupStore.Create(context.Background(), "g1", "default"); err != nil {
 		t.Fatalf("create group: %v", err)
 	}
-	return NewSQLiteTargetStore(db)
+	return NewSQLiteTargetStore(db, nil)
 }
 
 func TestSQLiteTargetStore_CreateAndGet(t *testing.T) {
+	ctx := context.Background()
 	store := newTestSQLiteTargetStore(t)
 
-	target, err := store.CreateWithPath("t1", "router1", "192.168.1.1", 22, ProtocolSSH, "g1")
+	target, err := store.CreateWithPath(ctx, "t1", "router1", "192.168.1.1", 22, ProtocolSSH, GroupID("g1"), "g1")
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -36,7 +38,7 @@ func TestSQLiteTargetStore_CreateAndGet(t *testing.T) {
 		t.Fatalf("unexpected target: %+v", target)
 	}
 
-	got, err := store.Get("t1")
+	got, err := store.Get(ctx, "t1")
 	if err != nil {
 		t.Fatalf("Get returned error: %v", err)
 	}
@@ -44,30 +46,35 @@ func TestSQLiteTargetStore_CreateAndGet(t *testing.T) {
 		t.Fatalf("Get returned wrong target: %+v", got)
 	}
 
-	_, err = store.Get("missing")
+	_, err = store.Get(ctx, "missing")
 	if err != ErrTargetNotFound {
 		t.Fatalf("expected ErrTargetNotFound, got %v", err)
 	}
 }
 
 func TestSQLiteTargetStore_Create_Duplicate(t *testing.T) {
+	ctx := context.Background()
 	store := newTestSQLiteTargetStore(t)
 
-	if _, err := store.CreateWithPath("t1", "r1", "host", 22, ProtocolSSH, "g1"); err != nil {
+	if _, err := store.CreateWithPath(ctx, "t1", "r1", "host", 22, ProtocolSSH, GroupID("g1"), "g1"); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
-	if _, err := store.CreateWithPath("t1", "r2", "host2", 23, ProtocolTelnet, "g1"); err != ErrTargetExists {
+	if _, err := store.CreateWithPath(ctx, "t1", "r2", "host2", 23, ProtocolTelnet, GroupID("g1"), "g1"); err != ErrTargetExists {
 		t.Fatalf("expected ErrTargetExists, got %v", err)
 	}
 }
 
 func TestSQLiteTargetStore_ListByIDs(t *testing.T) {
+	ctx := context.Background()
 	store := newTestSQLiteTargetStore(t)
 
-	_, _ = store.CreateWithPath("t1", "r1", "h1", 22, ProtocolSSH, "g1")
-	_, _ = store.CreateWithPath("t2", "r2", "h2", 23, ProtocolTelnet, "g1")
+	_, _ = store.CreateWithPath(ctx, "t1", "r1", "h1", 22, ProtocolSSH, GroupID("g1"), "g1")
+	_, _ = store.CreateWithPath(ctx, "t2", "r2", "h2", 23, ProtocolTelnet, GroupID("g1"), "g1")
 
-	list := store.ListByIDs([]string{"t1", "t2", "missing", "t1"})
+	list, err := store.ListByIDs(ctx, []TargetID{"t1", "t2", "missing", "t1"}, nil)
+	if err != nil {
+		t.Fatalf("ListByIDs: %v", err)
+	}
 	if len(list) != 2 {
 		t.Fatalf("expected 2 targets, got %d", len(list))
 	}

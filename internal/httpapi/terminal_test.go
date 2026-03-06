@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -8,10 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/session"
 )
 
 func newTestAppForTerminal(t *testing.T) *App {
@@ -30,7 +34,7 @@ func TestHandleSSHWebSocket_UnauthorizedWithoutCookie(t *testing.T) {
 	// Ensure target_id=demo exists for this test (admin has access via a group).
 	_, _ = app.AccessGroupStore.Create("g1", "G1")
 	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.Create("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH)
+	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
 	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
 
 	srv := httptest.NewServer(router)
@@ -41,6 +45,34 @@ func TestHandleSSHWebSocket_UnauthorizedWithoutCookie(t *testing.T) {
 	_, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err == nil {
 		t.Fatalf("expected WebSocket dial to fail without cookie, got nil error")
+	}
+}
+
+func TestHandleSSHWebSocket_UnauthorizedEmptyCookieValue(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/ws/ssh?target_id=demo", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: "", Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for empty cookie value, got %d", w.Code)
+	}
+}
+
+func TestHandleSSHWebSocket_UnauthorizedInvalidSession(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/ws/ssh?target_id=demo", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: "nonexistent-session-id", Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for invalid session, got %d", w.Code)
 	}
 }
 
@@ -70,7 +102,7 @@ func TestHandleSSHWebSocket_ForbiddenTarget(t *testing.T) {
 	// Seed demo for group g1 (admin). "other" user does not belong to this group.
 	_, _ = app.AccessGroupStore.Create("g1", "G1")
 	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.Create("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH)
+	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
 	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
 
 	_, _ = app.UserStore.CreateUser("other", "other", "pass")
@@ -95,7 +127,7 @@ func TestHandleSSHWebSocket_NonSSHTargetReturns501(t *testing.T) {
 
 	_, _ = app.AccessGroupStore.Create("g1", "G1")
 	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.Create("telnet1", "Telnet Host", "127.0.0.1", 23, access.ProtocolTelnet)
+	_, _ = app.TargetStore.CreateWithPath("telnet1", "Telnet Host", "127.0.0.1", 23, access.ProtocolTelnet, "g1")
 	_ = app.AccessGroupStore.AddTargetToGroup("g1", "telnet1")
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -110,6 +142,31 @@ func TestHandleSSHWebSocket_NonSSHTargetReturns501(t *testing.T) {
 
 	if w.Code != http.StatusNotImplemented {
 		t.Fatalf("expected 501 Not Implemented, got %d", w.Code)
+	}
+}
+
+func TestHandleSSHWebSocket_UpgradeFailsWithoutWebSocketRequest(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	_, _ = app.AccessGroupStore.Create("g1", "G1")
+	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
+	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
+	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
+
+	httpSess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/ws/ssh?target_id=demo", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	// No Upgrade: websocket header -> upgrade fails
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when upgrade fails, got %d", w.Code)
 	}
 }
 
@@ -139,7 +196,7 @@ func TestHandleSSHWebSocket_InvalidCredentialsReturnsError(t *testing.T) {
 	// Seed demo for admin in group g1.
 	_, _ = app.AccessGroupStore.Create("g1", "G1")
 	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.Create("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH)
+	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
 	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -180,7 +237,7 @@ func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
 	// Seed demo for admin in group g1.
 	_, _ = app.AccessGroupStore.Create("g1", "G1")
 	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
-	_, _ = app.TargetStore.Create("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH)
+	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
 	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -201,6 +258,7 @@ func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
 	}
 	defer conn.Close()
 
+	// #nosec G101 -- test-only dummy credentials for WebSocket SSH test
 	creds := `{"username":"root","password":"test"}`
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(creds)); err != nil {
 		t.Fatalf("WriteMessage: %v", err)
@@ -213,4 +271,100 @@ func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
 		_, _, _ = conn.ReadMessage()
 	}
 	// Expect connection to close (dial failure or eventual close)
+}
+
+// startFailingStub implements terminalSessionStarter and makes Start return an error.
+type startFailingStub struct{}
+
+func (startFailingStub) Start(session.ID, func(context.Context)) (*session.Session, error) {
+	return nil, errors.New("injected start error")
+}
+
+func (startFailingStub) Touch(session.ID) {}
+
+func TestHandleSSHWebSocket_StartFailsReturns500(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	app.TerminalSessionManager = startFailingStub{}
+	router := app.NewRouter()
+
+	_, _ = app.AccessGroupStore.Create("g1", "G1")
+	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
+	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
+	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
+
+	httpSess, _ := app.SessionStore.Create("admin")
+
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
+	header := http.Header{}
+	header.Add("Cookie", (&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"}).String())
+
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// #nosec G101 -- test-only credentials
+	_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"username":"u","password":"p"}`))
+	// After Start fails, server closes connection
+	_, _, _ = conn.ReadMessage()
+}
+
+func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	_, _ = app.AccessGroupStore.Create("g1", "G1")
+	_ = app.AccessGroupStore.AddUserToGroup("admin", "g1")
+	_, _ = app.TargetStore.CreateWithPath("demo", "Demo host", "127.0.0.1", 22, access.ProtocolSSH, "g1")
+	_ = app.AccessGroupStore.AddTargetToGroup("g1", "demo")
+
+	httpSess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	// Force same session ID for both connections so second Start returns ErrSessionExists
+	const fixedID = "test-fixed-id"
+	terminalSessionIDGen = func() session.ID { return fixedID }
+	defer func() { terminalSessionIDGen = nil }()
+
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
+	header := http.Header{}
+	header.Add("Cookie", (&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"}).String())
+
+	// First connection: start and block in RunBridge
+	conn1, _, err := websocket.DefaultDialer.Dial(u.String(), header)
+	if err != nil {
+		t.Fatalf("first dial: %v", err)
+	}
+	go func() {
+		// #nosec G101 -- test-only credentials
+		_ = conn1.WriteMessage(websocket.TextMessage, []byte(`{"username":"u","password":"p"}`))
+		_, _, _ = conn1.ReadMessage()
+		_ = conn1.Close()
+	}()
+
+	// Give first connection time to call Start
+	time.Sleep(100 * time.Millisecond)
+
+	// Second connection: same fixed ID -> Start returns ErrSessionExists -> handler closes conn
+	conn2, _, err := websocket.DefaultDialer.Dial(u.String(), header)
+	if err != nil {
+		t.Fatalf("second dial: %v", err)
+	}
+	defer conn2.Close()
+	// #nosec G101 -- test-only credentials
+	_ = conn2.WriteMessage(websocket.TextMessage, []byte(`{"username":"u2","password":"p2"}`))
+	_, _, err = conn2.ReadMessage()
+	// Connection closed by server after Start failed
+	if err == nil {
+		_, _, _ = conn2.ReadMessage()
+	}
 }

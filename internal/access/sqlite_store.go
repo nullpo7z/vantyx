@@ -245,6 +245,10 @@ func (s *SQLiteTargetStore) Get(id string) (*Target, error) {
 	if err != nil {
 		return nil, err
 	}
+	if port < 0 || port > 65535 {
+		return nil, ErrTargetNotFound
+	}
+	// #nosec G115 -- port range validated above (0-65535)
 	t.Port = uint16(port)
 	t.Protocol = Protocol(proto)
 	return &t, nil
@@ -276,6 +280,10 @@ func (s *SQLiteTargetStore) ListByIDs(ids []string) []*Target {
 		if err != nil {
 			return nil
 		}
+		if port < 0 || port > 65535 {
+			continue
+		}
+		// #nosec G115 -- port range validated above (0-65535)
 		t.Port = uint16(port)
 		t.Protocol = Protocol(proto)
 		// copy value
@@ -287,5 +295,3 @@ func (s *SQLiteTargetStore) ListByIDs(ids []string) []*Target {
 	}
 	return out
 }
-
-

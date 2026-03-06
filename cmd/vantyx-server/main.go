@@ -72,12 +72,14 @@ func main() {
 	}
 
 	go func() {
+		// #nosec G706 -- redirectAddr from env (VANTYX_HTTP_REDIRECT_ADDR)
 		log.Printf("starting HTTP redirect server on %s", redirectAddr)
 		if err := redirectServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("redirect server failed: %v", err)
 		}
 	}()
 	go func() {
+		// #nosec G706 -- httpsAddr from env (VANTYX_HTTPS_ADDR)
 		log.Printf("starting HTTPS server on %s", httpsAddr)
 		if err := httpsServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("https server failed: %v", err)
@@ -113,13 +115,16 @@ func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
 }
 
 func loadOrGenerateCert(certFile, keyFile string) (*tls.Certificate, error) {
+	// #nosec G703 -- certFile from env (VANTYX_TLS_CERT_FILE), not user input
 	_, errCert := os.Stat(certFile)
+	// #nosec G703 -- keyFile from env (VANTYX_TLS_KEY_FILE), not user input
 	_, errKey := os.Stat(keyFile)
 	if errCert == nil && errKey == nil {
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
 			return nil, err
 		}
+		// #nosec G706 -- certFile from env (VANTYX_TLS_CERT_FILE)
 		log.Printf("loaded TLS cert from %s", certFile)
 		return &cert, nil
 	}
@@ -132,6 +137,7 @@ func loadOrGenerateCert(certFile, keyFile string) (*tls.Certificate, error) {
 
 func generateSelfSigned(certFile, keyFile string) (*tls.Certificate, error) {
 	dir := filepath.Dir(certFile)
+	// #nosec G703 -- paths from env (VANTYX_TLS_*), not user input
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return nil, err
 	}
@@ -143,14 +149,14 @@ func generateSelfSigned(certFile, keyFile string) (*tls.Certificate, error) {
 
 	template := x509.Certificate{
 		SerialNumber:          bigInt(1),
-		Subject:                pkix.Name{CommonName: "vantyx"},
-		NotBefore:              time.Now(),
-		NotAfter:               time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:               x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:            []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		Subject:               pkix.Name{CommonName: "vantyx"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		DNSNames:               []string{"localhost"},
-		IPAddresses:            []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		DNSNames:              []string{"localhost"},
+		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
@@ -158,24 +164,26 @@ func generateSelfSigned(certFile, keyFile string) (*tls.Certificate, error) {
 		return nil, err
 	}
 
+	// #nosec G304,G703 -- certFile from env (VANTYX_TLS_CERT_FILE), not user input
 	certOut, err := os.Create(certFile)
 	if err != nil {
 		return nil, err
 	}
 	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: certDER}); err != nil {
-		certOut.Close()
+		_ = certOut.Close()
 		return nil, err
 	}
 	if err := certOut.Close(); err != nil {
 		return nil, err
 	}
 
+	// #nosec G304,G703 -- keyFile from env (VANTYX_TLS_KEY_FILE), not user input
 	keyOut, err := os.OpenFile(keyFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return nil, err
 	}
 	if err := pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}); err != nil {
-		keyOut.Close()
+		_ = keyOut.Close()
 		return nil, err
 	}
 	if err := keyOut.Close(); err != nil {

@@ -26,24 +26,42 @@ type App struct {
 	TargetStore      access.TargetStore
 	AccessGroupStore access.AccessGroupStore
 
-	TerminalSessionManager *session.Manager
+	TerminalSessionManager terminalSessionStarter
 	DB                     *sql.DB
 }
+
+// newAppDBOpen, newAppMigrate, and newAppUserStore are set in tests to inject failures for coverage.
+var (
+	newAppDBOpen     func(dbsqlite.Config) (*sql.DB, error)
+	newAppMigrate    func(*sql.DB) error
+	newAppUserStore  func(*sql.DB) auth.UserStore
+)
 
 // NewApp constructs an App backed by SQLite.
 func NewApp() *App {
 	cfg := dbsqlite.Config{
 		Path: os.Getenv("VANTYX_SQLITE_PATH"),
 	}
-	db, err := dbsqlite.Open(cfg)
+	open := dbsqlite.Open
+	if newAppDBOpen != nil {
+		open = newAppDBOpen
+	}
+	db, err := open(cfg)
 	if err != nil {
 		panic(err)
 	}
-	if err := dbsqlite.Migrate(db); err != nil {
+	migrate := dbsqlite.Migrate
+	if newAppMigrate != nil {
+		migrate = newAppMigrate
+	}
+	if err := migrate(db); err != nil {
 		panic(err)
 	}
 
-	userStore := auth.NewSQLiteUserStore(db)
+	var userStore auth.UserStore = auth.NewSQLiteUserStore(db)
+	if newAppUserStore != nil {
+		userStore = newAppUserStore(db)
+	}
 	sessionStore := auth.NewSQLiteSessionStore(db, 24*time.Hour)
 	targetStore := access.NewSQLiteTargetStore(db)
 	groupStore := access.NewSQLiteAccessGroupStore(db)
@@ -110,8 +128,14 @@ func (a *App) NewRouter() http.Handler {
 	return r
 }
 
+// staticDirForTest overrides staticDir in tests; set to a temp dir with index.html to cover SPA branch.
+var staticDirForTest string
+
 // staticDir returns "web/dist" if it exists and is a directory, else "".
 func staticDir() string {
+	if staticDirForTest != "" {
+		return staticDirForTest
+	}
 	dir := "web/dist"
 	if d, err := os.Stat(dir); err == nil && d.IsDir() {
 		return dir

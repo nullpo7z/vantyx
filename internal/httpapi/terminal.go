@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"time"
 
@@ -24,7 +25,7 @@ var wsUpgrader = websocket.Upgrader{
 
 // terminalSessionStarter is satisfied by *session.Manager; allows tests to inject a stub that returns error from Start.
 type terminalSessionStarter interface {
-	Start(id session.ID, fn func(context.Context)) (*session.Session, error)
+	Start(id session.ID, fn func(context.Context, *session.Session)) (*session.Session, error)
 	Touch(id session.ID)
 }
 
@@ -91,10 +92,14 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		id = session.ID(time.Now().UTC().Format(time.RFC3339Nano))
 	}
 
-	_, err = a.TerminalSessionManager.Start(id, func(ctx context.Context) {
+	_, err = a.TerminalSessionManager.Start(id, func(ctx context.Context, sess *session.Session) {
 		defer conn.Close()
 		touch := func() { a.TerminalSessionManager.Touch(id) }
-		_ = sshproxy.RunBridge(ctx, conn, target.Host, target.Port, creds.Username, creds.Password, touch)
+		var tee io.Writer
+		if sess.Output != nil {
+			tee = sess.Output
+		}
+		_ = sshproxy.RunBridge(ctx, conn, target.Host, target.Port, creds.Username, creds.Password, touch, tee)
 	})
 	if err != nil {
 		_ = conn.Close()

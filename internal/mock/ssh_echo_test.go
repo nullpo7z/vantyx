@@ -40,7 +40,7 @@ func TestSSHEchoServer_EchoViaRunBridge(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			_ = sshproxy.RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil)
+			_ = sshproxy.RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil, nil)
 		}()
 	}))
 	defer srv.Close()

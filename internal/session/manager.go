@@ -16,12 +16,13 @@ type Manager struct {
 	now      func() time.Time
 }
 
-// Session is a minimal placeholder for a long-lived backend session.
+// Session is a long-lived backend session. Output holds terminal stdout/stderr for replay on resume.
 type Session struct {
 	id        ID
 	createdAt time.Time
 	lastSeen  time.Time
 
+	Output *RingBuffer // optional; set when Start creates the session for terminal replay
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -34,8 +35,9 @@ func NewManager() *Manager {
 	}
 }
 
-// Start creates a new session and starts its goroutine.
-func (m *Manager) Start(id ID, fn func(ctx context.Context)) (*Session, error) {
+// Start creates a new session and starts its goroutine. The callback receives the session
+// so it can use sess.Output (RingBuffer) for terminal replay when present.
+func (m *Manager) Start(id ID, fn func(ctx context.Context, sess *Session)) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -49,6 +51,7 @@ func (m *Manager) Start(id ID, fn func(ctx context.Context)) (*Session, error) {
 		id:        id,
 		createdAt: m.now(),
 		lastSeen:  m.now(),
+		Output:    NewRingBuffer(DefaultRingBufferSize),
 		cancel:    cancel,
 		done:      make(chan struct{}),
 	}
@@ -57,7 +60,7 @@ func (m *Manager) Start(id ID, fn func(ctx context.Context)) (*Session, error) {
 
 	go func() {
 		defer close(sess.done)
-		fn(ctx)
+		fn(ctx, sess)
 
 		m.mu.Lock()
 		delete(m.sessions, id)

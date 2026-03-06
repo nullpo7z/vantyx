@@ -276,7 +276,7 @@ func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
 // startFailingStub implements terminalSessionStarter and makes Start return an error.
 type startFailingStub struct{}
 
-func (startFailingStub) Start(session.ID, func(context.Context)) (*session.Session, error) {
+func (startFailingStub) Start(session.ID, func(context.Context, *session.Session)) (*session.Session, error) {
 	return nil, errors.New("injected start error")
 }
 

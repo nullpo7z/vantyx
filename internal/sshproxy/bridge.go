@@ -108,8 +108,9 @@ func defaultSessionFactory(addr string, config *ssh.ClientConfig) (stdin io.Writ
 // The first message from the client is not read here; the caller must pass credentials
 // and consume the first message before calling RunBridge.
 // If touch is non-nil, it is called on each client message (e.g. for session keepalive).
+// If tee is non-nil, a copy of stdout and stderr is written to tee for session replay.
 // RunBridge blocks until ctx is done or the WebSocket or SSH session closes.
-func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint16, username, password string, touch func()) error {
+func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint16, username, password string, touch func(), tee io.Writer) error {
 	config := &ssh.ClientConfig{
 		User: username,
 		Auth: []ssh.AuthMethod{
@@ -155,7 +156,7 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 		}
 	}()
 
-	// stdout -> WebSocket
+	// stdout -> WebSocket (and tee for replay)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -166,6 +167,9 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 				if writeErr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); writeErr != nil {
 					return
 				}
+				if tee != nil {
+					_, _ = tee.Write(buf[:n])
+				}
 			}
 			if err != nil {
 				return
@@ -173,7 +177,7 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 		}
 	}()
 
-	// stderr -> WebSocket
+	// stderr -> WebSocket (and tee for replay)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -183,6 +187,9 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 			if n > 0 {
 				if writeErr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); writeErr != nil {
 					return
+				}
+				if tee != nil {
+					_, _ = tee.Write(buf[:n])
 				}
 			}
 			if err != nil {

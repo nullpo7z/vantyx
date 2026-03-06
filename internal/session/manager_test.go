@@ -12,7 +12,7 @@ func TestManager_StartAndStopSession(t *testing.T) {
 
 	var ran atomic.Bool
 
-	sess, err := m.Start("s1", func(ctx context.Context) {
+	sess, err := m.Start("s1", func(ctx context.Context, _ *Session) {
 		ran.Store(true)
 		<-ctx.Done()
 	})
@@ -40,12 +40,12 @@ func TestManager_StartAndStopSession(t *testing.T) {
 func TestManager_StartDuplicateSessionFails(t *testing.T) {
 	m := NewManager()
 
-	_, err := m.Start("dup", func(ctx context.Context) {})
+	_, err := m.Start("dup", func(ctx context.Context, _ *Session) {})
 	if err != nil {
 		t.Fatalf("first Start returned error: %v", err)
 	}
 
-	if _, err := m.Start("dup", func(ctx context.Context) {}); err == nil {
+	if _, err := m.Start("dup", func(ctx context.Context, _ *Session) {}); err == nil {
 		t.Fatalf("expected error for duplicate session ID, got nil")
 	}
 }
@@ -55,7 +55,7 @@ func TestManager_TouchUpdatesLastSeen(t *testing.T) {
 	now := time.Now()
 	m.now = func() time.Time { return now }
 
-	sess, err := m.Start("touch", func(ctx context.Context) {
+	sess, err := m.Start("touch", func(ctx context.Context, _ *Session) {
 		<-ctx.Done()
 	})
 	if err != nil {

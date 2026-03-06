@@ -12,11 +12,20 @@ import (
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
 
+// terminalSessionIDGen is set in tests to force duplicate session ID and cover Start error path.
+var terminalSessionIDGen func() session.ID
+
 var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		// Origin checks will be refined when frontend is introduced.
 		return true
 	},
+}
+
+// terminalSessionStarter is satisfied by *session.Manager; allows tests to inject a stub that returns error from Start.
+type terminalSessionStarter interface {
+	Start(id session.ID, fn func(context.Context)) (*session.Session, error)
+	Touch(id session.ID)
 }
 
 // handleSSHWebSocket upgrades the connection and starts a goroutine-backed terminal session.
@@ -74,7 +83,13 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := session.ID(time.Now().UTC().Format(time.RFC3339Nano))
+	// terminalSessionIDGen is overridden in tests to trigger Start id-collision error path.
+	var id session.ID
+	if terminalSessionIDGen != nil {
+		id = terminalSessionIDGen()
+	} else {
+		id = session.ID(time.Now().UTC().Format(time.RFC3339Nano))
+	}
 
 	_, err = a.TerminalSessionManager.Start(id, func(ctx context.Context) {
 		defer conn.Close()

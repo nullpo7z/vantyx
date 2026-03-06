@@ -4,8 +4,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io"
 	"time"
 )
+
+// randReader is used by randomID; may be overridden in tests to trigger error paths.
+var randReader io.Reader = rand.Reader
 
 // Session represents an authenticated user session.
 type Session struct {
@@ -26,7 +30,7 @@ var ErrSessionNotFound = errors.New("session not found")
 
 func randomID(n int) (string, error) {
 	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := randReader.Read(b); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil

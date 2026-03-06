@@ -7,7 +7,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-const bcryptCost = bcrypt.DefaultCost
+// bcryptCost is the cost passed to bcrypt; may be overridden in tests to trigger error paths.
+var bcryptCost = bcrypt.DefaultCost
 
 var ErrEmptyPassword = errors.New("password must not be empty")
 

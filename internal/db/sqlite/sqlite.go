@@ -8,6 +8,9 @@ import (
 	_ "modernc.org/sqlite" // SQLite driver
 )
 
+// sqlDriver is the driver name for sql.Open; may be overridden in tests to trigger error paths.
+var sqlDriver = "sqlite"
+
 // Config holds basic SQLite connection settings.
 type Config struct {
 	// Path is the filesystem path to the SQLite database file.
@@ -26,13 +29,21 @@ type Config struct {
 	ConnMaxLifetime time.Duration
 }
 
+// dsn returns the SQLite DSN with foreign_keys enabled for all connections.
+func dsn(path string) string {
+	if path == "" || path == ":memory:" {
+		return "file::memory:?_pragma=foreign_keys(on)"
+	}
+	return "file:" + path + "?_pragma=foreign_keys(on)"
+}
+
 // Open creates a *sql.DB for the given configuration and applies common pool settings.
 func Open(cfg Config) (*sql.DB, error) {
 	if cfg.Path == "" {
 		cfg.Path = ":memory:"
 	}
 
-	db, err := sql.Open("sqlite", cfg.Path)
+	db, err := sql.Open(sqlDriver, dsn(cfg.Path))
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +65,6 @@ func Open(cfg Config) (*sql.DB, error) {
 	db.SetMaxIdleConns(maxIdle)
 	db.SetConnMaxLifetime(lifetime)
 
-	// Verify connection.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
@@ -63,4 +73,3 @@ func Open(cfg Config) (*sql.DB, error) {
 	}
 	return db, nil
 }
-

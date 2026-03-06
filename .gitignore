@@ -49,3 +49,7 @@ Thumbs.db
 *.log
 /tmp/
 /dist/
+
+# Local coverage files
+coverage-*.out
+coverage-*.html

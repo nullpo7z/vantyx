@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nullpo7z/vantyx/internal/auth"
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
 )
 
@@ -20,8 +21,19 @@ func newTestSQLiteAccessGroupStore(t *testing.T) *SQLiteAccessGroupStore {
 	return NewSQLiteAccessGroupStore(db)
 }
 
-func TestSQLiteAccessGroupStore_CreateAndMembership(t *testing.T) {
+// newTestSQLiteAccessGroupStoreWithUser ensures a user exists in the same DB (for FK).
+func newTestSQLiteAccessGroupStoreWithUser(t *testing.T, userID string) *SQLiteAccessGroupStore {
+	t.Helper()
 	store := newTestSQLiteAccessGroupStore(t)
+	userStore := auth.NewSQLiteUserStore(store.db)
+	if _, err := userStore.CreateUser(userID, userID, "pw"); err != nil && err != auth.ErrUserExists {
+		t.Fatalf("create user: %v", err)
+	}
+	return store
+}
+
+func TestSQLiteAccessGroupStore_CreateAndMembership(t *testing.T) {
+	store := newTestSQLiteAccessGroupStoreWithUser(t, "user1")
 
 	g, err := store.Create("g1", "ops")
 	if err != nil {
@@ -33,6 +45,11 @@ func TestSQLiteAccessGroupStore_CreateAndMembership(t *testing.T) {
 
 	if err := store.AddUserToGroup("user1", "g1"); err != nil {
 		t.Fatalf("AddUserToGroup returned error: %v", err)
+	}
+	// target1 must exist for group_targets FK; create via TargetStore on same DB
+	targetStore := NewSQLiteTargetStore(store.db)
+	if _, err := targetStore.CreateWithPath("target1", "r1", "192.168.1.1", 22, ProtocolSSH, "g1"); err != nil {
+		t.Fatalf("create target: %v", err)
 	}
 	if err := store.AddTargetToGroup("g1", "target1"); err != nil {
 		t.Fatalf("AddTargetToGroup returned error: %v", err)
@@ -50,13 +67,20 @@ func TestSQLiteAccessGroupStore_CreateAndMembership(t *testing.T) {
 }
 
 func TestSQLiteAccessGroupStore_TargetIDsForUser_Dedup(t *testing.T) {
-	store := newTestSQLiteAccessGroupStore(t)
+	store := newTestSQLiteAccessGroupStoreWithUser(t, "u1")
 
 	if _, err := store.Create("g1", "ops"); err != nil {
 		t.Fatalf("Create g1: %v", err)
 	}
 	if _, err := store.Create("g2", "dev"); err != nil {
 		t.Fatalf("Create g2: %v", err)
+	}
+	targetStore := NewSQLiteTargetStore(store.db)
+	if _, err := targetStore.CreateWithPath("t1", "r1", "h1", 22, ProtocolSSH, "g1"); err != nil {
+		t.Fatalf("create target t1: %v", err)
+	}
+	if _, err := targetStore.CreateWithPath("t2", "r2", "h2", 23, ProtocolTelnet, "g2"); err != nil {
+		t.Fatalf("create target t2: %v", err)
 	}
 	_ = store.AddUserToGroup("u1", "g1")
 	_ = store.AddUserToGroup("u1", "g2")

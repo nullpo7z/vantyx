@@ -34,3 +34,13 @@ func TestVerifyPasswordRejectsEmptyInputs(t *testing.T) {
 		t.Fatalf("expected false when password is empty")
 	}
 }
+
+func TestHashPassword_BcryptError(t *testing.T) {
+	old := bcryptCost
+	defer func() { bcryptCost = old }()
+	bcryptCost = 32 // above bcrypt.MaxCost (31) to force GenerateFromPassword to return error
+	_, err := HashPassword("any")
+	if err == nil {
+		t.Fatalf("expected error for invalid cost, got nil")
+	}
+}

@@ -17,13 +17,18 @@ func newTestSQLiteTargetStore(t *testing.T) *SQLiteTargetStore {
 	if err := dbsqlite.Migrate(db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	// FK: targets.group_id references access_groups; create one group.
+	groupStore := NewSQLiteAccessGroupStore(db)
+	if _, err := groupStore.Create("g1", "default"); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
 	return NewSQLiteTargetStore(db)
 }
 
 func TestSQLiteTargetStore_CreateAndGet(t *testing.T) {
 	store := newTestSQLiteTargetStore(t)
 
-	target, err := store.Create("t1", "router1", "192.168.1.1", 22, ProtocolSSH)
+	target, err := store.CreateWithPath("t1", "router1", "192.168.1.1", 22, ProtocolSSH, "g1")
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -48,10 +53,10 @@ func TestSQLiteTargetStore_CreateAndGet(t *testing.T) {
 func TestSQLiteTargetStore_Create_Duplicate(t *testing.T) {
 	store := newTestSQLiteTargetStore(t)
 
-	if _, err := store.Create("t1", "r1", "host", 22, ProtocolSSH); err != nil {
+	if _, err := store.CreateWithPath("t1", "r1", "host", 22, ProtocolSSH, "g1"); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
-	if _, err := store.Create("t1", "r2", "host2", 23, ProtocolTelnet); err != ErrTargetExists {
+	if _, err := store.CreateWithPath("t1", "r2", "host2", 23, ProtocolTelnet, "g1"); err != ErrTargetExists {
 		t.Fatalf("expected ErrTargetExists, got %v", err)
 	}
 }
@@ -59,8 +64,8 @@ func TestSQLiteTargetStore_Create_Duplicate(t *testing.T) {
 func TestSQLiteTargetStore_ListByIDs(t *testing.T) {
 	store := newTestSQLiteTargetStore(t)
 
-	_, _ = store.Create("t1", "r1", "h1", 22, ProtocolSSH)
-	_, _ = store.Create("t2", "r2", "h2", 23, ProtocolTelnet)
+	_, _ = store.CreateWithPath("t1", "r1", "h1", 22, ProtocolSSH, "g1")
+	_, _ = store.CreateWithPath("t2", "r2", "h2", 23, ProtocolTelnet, "g1")
 
 	list := store.ListByIDs([]string{"t1", "t2", "missing", "t1"})
 	if len(list) != 2 {

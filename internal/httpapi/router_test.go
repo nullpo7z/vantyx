@@ -569,7 +569,7 @@ func TestApp_Targets_PaginationResponse(t *testing.T) {
 	}
 	var out struct {
 		Items      []targetResponse `json:"items"`
-		NextCursor string          `json:"next_cursor"`
+		NextCursor string           `json:"next_cursor"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)

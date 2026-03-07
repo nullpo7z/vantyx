@@ -40,13 +40,13 @@ type SessionLister interface {
 // Server is the CLI SSH gateway: users log in with Vantyx credentials, then choose a target to proxy to.
 type Server struct {
 	userStore      auth.UserStore
-	targetStore   access.TargetStore
-	groupStore    access.AccessGroupStore
+	targetStore    access.TargetStore
+	groupStore     access.AccessGroupStore
 	sessionManager SessionStarter
-	config        *ssh.ServerConfig
-	listener      net.Listener
-	mu            sync.Mutex
-	shutdown      bool
+	config         *ssh.ServerConfig
+	listener       net.Listener
+	mu             sync.Mutex
+	shutdown       bool
 }
 
 // Config holds dependencies for the SSH server.

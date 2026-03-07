@@ -36,10 +36,10 @@ const adminUserID = "admin"
 
 // loginRateLimiter limits failed login attempts per IP (ASVS V2.5).
 type loginRateLimiter struct {
-	mu      sync.Mutex
-	byIP    map[string][]time.Time
-	window  time.Duration
-	maxTry  int
+	mu     sync.Mutex
+	byIP   map[string][]time.Time
+	window time.Duration
+	maxTry int
 }
 
 func newLoginRateLimiter() *loginRateLimiter {
@@ -296,9 +296,9 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	UserID                 string `json:"user_id"`
-	Username               string `json:"username"`
-	RequirePasswordChange  bool   `json:"require_password_change,omitempty"`
+	UserID                string `json:"user_id"`
+	Username              string `json:"username"`
+	RequirePasswordChange bool   `json:"require_password_change,omitempty"`
 }
 
 type errorResponse struct {
@@ -770,7 +770,7 @@ func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 	if paginate {
 		_ = json.NewEncoder(w).Encode(struct {
 			Items      []targetResponse `json:"items"`
-			NextCursor string          `json:"next_cursor,omitempty"`
+			NextCursor string           `json:"next_cursor,omitempty"`
 		}{Items: out, NextCursor: nextCursor})
 	} else {
 		_ = json.NewEncoder(w).Encode(out)

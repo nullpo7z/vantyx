@@ -89,4 +89,3 @@ func TestLoadKeyFromEnv(t *testing.T) {
 		t.Fatal("expected nil when env unset")
 	}
 }
-

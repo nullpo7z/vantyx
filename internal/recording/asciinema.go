@@ -39,9 +39,9 @@ func (a *AsciinemaWriter) writeHeader() error {
 		return nil
 	}
 	header := map[string]interface{}{
-		"version":  2,
-		"width":    a.width,
-		"height":   a.height,
+		"version":   2,
+		"width":     a.width,
+		"height":    a.height,
 		"timestamp": a.start.Unix(),
 	}
 	b, err := json.Marshal(header)

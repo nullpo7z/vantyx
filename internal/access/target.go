@@ -37,7 +37,7 @@ type TargetStore interface {
 }
 
 var (
-	ErrTargetExists            = errors.New("target already exists")
-	ErrTargetNotFound          = errors.New("target not found")
-	ErrEncryptionKeyRequired   = errors.New("SSH password encryption key not configured (set VANTYX_SSH_PASSWORD_ENCRYPTION_KEY); required by ASVS L2 for sensitive data at rest")
+	ErrTargetExists          = errors.New("target already exists")
+	ErrTargetNotFound        = errors.New("target not found")
+	ErrEncryptionKeyRequired = errors.New("SSH password encryption key not configured (set VANTYX_SSH_PASSWORD_ENCRYPTION_KEY); required by ASVS L2 for sensitive data at rest")
 )

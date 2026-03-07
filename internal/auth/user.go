@@ -18,9 +18,9 @@ type UserStore interface {
 }
 
 var (
-	ErrUserExists       = errors.New("user already exists")
-	ErrUserNotFound     = errors.New("user not found")
-	ErrInvalidSecret    = errors.New("invalid credentials")
-	ErrWrongPassword    = errors.New("current password is wrong")
+	ErrUserExists        = errors.New("user already exists")
+	ErrUserNotFound      = errors.New("user not found")
+	ErrInvalidSecret     = errors.New("invalid credentials")
+	ErrWrongPassword     = errors.New("current password is wrong")
 	ErrPasswordUnchanged = errors.New("new password must differ from current")
 )

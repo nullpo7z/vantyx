@@ -88,7 +88,7 @@ func readTerminalCredentials(conn *websocket.Conn, target *access.Target) (sshpr
 
 var (
 	errInvalidCredentials  = errors.New("invalid or missing credentials (send JSON: {\"username\":\"...\",\"password\":\"...\"} or {\"use_stored_credentials\":true})")
-	errNoStoredCredentials  = errors.New("stored credentials not configured for this target")
+	errNoStoredCredentials = errors.New("stored credentials not configured for this target")
 )
 
 // handleSSHWebSocket upgrades the connection and starts a goroutine-backed terminal session.
@@ -310,7 +310,9 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 func runDetachableBridge(ctx context.Context, termSess *session.Session, manager terminalSessionStarter, id session.ID, conn *websocket.Conn, target *access.Target, creds sshproxy.Credentials) {
 	_ = conn.WriteMessage(websocket.TextMessage, []byte(""))
 	// Send session_id so the client can reconnect (resume) without credentials.
-	if b, err := json.Marshal(struct{ SessionID string `json:"session_id"` }{SessionID: string(id)}); err == nil {
+	if b, err := json.Marshal(struct {
+		SessionID string `json:"session_id"`
+	}{SessionID: string(id)}); err == nil {
 		_ = conn.WriteMessage(websocket.TextMessage, b)
 	}
 	touch := func() { manager.Touch(id) }

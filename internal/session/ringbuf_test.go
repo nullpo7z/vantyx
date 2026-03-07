@@ -71,6 +71,10 @@ func TestRingBuffer_WriteEmpty(t *testing.T) {
 	if r.Len() != 0 {
 		t.Fatalf("expected len 0, got %d", r.Len())
 	}
+	// Bytes() when size == 0 returns nil
+	if got := r.Bytes(); got != nil {
+		t.Fatalf("Bytes() with empty buffer should return nil, got %v", got)
+	}
 }
 
 func TestRingBuffer_BytesWhenFull(t *testing.T) {

@@ -23,6 +23,22 @@ func TestManager_StartAndStopSession(t *testing.T) {
 		t.Fatalf("expected non-nil session")
 	}
 
+	// Cover Get, ID, CreatedAt
+	if got := sess.ID(); got != "s1" {
+		t.Fatalf("sess.ID() = %q, want s1", got)
+	}
+	if sess.CreatedAt().IsZero() {
+		t.Fatalf("expected CreatedAt to be set")
+	}
+	gotSess, ok := m.Get("s1")
+	if !ok || gotSess != sess {
+		t.Fatalf("Get(s1) = %v, %v; want sess, true", gotSess, ok)
+	}
+	_, ok = m.Get("nonexistent")
+	if ok {
+		t.Fatalf("Get(nonexistent) should return false")
+	}
+
 	if got := len(m.ActiveIDs()); got != 1 {
 		t.Fatalf("expected 1 active session, got %d", got)
 	}

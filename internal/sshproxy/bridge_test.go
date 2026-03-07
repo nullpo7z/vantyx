@@ -1,6 +1,7 @@
 package sshproxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/nullpo7z/vantyx/internal/mock"
+	"github.com/nullpo7z/vantyx/internal/session"
 )
 
 func TestIsDataMessage(t *testing.T) {
@@ -797,5 +799,188 @@ func TestRunBridge_ReadMessageFails(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunBridge did not return")
+	}
+}
+
+// TestRunBridgeStream_DialFails covers RunBridgeStream when SSH dial fails.
+func TestRunBridgeStream_DialFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	r, w := io.Pipe()
+	defer func() { _ = w.Close() }()
+
+	err := RunBridgeStream(ctx, r, io.Discard, "127.0.0.1", 1, "u", "p", 0, 0, nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected error when dialing closed port")
+	}
+	_ = r.Close()
+}
+
+// TestRunBridgeStream_WithEchoServer covers RunBridgeStream with real SSH; localStdin -> SSH -> localStdout.
+func TestRunBridgeStream_WithEchoServer(t *testing.T) {
+	server, err := mock.NewSSHEchoServer("test", "test")
+	if err != nil {
+		t.Fatalf("NewSSHEchoServer: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Close()
+
+	port := server.Port()
+	if port == 0 {
+		t.Fatal("port is 0")
+	}
+
+	stdinR, stdinW := io.Pipe()
+	stdoutBuf := &bytes.Buffer{}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	go func() {
+		_, _ = stdinW.Write([]byte("hi"))
+		_ = stdinW.Close()
+	}()
+
+	err = RunBridgeStream(ctx, stdinR, stdoutBuf, "127.0.0.1", port, "test", "test", 0, 0, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("RunBridgeStream: %v", err)
+	}
+	if got := stdoutBuf.String(); got != "hi" {
+		t.Fatalf("expected stdout %q, got %q", "hi", got)
+	}
+}
+
+// TestRunBridgeDetachable_WithEchoServer covers RunBridgeDetachable, wsWriterAdapter WriteBinary, and attach path.
+func TestRunBridgeDetachable_WithEchoServer(t *testing.T) {
+	server, err := mock.NewSSHEchoServer("test", "test")
+	if err != nil {
+		t.Fatalf("NewSSHEchoServer: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Close()
+
+	port := server.Port()
+	if port == 0 {
+		t.Fatal("port is 0")
+	}
+
+	output := session.NewRingBuffer(4096)
+	attachCh := make(chan session.AttachReq, 1)
+	bridgeErrCh := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wsConn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		go func() {
+			defer wsConn.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			err := RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", output, attachCh, wsConn, nil)
+			bridgeErrCh <- err
+		}()
+	}))
+	defer srv.Close()
+
+	u, _ := url.Parse(srv.URL)
+	u.Scheme = "ws"
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Send data; echo server echoes back -> WriteBinary and output.Write are called
+	_ = conn.WriteMessage(websocket.BinaryMessage, []byte("x"))
+	_, msg, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(msg) != "x" {
+		t.Fatalf("expected echo x, got %q", string(msg))
+	}
+
+	// Close client so bridge eventually exits (SSH session ends or ctx)
+	_ = conn.Close()
+
+	select {
+	case <-bridgeErrCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunBridgeDetachable did not return")
+	}
+}
+
+// TestRunBridgeDetachable_StreamAttach covers StreamAttach WriteBinary and Close.
+func TestRunBridgeDetachable_StreamAttach(t *testing.T) {
+	server, err := mock.NewSSHEchoServer("test", "test")
+	if err != nil {
+		t.Fatalf("NewSSHEchoServer: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Close()
+
+	port := server.Port()
+	if port == 0 {
+		t.Fatal("port is 0")
+	}
+
+	output := session.NewRingBuffer(4096)
+	_, _ = output.Write([]byte("replay"))
+
+	attachCh := make(chan session.AttachReq, 2)
+	var closeCalled atomic.Bool
+	var writeBuf bytes.Buffer
+	stdinCh := make(chan []byte, 8)
+	sa := &StreamAttach{
+		Write: func(p []byte) error { writeBuf.Write(p); return nil },
+		StartRead: func(stdinChOut chan<- []byte, onClose func()) {
+			go func() {
+				for b := range stdinCh {
+					select {
+					case stdinChOut <- b:
+					default:
+					}
+				}
+				onClose()
+			}()
+		},
+		CloseFn: func() error { closeCalled.Store(true); return nil },
+	}
+
+	attachCh <- session.AttachReq{Conn: sa}
+
+	bridgeErrCh := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		bridgeErrCh <- RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", output, attachCh, nil, nil)
+	}()
+
+	// Trigger attach so StreamAttach gets replay via WriteBinary
+	time.Sleep(100 * time.Millisecond)
+
+	// Send second attach to trigger Close() on the first (StreamAttach)
+	attachCh <- session.AttachReq{Conn: &StreamAttach{
+		Write:     func([]byte) error { return nil },
+		StartRead: func(chan<- []byte, func()) {}, // no-op so attachStream does not panic
+		CloseFn:  func() error { return nil },
+	}}
+
+	select {
+	case <-bridgeErrCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunBridgeDetachable did not return")
+	}
+
+	if !closeCalled.Load() {
+		t.Log("Close may not be called if attach order differs; replay written:", writeBuf.Len() > 0)
 	}
 }

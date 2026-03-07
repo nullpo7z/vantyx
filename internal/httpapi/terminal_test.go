@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -378,5 +379,197 @@ func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {
 	// Connection closed by server after Start failed
 	if err == nil {
 		_, _, _ = conn2.ReadMessage()
+	}
+}
+
+// TestHandleTerminalSessions_ListEmpty covers handleTerminalSessions and writeJSON (empty list).
+func TestHandleTerminalSessions_ListEmpty(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	httpSess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/terminal/sessions", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var out struct {
+		Items []TerminalSessionItem `json:"items"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(out.Items) != 0 {
+		t.Fatalf("expected empty items, got %d", len(out.Items))
+	}
+}
+
+// TestHandleTerminalSessions_ListWithSession covers handleTerminalSessions with one session (writeJSON, Session.ID(), CreatedAt()).
+func TestHandleTerminalSessions_ListWithSession(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
+
+	httpSess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	// Start a terminal session directly so GET list returns it
+	mgr, ok := app.TerminalSessionManager.(*session.Manager)
+	if !ok {
+		t.Fatalf("TerminalSessionManager is not *session.Manager")
+	}
+	sid := session.ID("list-test-session")
+	_, err = mgr.Start(sid, session.StartOptions{
+		UserID: "admin", TargetID: "demo", TargetName: "Demo host", Name: "s1", Description: "desc",
+	}, func(ctx context.Context, _ *session.Session) { <-ctx.Done() })
+	if err != nil {
+		t.Fatalf("Start terminal session: %v", err)
+	}
+	defer mgr.Stop(sid)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/terminal/sessions", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Items []TerminalSessionItem `json:"items"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(out.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(out.Items))
+	}
+	if out.Items[0].SessionID != string(sid) || out.Items[0].TargetID != "demo" || out.Items[0].Name != "s1" {
+		t.Fatalf("unexpected item: %+v", out.Items[0])
+	}
+	if out.Items[0].CreatedAt.IsZero() {
+		t.Fatalf("expected CreatedAt set")
+	}
+}
+
+// TestHandleTerminalSessions_ManagerNotLister covers the branch when TerminalSessionManager does not implement listTerminalSessions.
+func TestHandleTerminalSessions_ManagerNotLister(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	app.TerminalSessionManager = startFailingStub{} // has Start/Get/Touch/Stop but no ActiveIDs
+	router := app.NewRouter()
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/terminal/sessions", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var out struct {
+		Items []TerminalSessionItem `json:"items"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Items) != 0 {
+		t.Fatalf("expected empty items when manager is not lister, got %d", len(out.Items))
+	}
+}
+
+// TestHandleTerminalSessions_Unauthorized covers 401 paths.
+func TestHandleTerminalSessions_Unauthorized(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/terminal/sessions", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without cookie, got %d", w.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/terminal/sessions", nil)
+	req2.AddCookie(&http.Cookie{Name: "vantyx_session", Value: "invalid", Path: "/"})
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 with invalid cookie, got %d", w2.Code)
+	}
+}
+
+// TestHandleTerminalSessionDelete_Unauthorized covers 401 paths.
+func TestHandleTerminalSessionDelete_Unauthorized(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/terminal/sessions/some-id", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without cookie, got %d", w.Code)
+	}
+}
+
+// TestHandleTerminalSessionDelete_NotFound covers 404 when session does not exist or wrong user.
+func TestHandleTerminalSessionDelete_NotFound(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/terminal/sessions/nonexistent-id", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for nonexistent session, got %d", w.Code)
+	}
+}
+
+// TestHandleTerminalSessionDelete_Success covers 204 and Stop.
+func TestHandleTerminalSessionDelete_Success(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	httpSess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	mgr, ok := app.TerminalSessionManager.(*session.Manager)
+	if !ok {
+		t.Fatalf("TerminalSessionManager is not *session.Manager")
+	}
+	sid := session.ID("delete-me")
+	_, err = mgr.Start(sid, session.StartOptions{UserID: "admin", TargetID: "t1", TargetName: "T1"}, func(ctx context.Context, _ *session.Session) { <-ctx.Done() })
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/terminal/sessions/delete-me", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Code)
+	}
+	if len(mgr.ActiveIDs()) != 0 {
+		t.Fatalf("expected session to be stopped")
 	}
 }

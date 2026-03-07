@@ -799,6 +799,124 @@ func TestApp_ChangePassword(t *testing.T) {
 	}
 }
 
+// TestApp_LoginRateLimit_Returns429 exercises clientIP (X-Forwarded-For), allow, and 429 when over limit.
+func TestApp_LoginRateLimit_Returns429(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	// 5 failed logins from same IP (X-Forwarded-For with comma: clientIP uses first part)
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader([]byte(`{"username":"admin","password":"wrong"}`)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-For", " 10.0.0.1 , 192.168.1.1 ")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Result().StatusCode != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: expected 401, got %d", i+1, w.Result().StatusCode)
+		}
+	}
+	// 6th attempt from same IP -> 429
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader([]byte(`{"username":"admin","password":"wrong"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", " 10.0.0.1 , 192.168.1.1 ")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 Too Many Requests, got %d", w.Result().StatusCode)
+	}
+}
+
+// TestApp_Login_ClientIP_FromRemoteAddr covers clientIP when X-Forwarded-For is absent.
+func TestApp_Login_ClientIP_FromRemoteAddr(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader([]byte(`{"username":"admin","password":"wrong"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.168.2.1:45678"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Result().StatusCode)
+	}
+}
+
+// TestApp_Login_ClientIP_NoPort covers clientIP when RemoteAddr has no colon (host empty, return RemoteAddr).
+func TestApp_Login_ClientIP_NoPort(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader([]byte(`{"username":"admin","password":"wrong"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "localhost" // no port -> SplitHostPort returns host ""
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_ChangePassword_WrongCurrentPassword(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"current_password":"WrongPass1!","new_password":"NewAdmin1!"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/me/password", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 (wrong current password), got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestApp_ChangePassword_UnchangedPassword(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"current_password":"Admin123!","new_password":"Admin123!"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/me/password", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 (password unchanged), got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestApp_ChangePassword_InvalidBody(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodPost, "/api/me/password", bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_ChangePassword_Unauthorized(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	body := []byte(`{"current_password":"Admin123!","new_password":"NewAdmin1!"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/me/password", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without cookie, got %d", w.Result().StatusCode)
+	}
+}
+
 func TestApp_CreateGroup_UnauthorizedNoCookie(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()

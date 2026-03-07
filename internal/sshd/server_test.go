@@ -27,7 +27,7 @@ func TestNewServer_RequiresDeps(t *testing.T) {
 func TestNewServer_GeneratesHostKeyWhenNil(t *testing.T) {
 	// SessionStarter can be satisfied by *session.Manager without a real DB for NewServer.
 	mgr := session.NewManager()
-	srv, err := NewServer(Config{
+	_, err := NewServer(Config{
 		UserStore:      nil,
 		TargetStore:    nil,
 		GroupStore:     nil,
@@ -37,7 +37,7 @@ func TestNewServer_GeneratesHostKeyWhenNil(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when UserStore is nil")
 	}
-	srv, err = NewServer(Config{
+	srv, err := NewServer(Config{
 		UserStore:      &auth.SQLiteUserStore{},
 		TargetStore:    &access.SQLiteTargetStore{},
 		GroupStore:     &access.SQLiteAccessGroupStore{},

@@ -105,7 +105,7 @@ func TestOpen_MkdirAllFails(t *testing.T) {
 	// Parent "directory" is an existing file -> MkdirAll fails.
 	dir := t.TempDir()
 	fileAsParent := filepath.Join(dir, "file")
-	if err := os.WriteFile(fileAsParent, []byte{}, 0644); err != nil {
+	if err := os.WriteFile(fileAsParent, []byte{}, 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 	path := filepath.Join(fileAsParent, "db.db")

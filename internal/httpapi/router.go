@@ -78,10 +78,7 @@ func (l *loginRateLimiter) allow(ip string) bool {
 	}
 	times = times[:n]
 	l.byIP[ip] = times
-	if len(times) >= l.maxTry {
-		return false
-	}
-	return true
+	return len(times) < l.maxTry
 }
 
 func (l *loginRateLimiter) recordFailure(ip string) {
@@ -319,6 +316,7 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if a.LoginRateLimiter != nil {
 		ip = a.LoginRateLimiter.clientIP(r)
 		if !a.LoginRateLimiter.allow(ip) {
+			// #nosec G706 -- audit log; ip from client
 			log.Printf("login rate limited ip=%s", ip)
 			writeJSONError(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
 			return

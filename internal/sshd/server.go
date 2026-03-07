@@ -263,7 +263,9 @@ func parsePtyReqPayload(payload []byte) (cols, rows int, ok bool) {
 	if int(termLen) < 0 || len(payload) < 4+int(termLen)+8 {
 		return 0, 0, false
 	}
-	r.Seek(int64(4+termLen), io.SeekStart)
+	if _, err := r.Seek(int64(4+termLen), io.SeekStart); err != nil {
+		return 0, 0, false
+	}
 	var w, h uint32
 	if err := binary.Read(r, binary.BigEndian, &w); err != nil {
 		return 0, 0, false

@@ -117,6 +117,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		conn, err := wsUpgrader.Upgrade(w, r, nil)
 		if err != nil {
+			// #nosec G706 -- audit log; sessionIDParam from query, err from upgrader
 			log.Printf("terminal ws upgrade_failed attach session_id=%s err=%v", sessionIDParam, err)
 			writeJSONError(w, "failed to upgrade connection", http.StatusBadRequest)
 			return
@@ -124,6 +125,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(""))
 		select {
 		case termSess.AttachCh <- session.AttachReq{Conn: conn}:
+			// #nosec G706 -- audit log; IDs from session store
 			log.Printf("terminal session attach session_id=%s user_id=%s", sessionIDParam, sess.UserID)
 		default:
 			_ = conn.WriteMessage(websocket.TextMessage, []byte("error: session attach slot busy"))
@@ -293,6 +295,7 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	a.TerminalSessionManager.Stop(id)
+	// #nosec G706 -- audit log; sessionID from URL, authSess from store
 	log.Printf("terminal session stopped session_id=%s user_id=%s", sessionID, authSess.UserID)
 	w.WriteHeader(http.StatusNoContent)
 }

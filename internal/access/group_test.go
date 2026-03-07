@@ -27,7 +27,7 @@ func newTestSQLiteAccessGroupStoreWithUser(t *testing.T, userID string) *SQLiteA
 	t.Helper()
 	store := newTestSQLiteAccessGroupStore(t)
 	userStore := auth.NewSQLiteUserStore(store.db)
-	if _, err := userStore.CreateUser(userID, userID, "pw"); err != nil && err != auth.ErrUserExists {
+	if _, err := userStore.CreateUser(userID, userID, "Passw0rd!"); err != nil && err != auth.ErrUserExists {
 		t.Fatalf("create user: %v", err)
 	}
 	return store

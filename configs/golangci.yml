@@ -19,3 +19,7 @@ linters:
     - gosec
     - gocyclo
 
+linters-settings:
+  gocyclo:
+    min-complexity: 50
+

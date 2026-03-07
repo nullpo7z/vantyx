@@ -3,8 +3,6 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 
-/* global URLSearchParams */
-
 function escapeHtml(s) {
   const div = document.createElement('div')
   div.textContent = s

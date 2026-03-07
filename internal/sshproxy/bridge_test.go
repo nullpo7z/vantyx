@@ -971,7 +971,7 @@ func TestRunBridgeDetachable_StreamAttach(t *testing.T) {
 	attachCh <- session.AttachReq{Conn: &StreamAttach{
 		Write:     func([]byte) error { return nil },
 		StartRead: func(chan<- []byte, func()) {}, // no-op so attachStream does not panic
-		CloseFn:  func() error { return nil },
+		CloseFn:   func() error { return nil },
 	}}
 
 	select {

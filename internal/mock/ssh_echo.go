@@ -61,7 +61,13 @@ func (s *SSHEchoServer) Start() error {
 }
 
 func (s *SSHEchoServer) acceptOne() {
-	nconn, err := s.listener.Accept()
+	s.mu.Lock()
+	listener := s.listener
+	s.mu.Unlock()
+	if listener == nil {
+		return
+	}
+	nconn, err := listener.Accept()
 	if err != nil {
 		return
 	}

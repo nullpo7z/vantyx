@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Vantyx API
-  version: 0.2.0
+  version: 0.3.0
   description: |
     Vantyx バックエンドの公開 HTTP / WebSocket API 仕様。
 
@@ -9,9 +9,11 @@ info:
     - ヘルスチェック (GET /healthz)
     - ローカルユーザー認証 (POST /api/login) と Cookie セッション
     - 自己情報取得 (GET /api/me)
-    - アクセスグループの一覧・作成 (GET/POST /api/groups)
-    - ターゲットの一覧・作成 (GET/POST /api/targets)
-    - SSH WebSocket ターミナル (GET /ws/ssh)。認証後、ターゲットへの SSH をブリッジ。セッション永続化の土台（リングバッファ）あり。
+    - アクセスグループの一覧・作成 (GET/POST /api/groups)。一覧は limit / after_id でキーセットページネーション対応。
+    - ターゲットの一覧・作成 (GET/POST /api/targets)。一覧は limit / after_id でキーセットページネーション対応。
+    - SSH WebSocket ターミナル (GET /ws/ssh)。認証後、ターゲットへの SSH をブリッジ。Phase 2 でセッション永続化・レジューム対応（切断後もブリッジ継続、GET /api/terminal/sessions で一覧、session_id で再接続）。
+    - CLI SSH ゲートウェイ (Phase 2): VANTYX_SSH_LISTEN で有効化。ssh user@vantyx でログイン後、メニューからターゲット選択してプロキシ接続。
+    - OpenAPI 仕様 (GET /api/spec) と Swagger UI (GET /docs) は admin のみアクセス可。
     エラー応答はすべて application/json の ErrorResponse (message) で統一しています。
 servers:
   # Swagger UI の Try it out を「アクセスしているオリジン」に合わせるため、相対 URL を優先します。
@@ -103,6 +105,60 @@ components:
         - id
         - name
         - targets
+    GroupListResponse:
+      type: object
+      description: limit または after_id 指定時のグループ一覧応答（キーセットページネーション）。
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccessGroup'
+        next_cursor:
+          type: string
+          description: 次のページを取得する際に after_id に渡す値。存在しない場合は省略。
+    TargetListResponse:
+      type: object
+      description: limit または after_id 指定時のターゲット一覧応答（キーセットページネーション）。
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Target'
+        next_cursor:
+          type: string
+          description: 次のページを取得する際に after_id に渡す値。存在しない場合は省略。
+    TerminalSessionItem:
+      type: object
+      description: アクティブなターミナルセッション 1 件（レジューム用）。
+      properties:
+        session_id:
+          type: string
+          description: セッション ID。GET /ws/ssh?session_id={id} で再接続（認証情報不要）。
+        target_id:
+          type: string
+        target_name:
+          type: string
+        name:
+          type: string
+          description: セッション名（識別用・任意）。接続時の最初の JSON で name を送信可能。
+        description:
+          type: string
+          description: 説明（任意）。接続時の最初の JSON で description を送信可能。
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - session_id
+        - target_id
+        - target_name
+        - created_at
+    TerminalSessionListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TerminalSessionItem'
 
 paths:
   /healthz:
@@ -182,18 +238,38 @@ paths:
   /api/targets:
     get:
       summary: アクセス可能なターゲット一覧
-      description: ログイン中のユーザーがアクセス権を持つターゲット一覧を返します。
+      description: |
+        ログイン中のユーザーがアクセス権を持つターゲット一覧を返します。
+        **ページネーション**: クエリに limit または after_id を指定すると、レスポンスは `{ "items": [...], "next_cursor": "..." }` 形式になります。
+        next_cursor が含まれる場合は、次リクエストで `after_id={next_cursor}` を付けて続きを取得します。limit 未指定時は 100、最大 1000。
       security:
         - cookieAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+          description: 取得件数。指定時はキーセットページネーションになり、レスポンスは items/next_cursor 形式。
+        - name: after_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: この ID より大きいターゲットから取得（キーセット）。limit と組み合わせて使用。
       responses:
         '200':
-          description: ターゲット一覧
+          description: ターゲット一覧。limit/after_id 未指定時は配列、指定時は TargetListResponse。
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Target'
+                oneOf:
+                  - type: array
+                    items:
+                      $ref: '#/components/schemas/Target'
+                  - $ref: '#/components/schemas/TargetListResponse'
         '401':
           description: 未認証またはセッション無効
           content:
@@ -233,6 +309,12 @@ paths:
                   type: string
                   enum: ["ssh", "telnet"]
                   default: ssh
+                ssh_username:
+                  type: string
+                  description: SSH ログイン用ユーザー名（任意）。保存すると接続時に利用可能。
+                ssh_password:
+                  type: string
+                  description: SSH パスワード（任意）。保存時は AES-256-GCM で暗号化（OWASP ASVS L2）。鍵未設定時は 503 を返す。
               required:
                 - name
                 - group_id
@@ -268,6 +350,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: SSH パスワードを保存するが暗号化鍵が未設定（VANTYX_SSH_PASSWORD_ENCRYPTION_KEY）。OWASP ASVS L2 準拠のため、パスワード保存時は鍵必須。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: ターゲット作成またはグループ紐づけの内部エラー
           content:
@@ -278,18 +366,38 @@ paths:
   /api/groups:
     get:
       summary: アクセスグループ一覧（所属 + ターゲット含む）
-      description: ログイン中のユーザーが所属するアクセスグループ一覧を返します。各グループには紐づくターゲット一覧が含まれます。
+      description: |
+        ログイン中のユーザーが所属するアクセスグループ一覧を返します。各グループには紐づくターゲット一覧が含まれます。
+        **ページネーション**: クエリに limit または after_id を指定すると、レスポンスは `{ "items": [...], "next_cursor": "..." }` 形式になります。
+        next_cursor が含まれる場合は、次リクエストで `after_id={next_cursor}` を付けて続きを取得します。limit 未指定時は 100、最大 1000。
       security:
         - cookieAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+          description: 取得件数。指定時はキーセットページネーションになり、レスポンスは items/next_cursor 形式。
+        - name: after_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: この ID より大きいグループから取得（キーセット）。limit と組み合わせて使用。
       responses:
         '200':
-          description: アクセスグループ一覧
+          description: アクセスグループ一覧。limit/after_id 未指定時は配列、指定時は GroupListResponse。
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/AccessGroup'
+                oneOf:
+                  - type: array
+                    items:
+                      $ref: '#/components/schemas/AccessGroup'
+                  - $ref: '#/components/schemas/GroupListResponse'
         '401':
           description: 未認証またはセッション無効
           content:
@@ -341,30 +449,58 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/terminal/sessions:
+    get:
+      summary: アクティブなターミナルセッション一覧
+      description: |
+        ログイン中のユーザーに属するアクティブなターミナルセッション一覧を返します。
+        レジューム時は、返却された session_id を GET /ws/ssh?session_id={id} に渡して再接続します（認証情報の再送不要）。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: セッション一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TerminalSessionListResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /ws/ssh:
     get:
       summary: SSH WebSocket ターミナル
       description: |
         WebSocket にアップグレードされるエンドポイントです。
-        クエリパラメータ target_id で接続先ターゲットを指定します。ユーザーは当該ターゲットへのアクセス権が必要です。
-        ターゲットの protocol は ssh である必要があります（telnet の場合は 501 を返します）。
 
-        アップグレード後、**最初のテキストメッセージ**でターゲット SSH 用の認証情報を JSON で送信してください。
+        **新規接続**: クエリに target_id を指定します。アップグレード後、最初のテキストメッセージでターゲット SSH 用の認証情報を JSON で送信してください。セッションの識別用に name（セッション名）と description（説明）を任意で含められます。
         ```json
-        {"username":"...","password":"..."}
+        {"username":"...","password":"...","name":"セッション名（任意）","description":"説明（任意）"}
         ```
-        認証情報が無効またはタイムアウト（15 秒）の場合は、サーバーがテキストメッセージ "error: ..." を送信し接続を閉じます。
-        認証情報受理後、サーバーが空のテキストメッセージを 1 回送信し、続けてターゲットへ SSH 接続。以降のメッセージは SSH セッションと双方向にブリッジされます。
-        セッションはバックエンドで保持され、出力はリングバッファに tee されます（レジューム用の API は今後の拡張）。
+        **レジューム（再接続）**: クエリに session_id を指定します（GET /api/terminal/sessions で取得）。認証情報は不要で、切断前の出力がリングバッファから再送されます。
+
+        ユーザーはターゲットへのアクセス権が必要です。ターゲットの protocol は ssh である必要があります（telnet の場合は 501）。
+        認証情報が無効またはタイムアウト（15 秒）の場合は、サーバーが "error: ..." を送信し接続を閉じます。
+        セッションはバックエンドで保持され、クライアント切断後もブリッジは継続します（バックグラウンド実行）。
       security:
         - cookieAuth: []
       parameters:
         - name: target_id
           in: query
-          required: true
+          required: false
           schema:
             type: string
-          description: 接続先ターゲットの ID（GET /api/groups または GET /api/targets で取得可能）
+          description: 接続先ターゲットの ID（新規接続時必須。session_id と排他）
+        - name: session_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 既存セッションへの再接続（レジューム）。指定時は認証情報不要。
       responses:
         '101':
           description: WebSocket プロトコルへの切り替え
@@ -394,6 +530,50 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '501':
           description: ターゲットのプロトコルが SSH 以外（現時点では SSH のみ対応）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/spec:
+    get:
+      summary: OpenAPI 仕様 (YAML)
+      description: この API の OpenAPI 3.1 仕様を YAML で返します。**admin ユーザーのみ**アクセス可能。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: application/x-yaml で仕様を返す
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: admin 以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /docs:
+    get:
+      summary: Swagger UI
+      description: API リファレンス用の Swagger UI（HTML）。**admin ユーザーのみ**アクセス可能。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: text/html で Swagger UI を返す
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: admin 以外
           content:
             application/json:
               schema:

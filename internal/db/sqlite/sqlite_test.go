@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -97,6 +98,20 @@ func TestOpen_PingFails_DirAsPath(t *testing.T) {
 	_, err := Open(Config{Path: path})
 	if err == nil {
 		t.Fatal("expected error when path is a directory")
+	}
+}
+
+func TestOpen_MkdirAllFails(t *testing.T) {
+	// Parent "directory" is an existing file -> MkdirAll fails.
+	dir := t.TempDir()
+	fileAsParent := filepath.Join(dir, "file")
+	if err := os.WriteFile(fileAsParent, []byte{}, 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	path := filepath.Join(fileAsParent, "db.db")
+	_, err := Open(Config{Path: path})
+	if err == nil {
+		t.Fatal("expected error when parent is a file")
 	}
 }
 

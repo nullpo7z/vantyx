@@ -89,6 +89,38 @@ func (s *SQLiteUserStore) GetByID(id string) (*User, error) {
 	return &u, nil
 }
 
+// UpdatePassword updates the user's password after verifying current (ASVS default password change).
+func (s *SQLiteUserStore) UpdatePassword(userID, currentPlain, newPlain string) error {
+	if err := ValidatePassword(newPlain); err != nil {
+		return err
+	}
+	if currentPlain == newPlain {
+		return ErrPasswordUnchanged
+	}
+	u, err := s.GetByID(userID)
+	if err != nil {
+		return err
+	}
+	if !VerifyPassword(u.PasswordHash, currentPlain) {
+		return ErrWrongPassword
+	}
+	hash, err := HashPassword(newPlain)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, hash, userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
 // SQLiteSessionStore implements SessionStore backed by SQLite.
 type SQLiteSessionStore struct {
 	db  *sql.DB

@@ -16,9 +16,11 @@ type TargetID string
 
 // ListOpts limits and paginates list results to avoid DoS from huge result sets.
 // If nil, a default limit is applied by the implementation.
+// Use AfterID for keyset (cursor) pagination; when set, returns items with id > AfterID. Offset is ignored when AfterID is set.
 type ListOpts struct {
-	Limit  int // max number of items to return; <= 0 means implementation default
-	Offset int // number of items to skip
+	Limit   int    // max number of items to return; <= 0 means implementation default
+	Offset  int    // number of items to skip (ignored when AfterID is set)
+	AfterID string // optional cursor: return items after this ID (keyset pagination)
 }
 
 const defaultListLimit = 10000

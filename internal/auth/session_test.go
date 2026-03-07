@@ -28,7 +28,7 @@ func newTestSQLiteSessionStoreWithDB(t *testing.T) (*sql.DB, *SQLiteSessionStore
 		t.Fatalf("migrate: %v", err)
 	}
 	userStore := NewSQLiteUserStore(db)
-	if _, err := userStore.CreateUser("user1", "user1", "password"); err != nil && err != ErrUserExists {
+	if _, err := userStore.CreateUser("user1", "user1", "Password1!"); err != nil && err != ErrUserExists {
 		t.Fatalf("create user: %v", err)
 	}
 	return db, NewSQLiteSessionStore(db, 5*time.Minute)

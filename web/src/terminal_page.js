@@ -16,6 +16,11 @@ export function renderTerminalPage(container) {
   const targetId = params.get('target_id') || ''
   const targetName = params.get('target_name') || targetId || 'terminal'
   const channelToken = params.get('channel') || ''
+  const resumeSessionId = params.get('session_id') || ''
+  const useStoredCredentials = params.get('use_stored_credentials') === '1'
+  const urlSessionName = params.get('session_name') ?? ''
+  const urlSessionDesc = params.get('session_description') ?? ''
+  const hasSessionParamsFromUrl = params.has('session_name') || params.has('session_description')
 
   container.innerHTML = `
     <div class="min-h-screen w-screen flex flex-col bg-slate-950">
@@ -30,17 +35,37 @@ export function renderTerminalPage(container) {
         </div>
       </header>
 
+      <div id="term-disconnected" class="hidden flex-1 flex flex-col items-center justify-center p-4 gap-4 bg-slate-950">
+        <p class="text-slate-300">セッションはバックエンドで継続しています。</p>
+        <button id="term-reconnect" type="button" class="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700">再接続</button>
+        <button id="term-back-from-disconnect" type="button" class="rounded border border-slate-600 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800">ホームに戻る</button>
+      </div>
+      <div id="term-session-ended" class="hidden flex-1 flex flex-col items-center justify-center p-4 gap-4 bg-slate-950">
+        <p class="text-slate-300">セッションが終了しました。サーバー側でログアウトしたため、再接続はできません。</p>
+        <button id="term-back-from-ended" type="button" class="rounded border border-slate-600 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800">ホームに戻る</button>
+      </div>
       <div id="term-credentials" class="flex-1 flex items-center justify-center p-4">
         <form class="w-full max-w-md bg-white rounded-lg shadow-xl border border-slate-200 overflow-hidden">
           <div class="px-5 py-5 space-y-5">
-            <p class="text-sm text-slate-600">ターゲットの SSH 認証情報を入力してください。</p>
-            <div>
-              <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名</label>
-              <input type="text" id="ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
+            <p id="term-auth-prompt" class="text-sm text-slate-600">ターゲットの SSH 認証情報を入力してください。</p>
+            <p id="term-stored-cred-hint" class="text-sm text-slate-600 hidden">セッション名と説明を入力してください（任意）。接続で保存済み認証を使って接続します。</p>
+            <div id="term-auth-fields" class="space-y-5">
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名</label>
+                <input type="text" id="ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード</label>
+                <input type="password" id="ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
+              </div>
             </div>
             <div>
-              <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード</label>
-              <input type="password" id="ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">セッション名（任意）</label>
+              <input type="text" id="ssh-session-name" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: 本番デプロイ用" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">説明（任意）</label>
+              <input type="text" id="ssh-session-desc" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: リリース作業用" />
             </div>
             <p id="term-error" class="text-sm text-red-600 hidden"></p>
           </div>
@@ -67,13 +92,22 @@ export function renderTerminalPage(container) {
   const xtermEl = container.querySelector('#xterm')
   const usernameInput = container.querySelector('#ssh-username')
   const passwordInput = container.querySelector('#ssh-password')
+  const sessionNameInput = container.querySelector('#ssh-session-name')
+  const sessionDescInput = container.querySelector('#ssh-session-desc')
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const wsUrl = `${protocol}//${window.location.host}/ws/ssh?target_id=${encodeURIComponent(targetId)}`
+  const wsUrlNew = `${protocol}//${window.location.host}/ws/ssh?target_id=${encodeURIComponent(targetId)}`
+  const wsUrlResume = (sid) => `${protocol}//${window.location.host}/ws/ssh?session_id=${encodeURIComponent(sid)}`
 
   let term = null
   let fitAddon = null
   let resizeObserver = null
+  let currentSessionId = resumeSessionId || null
+  const disconnectedWrap = container.querySelector('#term-disconnected')
+  const reconnectBtn = container.querySelector('#term-reconnect')
+  const backFromDisconnectBtn = container.querySelector('#term-back-from-disconnect')
+  const sessionEndedWrap = container.querySelector('#term-session-ended')
+  const backFromEndedBtn = container.querySelector('#term-back-from-ended')
 
   function teardown() {
     try { resizeObserver?.disconnect() } catch { /* ignore */ }
@@ -85,22 +119,90 @@ export function renderTerminalPage(container) {
 
   function closeWindow() {
     teardown()
-    // Works when opened by window.open; if blocked, user can use the tab close button.
+    if (window.opener && !window.opener.closed) {
+      try { window.opener.focus() } catch { /* ignore */ }
+    }
     try { window.close() } catch { /* ignore */ }
   }
 
-  closeBtn.addEventListener('click', closeWindow)
+  // 戻る: セッションは維持したままホームへ（WebSocket はページ離脱で切断され、バックエンドのセッションは継続）
   backBtn.addEventListener('click', () => {
-    // ホームの「接続」ボタン（別タブ）から開いた場合は、元タブへ戻すためにタブを閉じる
-    if (channelToken) {
-      closeWindow()
-      return
-    }
+    teardown()
     window.location.href = '/'
   })
-  cancelBtn.addEventListener('click', () => { window.location.href = '/' })
 
-  function connectWithCredentials(username, password) {
+  // 閉じる: セッションを終了してタブを閉じ、元のタブにフォーカスを戻す
+  closeBtn.addEventListener('click', async () => {
+    if (currentSessionId) {
+      try {
+        const API = (await import('./api.js')).default
+        await API.terminalSessionDelete(currentSessionId)
+      } catch {
+        /* 失敗してもタブは閉じる */
+      }
+    }
+    closeWindow()
+  })
+  cancelBtn.addEventListener('click', () => { window.location.href = '/' })
+  backFromDisconnectBtn.addEventListener('click', () => { window.location.href = '/' })
+  backFromEndedBtn.addEventListener('click', () => { window.location.href = '/' })
+
+  function connectResume(sessionId) {
+    if (!sessionId) return
+    credsWrap.classList.add('hidden')
+    shellWrap.classList.remove('hidden')
+    errorEl.classList.add('hidden')
+    disconnectedWrap.classList.add('hidden')
+    const ws = new WebSocket(wsUrlResume(sessionId))
+    ws.binaryType = 'arraybuffer'
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === 'string' && ev.data.startsWith('session_ended:')) {
+        const msg = ev.data.slice('session_ended:'.length).trim() || 'セッションが終了しました'
+        if (term) term.write('\r\n\n[セッション終了] ' + msg + '\r\n')
+        currentSessionId = null
+        shellWrap.classList.add('hidden')
+        sessionEndedWrap.classList.remove('hidden')
+        try { ws.close() } catch { /* ignore */ }
+        return
+      }
+      if (typeof ev.data === 'string' && ev.data.startsWith('error:')) {
+        errorEl.textContent = ev.data.slice(6).trim()
+        errorEl.classList.remove('hidden')
+        shellWrap.classList.add('hidden')
+        credsWrap.classList.remove('hidden')
+        try { ws.close() } catch { /* ignore */ }
+        return
+      }
+      if (!term) {
+        startXterm(ws)
+      }
+      if (typeof ev.data === 'string') {
+        term.write(ev.data)
+      } else {
+        term.write(new Uint8Array(ev.data))
+      }
+    }
+    ws.onerror = () => {
+      errorEl.textContent = 'WebSocket 接続に失敗しました。'
+      errorEl.classList.remove('hidden')
+    }
+    ws.onclose = () => {
+      if (term) term.write('\r\n\n[接続が閉じられました]\r\n')
+      if (currentSessionId) {
+        shellWrap.classList.add('hidden')
+        disconnectedWrap.classList.remove('hidden')
+      }
+    }
+  }
+
+  reconnectBtn.addEventListener('click', () => {
+    if (!currentSessionId) return
+    disconnectedWrap.classList.add('hidden')
+    shellWrap.classList.remove('hidden')
+    connectResume(currentSessionId)
+  })
+
+  function connectWithCredentials(username, password, sessionName, sessionDescription) {
     if (!targetId) {
       errorEl.textContent = 'target_id が指定されていません。ホーム画面から開き直してください。'
       errorEl.classList.remove('hidden')
@@ -112,28 +214,66 @@ export function renderTerminalPage(container) {
       return
     }
     const user = username.trim()
+    const name = typeof sessionName === 'string' ? sessionName.trim() : ''
+    const description = typeof sessionDescription === 'string' ? sessionDescription.trim() : ''
     errorEl.classList.add('hidden')
     connectBtn.disabled = true
 
-    const ws = new WebSocket(wsUrl)
+    const ws = new WebSocket(wsUrlNew)
     ws.binaryType = 'arraybuffer'
     let sawError = false
+    let sawFirstMessage = false
+    const connectTimeout = window.setTimeout(() => {
+      if (sawFirstMessage) return
+      sawError = true
+      errorEl.textContent = '接続がタイムアウトしました。ターゲットに到達できるか、認証情報を確認してください。'
+      errorEl.classList.remove('hidden')
+      connectBtn.disabled = false
+      credsWrap.classList.remove('hidden')
+      shellWrap.classList.add('hidden')
+      try { ws.close() } catch { /* ignore */ }
+    }, 20000)
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ username: user, password: password || '' }))
+      ws.send(JSON.stringify({ username: user, password: password || '', name, description }))
     }
 
     ws.onmessage = (ev) => {
-      // Backend may send "error: ..." as a string (e.g. SSH connection failed).
+      sawFirstMessage = true
+      window.clearTimeout(connectTimeout)
+      if (typeof ev.data === 'string' && ev.data.startsWith('session_ended:')) {
+        const msg = ev.data.slice('session_ended:'.length).trim() || 'セッションが終了しました'
+        if (term) term.write('\r\n\n[セッション終了] ' + msg + '\r\n')
+        currentSessionId = null
+        shellWrap.classList.add('hidden')
+        sessionEndedWrap.classList.remove('hidden')
+        try { ws.close() } catch { /* ignore */ }
+        return
+      }
       if (typeof ev.data === 'string' && ev.data.startsWith('error:')) {
         const msg = ev.data.slice(6).trim()
         sawError = true
         errorEl.textContent = msg
         errorEl.classList.remove('hidden')
-        if (term) term.write('\r\n\n[エラー] ' + msg + '\r\n')
         connectBtn.disabled = false
+        // ターミナル表示に切り替わった後でもエラーを見せるため、認証パネルを再表示する
+        credsWrap.classList.remove('hidden')
+        shellWrap.classList.add('hidden')
+        if (term) term.write('\r\n\n[エラー] ' + msg + '\r\n')
         try { ws.close() } catch { /* ignore */ }
         return
+      }
+      // Backend sends session_id as JSON after connect (for resume).
+      if (typeof ev.data === 'string' && ev.data.trim().startsWith('{')) {
+        try {
+          const o = JSON.parse(ev.data)
+          if (o && typeof o.session_id === 'string') {
+            currentSessionId = o.session_id
+            return
+          }
+        } catch {
+          /* not JSON, fall through to term.write */
+        }
       }
 
       if (!term) {
@@ -150,18 +290,119 @@ export function renderTerminalPage(container) {
     }
 
     ws.onerror = () => {
+      sawError = true
       errorEl.textContent = 'WebSocket 接続に失敗しました。バックエンドが起動しているか確認してください。'
       errorEl.classList.remove('hidden')
       connectBtn.disabled = false
+      credsWrap.classList.remove('hidden')
+      shellWrap.classList.add('hidden')
     }
 
     ws.onclose = () => {
+      window.clearTimeout(connectTimeout)
       if (term) term.write('\r\n\n[接続が閉じられました]\r\n')
       connectBtn.disabled = false
-      // エラーで閉じた場合は内容を見せるため自動で閉じない。
-      if (channelToken && !sawError) {
-        // 少し待ってから閉じる（文言を描画するため）
+      if (!sawFirstMessage && !sawError) {
+        sawError = true
+        errorEl.textContent = '接続が閉じられました。ターゲット・ネットワーク・認証情報を確認してください。'
+        errorEl.classList.remove('hidden')
+        credsWrap.classList.remove('hidden')
+        shellWrap.classList.add('hidden')
+      } else if (currentSessionId) {
+        shellWrap.classList.add('hidden')
+        disconnectedWrap.classList.remove('hidden')
+      } else if (channelToken && !sawError) {
         window.setTimeout(() => closeWindow(), 400)
+      }
+    }
+  }
+
+  function connectWithStoredCredentials(sessionName, sessionDescription) {
+    if (!targetId) return
+    errorEl.classList.add('hidden')
+    const name = typeof sessionName === 'string' ? sessionName.trim() : ''
+    const description = typeof sessionDescription === 'string' ? sessionDescription.trim() : ''
+
+    const ws = new WebSocket(wsUrlNew)
+    ws.binaryType = 'arraybuffer'
+    let sawError = false
+    let sawFirstMessage = false
+    const connectTimeout = window.setTimeout(() => {
+      if (sawFirstMessage) return
+      sawError = true
+      errorEl.textContent = '接続がタイムアウトしました。ターゲットに到達できるか、保存済み認証情報を確認してください。'
+      errorEl.classList.remove('hidden')
+      credsWrap.classList.remove('hidden')
+      shellWrap.classList.add('hidden')
+      try { ws.close() } catch { /* ignore */ }
+    }, 20000)
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ use_stored_credentials: true, name, description }))
+    }
+
+    ws.onmessage = (ev) => {
+      sawFirstMessage = true
+      window.clearTimeout(connectTimeout)
+      if (typeof ev.data === 'string' && ev.data.startsWith('session_ended:')) {
+        const msg = ev.data.slice('session_ended:'.length).trim() || 'セッションが終了しました'
+        if (term) term.write('\r\n\n[セッション終了] ' + msg + '\r\n')
+        currentSessionId = null
+        shellWrap.classList.add('hidden')
+        sessionEndedWrap.classList.remove('hidden')
+        try { ws.close() } catch { /* ignore */ }
+        return
+      }
+      if (typeof ev.data === 'string' && ev.data.startsWith('error:')) {
+        const msg = ev.data.slice(6).trim()
+        sawError = true
+        errorEl.textContent = msg
+        errorEl.classList.remove('hidden')
+        credsWrap.classList.remove('hidden')
+        shellWrap.classList.add('hidden')
+        if (term) term.write('\r\n\n[エラー] ' + msg + '\r\n')
+        try { ws.close() } catch { /* ignore */ }
+        return
+      }
+      if (typeof ev.data === 'string' && ev.data.trim().startsWith('{')) {
+        try {
+          const o = JSON.parse(ev.data)
+          if (o && typeof o.session_id === 'string') {
+            currentSessionId = o.session_id
+            return
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      if (!term) startXterm(ws)
+      if (typeof ev.data === 'string') {
+        term.write(ev.data)
+      } else {
+        term.write(new Uint8Array(ev.data))
+      }
+    }
+
+    ws.onerror = () => {
+      sawError = true
+      errorEl.textContent = 'WebSocket 接続に失敗しました。保存済み認証で接続できない場合は、認証情報の入力をお試しください。'
+      errorEl.classList.remove('hidden')
+      credsWrap.classList.remove('hidden')
+      shellWrap.classList.add('hidden')
+    }
+
+    ws.onclose = () => {
+      window.clearTimeout(connectTimeout)
+      if (term) term.write('\r\n\n[接続が閉じられました]\r\n')
+      if (!sawFirstMessage && !sawError) {
+        sawError = true
+        errorEl.textContent = '接続が閉じられました。ターゲット・ネットワーク・保存済み認証情報を確認してください。'
+        errorEl.classList.remove('hidden')
+        credsWrap.classList.remove('hidden')
+        shellWrap.classList.add('hidden')
+      } else if (currentSessionId) {
+        shellWrap.classList.add('hidden')
+        disconnectedWrap.classList.remove('hidden')
       }
     }
   }
@@ -175,13 +416,42 @@ export function renderTerminalPage(container) {
       errorEl.classList.remove('hidden')
       return
     }
+    const sessionName = sessionNameInput?.value?.trim() ?? ''
+    const sessionDesc = sessionDescInput?.value?.trim() ?? ''
+    if (useStoredCredentials && targetId) {
+      credsWrap.classList.add('hidden')
+      shellWrap.classList.remove('hidden')
+      connectWithStoredCredentials(sessionName, sessionDesc)
+      return
+    }
     const username = usernameInput.value.trim()
     const password = passwordInput.value
-    connectWithCredentials(username, password)
+    connectWithCredentials(username, password, sessionName, sessionDesc)
   })
 
+  // session_id のみで開いた場合（レジューム用リンク）は認証なしで再接続
+  if (resumeSessionId && !targetId) {
+    credsWrap.classList.add('hidden')
+    shellWrap.classList.remove('hidden')
+    connectResume(resumeSessionId)
+  }
+
+  // 保存済み認証: URL でセッション名・説明が渡されていれば即接続、なければフォーム表示
+  if (useStoredCredentials && targetId && hasSessionParamsFromUrl) {
+    credsWrap.classList.add('hidden')
+    shellWrap.classList.remove('hidden')
+    connectWithStoredCredentials(urlSessionName, urlSessionDesc)
+  } else if (useStoredCredentials && targetId) {
+    const authPrompt = container.querySelector('#term-auth-prompt')
+    const authFields = container.querySelector('#term-auth-fields')
+    const storedCredHint = container.querySelector('#term-stored-cred-hint')
+    if (authPrompt) authPrompt.classList.add('hidden')
+    if (authFields) authFields.classList.add('hidden')
+    if (storedCredHint) storedCredHint.classList.remove('hidden')
+  }
+
   // 親タブから開かれた場合、BroadcastChannel 経由で認証情報を受け取り自動接続する（noopener でも動く）
-  if (channelToken && targetId) {
+  if (channelToken && targetId && !useStoredCredentials) {
     const infoEl = document.createElement('p')
     infoEl.className = 'text-xs text-slate-500'
     infoEl.textContent = '親タブから認証情報を受信中…（数秒かかる場合があります）'
@@ -217,6 +487,10 @@ export function renderTerminalPage(container) {
 
       usernameInput.value = typeof u === 'string' ? u : ''
       passwordInput.value = typeof p === 'string' ? p : ''
+      const name = typeof ev.data.name === 'string' ? ev.data.name : ''
+      const desc = typeof ev.data.description === 'string' ? ev.data.description : ''
+      if (sessionNameInput) sessionNameInput.value = name
+      if (sessionDescInput) sessionDescInput.value = desc
 
       if (!usernameInput.value.trim()) {
         connectBtn.disabled = false
@@ -230,7 +504,7 @@ export function renderTerminalPage(container) {
       }
 
       infoEl.textContent = `親タブからユーザー名「${usernameInput.value.trim()}」を受信しました。接続中…`
-      connectWithCredentials(usernameInput.value, passwordInput.value)
+      connectWithCredentials(usernameInput.value, passwordInput.value, name, desc)
     }
 
     try {

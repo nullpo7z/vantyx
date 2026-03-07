@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"time"
 	"unicode"
+
+	"github.com/nullpo7z/vantyx/internal/secret"
 )
 
 // StoreConfig holds store behavior parameters (timeout, list limit).
@@ -245,12 +247,25 @@ func (s *SQLiteAccessGroupStore) GroupIDsForUser(ctx context.Context, userID Use
 	defer cancel()
 
 	limit, offset := listLimit(opts, s.defaultListLimit)
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT group_id
-		FROM user_groups
-		WHERE user_id = ?
-		LIMIT ? OFFSET ?
-	`, string(userID), limit, offset)
+	var rows *sql.Rows
+	var err error
+	if opts != nil && opts.AfterID != "" {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT group_id
+			FROM user_groups
+			WHERE user_id = ? AND group_id > ?
+			ORDER BY group_id
+			LIMIT ?
+		`, string(userID), opts.AfterID, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT group_id
+			FROM user_groups
+			WHERE user_id = ?
+			ORDER BY group_id
+			LIMIT ? OFFSET ?
+		`, string(userID), limit, offset)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -276,12 +291,25 @@ func (s *SQLiteAccessGroupStore) TargetIDsForGroup(ctx context.Context, groupID 
 	defer cancel()
 
 	limit, offset := listLimit(opts, s.defaultListLimit)
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT target_id
-		FROM group_targets
-		WHERE group_id = ?
-		LIMIT ? OFFSET ?
-	`, string(groupID), limit, offset)
+	var rows *sql.Rows
+	var err error
+	if opts != nil && opts.AfterID != "" {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT target_id
+			FROM group_targets
+			WHERE group_id = ? AND target_id > ?
+			ORDER BY target_id
+			LIMIT ?
+		`, string(groupID), opts.AfterID, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT target_id
+			FROM group_targets
+			WHERE group_id = ?
+			ORDER BY target_id
+			LIMIT ? OFFSET ?
+		`, string(groupID), limit, offset)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -307,13 +335,27 @@ func (s *SQLiteAccessGroupStore) TargetIDsForUser(ctx context.Context, userID Us
 	defer cancel()
 
 	limit, offset := listLimit(opts, s.defaultListLimit)
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT gt.target_id
-		FROM user_groups ug
-		JOIN group_targets gt ON ug.group_id = gt.group_id
-		WHERE ug.user_id = ?
-		LIMIT ? OFFSET ?
-	`, string(userID), limit, offset)
+	var rows *sql.Rows
+	var err error
+	if opts != nil && opts.AfterID != "" {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT DISTINCT gt.target_id
+			FROM user_groups ug
+			JOIN group_targets gt ON ug.group_id = gt.group_id
+			WHERE ug.user_id = ? AND gt.target_id > ?
+			ORDER BY gt.target_id
+			LIMIT ?
+		`, string(userID), opts.AfterID, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT DISTINCT gt.target_id
+			FROM user_groups ug
+			JOIN group_targets gt ON ug.group_id = gt.group_id
+			WHERE ug.user_id = ?
+			ORDER BY gt.target_id
+			LIMIT ? OFFSET ?
+		`, string(userID), limit, offset)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -334,17 +376,20 @@ func (s *SQLiteAccessGroupStore) TargetIDsForUser(ctx context.Context, userID Us
 }
 
 // SQLiteTargetStore implements TargetStore backed by SQLite.
+// encKey is optional; when non-nil (32 bytes), ssh_password is encrypted at rest (ASVS L2).
 type SQLiteTargetStore struct {
 	db               *sql.DB
 	queryTimeout     time.Duration
 	defaultListLimit int
+	encKey           []byte
 }
 
 // NewSQLiteTargetStore creates a new SQLite-backed target store.
 // If cfg is nil, QueryTimeout 5s and DefaultListLimit (see group.go defaultListLimit) are used.
-func NewSQLiteTargetStore(db *sql.DB, cfg *StoreConfig) *SQLiteTargetStore {
+// encKey is the 32-byte key for encrypting ssh_password at rest (ASVS 7.12); if nil, storing a non-empty SSH password will return ErrEncryptionKeyRequired.
+func NewSQLiteTargetStore(db *sql.DB, cfg *StoreConfig, encKey []byte) *SQLiteTargetStore {
 	timeout := 5 * time.Second
-	limit := defaultListLimit // defined in group.go
+	limit := defaultListLimit
 	if cfg != nil {
 		if cfg.QueryTimeout > 0 {
 			timeout = cfg.QueryTimeout
@@ -353,16 +398,16 @@ func NewSQLiteTargetStore(db *sql.DB, cfg *StoreConfig) *SQLiteTargetStore {
 			limit = cfg.DefaultListLimit
 		}
 	}
-	return &SQLiteTargetStore{db: db, queryTimeout: timeout, defaultListLimit: limit}
+	return &SQLiteTargetStore{db: db, queryTimeout: timeout, defaultListLimit: limit, encKey: encKey}
 }
 
 // Create inserts a new target without path (group_id and path empty; may fail if FK requires a group).
 func (s *SQLiteTargetStore) Create(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol) (*Target, error) {
-	return s.CreateWithPath(ctx, id, name, host, port, protocol, "", "")
+	return s.CreateWithPath(ctx, id, name, host, port, protocol, "", "", "", "")
 }
 
-// CreateWithPath inserts a new target with group_id and path.
-func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string) (*Target, error) {
+// CreateWithPath inserts a new target with group_id, path, and optional SSH credentials.
+func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string, sshUsername, sshPassword string) (*Target, error) {
 	if err := validateTargetID(id); err != nil {
 		return nil, err
 	}
@@ -380,23 +425,36 @@ func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, nam
 			return nil, err
 		}
 	}
+	if sshPassword != "" && (s.encKey == nil || len(s.encKey) != secret.KeySize) {
+		return nil, ErrEncryptionKeyRequired
+	}
+	storedPassword := sshPassword
+	if sshPassword != "" {
+		var errEnc error
+		storedPassword, errEnc = secret.Encrypt(s.encKey, sshPassword)
+		if errEnc != nil {
+			return nil, errEnc
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO targets (id, name, host, port, protocol, group_id, path)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, string(id), name, host, int(port), string(protocol), string(groupID), path)
+		INSERT INTO targets (id, name, host, port, protocol, group_id, path, ssh_username, ssh_password)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, string(id), name, host, int(port), string(protocol), string(groupID), path, sshUsername, storedPassword)
 	if err != nil {
 		return nil, ErrTargetExists
 	}
 	return &Target{
-		ID:       id,
-		Name:     name,
-		Host:     host,
-		Port:     port,
-		Protocol: protocol,
-		Path:     path,
+		ID:          id,
+		Name:        name,
+		Host:        host,
+		Port:        port,
+		Protocol:    protocol,
+		Path:        path,
+		SSHUsername: sshUsername,
+		SSHPassword: sshPassword,
 	}, nil
 }
 
@@ -409,13 +467,24 @@ func (s *SQLiteTargetStore) Get(ctx context.Context, id TargetID) (*Target, erro
 	var idStr string
 	var port int
 	var proto string
+	var storedPassword string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, host, port, protocol, path
+		SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,'')
 		FROM targets
 		WHERE id = ?
-	`, string(id)).Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path)
+	`, string(id)).Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword)
 	if err == nil {
 		t.ID = TargetID(idStr)
+		if storedPassword != "" && s.encKey != nil && len(s.encKey) == secret.KeySize {
+			dec, errDec := secret.Decrypt(s.encKey, storedPassword)
+			if errDec == nil {
+				t.SSHPassword = dec
+			} else {
+				t.SSHPassword = storedPassword
+			}
+		} else {
+			t.SSHPassword = storedPassword
+		}
 	}
 	if err == sql.ErrNoRows {
 		return nil, ErrTargetNotFound
@@ -484,7 +553,7 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 		err := func() error {
 			// #nosec G202 -- placeholders is "?,?,?" from len(chunk); args are validated TargetIDs
 			rows, err := s.db.QueryContext(ctx, `
-				SELECT id, name, host, port, protocol, path
+				SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,'')
 				FROM targets
 				WHERE id IN (`+placeholders+`)`, args...)
 			if err != nil {
@@ -496,13 +565,24 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 				var idStr string
 				var port int
 				var proto string
-				if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path); err != nil {
+				var storedPassword string
+				if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword); err != nil {
 					return err
 				}
 				if port >= 0 && port <= 65535 {
 					t.ID = TargetID(idStr)
 					t.Port = uint16(port)
 					t.Protocol = Protocol(proto)
+					if storedPassword != "" && s.encKey != nil && len(s.encKey) == secret.KeySize {
+						dec, errDec := secret.Decrypt(s.encKey, storedPassword)
+						if errDec == nil {
+							t.SSHPassword = dec
+						} else {
+							t.SSHPassword = storedPassword
+						}
+					} else {
+						t.SSHPassword = storedPassword
+					}
 					byID[TargetID(idStr)] = &t
 				}
 			}

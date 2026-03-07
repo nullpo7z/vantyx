@@ -2,12 +2,24 @@ services:
   vantyx:
     build: .
     ports:
-      - "80:8080"   # HTTP → HTTPS リダイレクト（無効化不可）
-      - "443:8443" # HTTPS (TLS)
+      - "80:8080"    # HTTP → HTTPS リダイレクト（無効化不可）
+      - "443:8443"   # HTTPS (TLS)
+      - "2222:2222"  # CLI SSH ゲートウェイ (Phase 2)
     environment:
+      # リダイレクト先のホスト（どちらか必須）。本番では FQDN を指定
+      - VANTYX_EXTERNAL_HOST=10.10.20.105
       # サーバーIP/ホスト名でアクセスする場合は SAN を追加（証明書再生成が必要）
       # 例: VANTYX_TLS_SANS=192.168.1.10,vantyx.example.com
       - VANTYX_TLS_SANS=10.10.20.105
+      # CLI アクセス: ssh -p 2222 admin@<host>
+      - VANTYX_SSH_LISTEN=:2222
+      # DB をボリュームに保存（未設定時は data/vantyx.db）
+      - VANTYX_SQLITE_PATH=/app/data/vantyx.db
+      # サーバー登録で SSH パスワードを保存する場合に必須（AES-256-GCM 用、32 バイトを Base64 にした値）。未設定時はパスワード保存で 503。
+      # 生成: openssl rand -base64 32。本番では .env に記載して env_file で読み込むか、シークレット管理を推奨。
+      - VANTYX_SSH_PASSWORD_ENCRYPTION_KEY=${VANTYX_SSH_PASSWORD_ENCRYPTION_KEY:-}
+    env_file:
+      - .env
     volumes:
       - vantyx_certs:/app/certs
       - vantyx_data:/app/data

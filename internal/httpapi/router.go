@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,11 +21,74 @@ import (
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
+	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
+)
+
+const (
+	loginRateLimitWindow = 15 * time.Minute
+	loginRateLimitN      = 5
+	defaultAdminPassword = "Admin123!"
 )
 
 // adminUserID is the user ID that is allowed to access /api/spec and /docs.
 const adminUserID = "admin"
+
+// loginRateLimiter limits failed login attempts per IP (ASVS V2.5).
+type loginRateLimiter struct {
+	mu      sync.Mutex
+	byIP    map[string][]time.Time
+	window  time.Duration
+	maxTry  int
+}
+
+func newLoginRateLimiter() *loginRateLimiter {
+	return &loginRateLimiter{
+		byIP:   make(map[string][]time.Time),
+		window: loginRateLimitWindow,
+		maxTry: loginRateLimitN,
+	}
+}
+
+func (l *loginRateLimiter) clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.Index(xff, ","); i > 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if host != "" {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func (l *loginRateLimiter) allow(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cutoff := time.Now().Add(-l.window)
+	times := l.byIP[ip]
+	n := 0
+	for _, t := range times {
+		if t.After(cutoff) {
+			times[n] = t
+			n++
+		}
+	}
+	times = times[:n]
+	l.byIP[ip] = times
+	if len(times) >= l.maxTry {
+		return false
+	}
+	return true
+}
+
+func (l *loginRateLimiter) recordFailure(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.byIP[ip] = append(l.byIP[ip], time.Now())
+}
 
 // App encapsulates HTTP handlers and shared dependencies.
 type App struct {
@@ -34,6 +98,7 @@ type App struct {
 	AccessGroupStore access.AccessGroupStore
 
 	TerminalSessionManager terminalSessionStarter
+	LoginRateLimiter       *loginRateLimiter
 	DB                     *sql.DB
 }
 
@@ -97,12 +162,13 @@ func NewApp() *App {
 	}
 	sessionStore := auth.NewSQLiteSessionStore(db, 24*time.Hour)
 	storeCfg := accessStoreConfigFromEnv()
-	targetStore := access.NewSQLiteTargetStore(db, storeCfg)
+	encKey := secret.LoadKeyFromEnv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY")
+	targetStore := access.NewSQLiteTargetStore(db, storeCfg, encKey)
 	groupStore := access.NewSQLiteAccessGroupStore(db, storeCfg)
 	terminalSessions := session.NewManager()
 
-	// Ensure admin user exists.
-	if _, err := userStore.CreateUser("admin", "admin", "admin123!"); err != nil && !errors.Is(err, auth.ErrUserExists) {
+	// Ensure admin user exists (password meets policy: 8+ chars, upper, lower, digit, special).
+	if _, err := userStore.CreateUser("admin", "admin", defaultAdminPassword); err != nil && !errors.Is(err, auth.ErrUserExists) {
 		panic(err)
 	}
 
@@ -112,6 +178,7 @@ func NewApp() *App {
 		TargetStore:            targetStore,
 		AccessGroupStore:       groupStore,
 		TerminalSessionManager: terminalSessions,
+		LoginRateLimiter:       newLoginRateLimiter(),
 		DB:                     db,
 	}
 }
@@ -169,7 +236,9 @@ func (a *App) NewRouter() http.Handler {
 
 	// Authentication
 	r.Post("/api/login", a.handleLogin)
+	r.Post("/api/logout", a.handleLogout)
 	r.Get("/api/me", a.handleMe)
+	r.Post("/api/me/password", a.handleChangePassword)
 
 	// Access groups (requires auth)
 	r.Get("/api/groups", a.handleGroups)
@@ -179,7 +248,11 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/api/targets", a.handleTargets)
 	r.Post("/api/targets", a.handleCreateTarget)
 
-	// SSH/WebSocket terminal
+	// SSH/WebSocket terminal and session list (Phase 2: resume)
+	r.Route("/api/terminal/sessions", func(r chi.Router) {
+		r.Get("/", a.handleTerminalSessions)
+		r.Delete("/{session_id}", a.handleTerminalSessionDelete)
+	})
 	r.Get("/ws/ssh", a.handleSSHWebSocket)
 
 	// Admin-only: API spec and reference (Swagger UI)
@@ -226,8 +299,9 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	UserID   string `json:"user_id"`
-	Username string `json:"username"`
+	UserID                 string `json:"user_id"`
+	Username               string `json:"username"`
+	RequirePasswordChange  bool   `json:"require_password_change,omitempty"`
 }
 
 type errorResponse struct {
@@ -241,6 +315,16 @@ func writeJSONError(w http.ResponseWriter, message string, code int) {
 }
 
 func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
+	ip := ""
+	if a.LoginRateLimiter != nil {
+		ip = a.LoginRateLimiter.clientIP(r)
+		if !a.LoginRateLimiter.allow(ip) {
+			log.Printf("login rate limited ip=%s", ip)
+			writeJSONError(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
+			return
+		}
+	}
+
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("login failed username=%s err=invalid request body", req.Username)
@@ -249,6 +333,9 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := a.UserStore.Authenticate(req.Username, req.Password)
 	if err != nil {
+		if a.LoginRateLimiter != nil && ip != "" {
+			a.LoginRateLimiter.recordFailure(ip)
+		}
 		log.Printf("login failed username=%s err=invalid credentials", req.Username)
 		writeJSONError(w, "invalid credentials", http.StatusUnauthorized)
 		return
@@ -262,20 +349,48 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("login success user_id=%s username=%s", u.ID, u.Username)
 
-	http.SetCookie(w, &http.Cookie{
+	cookie := &http.Cookie{
 		Name:     "vantyx_session",
 		Value:    sess.ID,
 		Path:     "/",
+		MaxAge:   24 * 3600, // 24h, matches SessionStore TTL (ASVS V2.2)
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-	})
+	}
+	if r.TLS != nil {
+		cookie.Secure = true
+	}
+	http.SetCookie(w, cookie)
 
+	requireChange := u.ID == adminUserID && req.Password == defaultAdminPassword
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(loginResponse{
-		UserID:   u.ID,
-		Username: u.Username,
+		UserID:                u.ID,
+		Username:              u.Username,
+		RequirePasswordChange: requireChange,
 	})
+}
+
+// handleLogout invalidates the current session server-side and clears the cookie (ASVS V2.4).
+func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie("vantyx_session")
+	if err == nil && c.Value != "" {
+		a.SessionStore.Delete(c.Value)
+	}
+	clearCookie := &http.Cookie{
+		Name:     "vantyx_session",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
+	if r.TLS != nil {
+		clearCookie.Secure = true
+	}
+	http.SetCookie(w, clearCookie)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *App) sessionMiddleware(next http.Handler) http.Handler {
@@ -314,6 +429,43 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 		UserID:   u.ID,
 		Username: u.Username,
 	})
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+// handleChangePassword updates the current user's password (ASVS default password change).
+func (a *App) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID := a.currentUserID(r)
+	if userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req changePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	err := a.UserStore.UpdatePassword(userID, req.CurrentPassword, req.NewPassword)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrWrongPassword):
+			writeJSONError(w, "current password is wrong", http.StatusUnauthorized)
+			return
+		case errors.Is(err, auth.ErrPasswordUnchanged):
+			writeJSONError(w, "new password must differ from current", http.StatusBadRequest)
+			return
+		case errors.Is(err, auth.ErrUserNotFound):
+			writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+			return
+		default:
+			writeJSONError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // currentUserID returns the authenticated user's ID from the session cookie, or "" if not authenticated.
@@ -397,18 +549,58 @@ func (a *App) handleDocs(w http.ResponseWriter, r *http.Request) {
 }
 
 type targetResponse struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Host     string `json:"host"`
-	Port     uint16 `json:"port"`
-	Protocol string `json:"protocol"`
-	Path     string `json:"path"`
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	Host                 string `json:"host"`
+	Port                 uint16 `json:"port"`
+	Protocol             string `json:"protocol"`
+	Path                 string `json:"path"`
+	HasStoredCredentials bool   `json:"has_stored_credentials,omitempty"`
 }
 
 type groupResponse struct {
 	ID      string           `json:"id"`
 	Name    string           `json:"name"`
 	Targets []targetResponse `json:"targets"`
+}
+
+func targetToResponse(t *access.Target) targetResponse {
+	r := targetResponse{
+		ID:       string(t.ID),
+		Name:     t.Name,
+		Host:     t.Host,
+		Port:     t.Port,
+		Protocol: string(t.Protocol),
+		Path:     t.Path,
+	}
+	if t.SSHUsername != "" && t.SSHPassword != "" {
+		r.HasStoredCredentials = true
+	}
+	return r
+}
+
+// listOptsFromRequest parses limit and after_id from query. Returns nil if neither is set (no pagination).
+func listOptsFromRequest(r *http.Request) *access.ListOpts {
+	q := r.URL.Query()
+	afterID := strings.TrimSpace(q.Get("after_id"))
+	limitStr := strings.TrimSpace(q.Get("limit"))
+	if afterID == "" && limitStr == "" {
+		return nil
+	}
+	opts := &access.ListOpts{AfterID: afterID}
+	if limitStr != "" {
+		n, err := strconv.Atoi(limitStr)
+		if err != nil || n <= 0 {
+			return opts
+		}
+		if n > 1000 {
+			n = 1000
+		}
+		opts.Limit = n
+	} else {
+		opts.Limit = 100
+	}
+	return opts
 }
 
 // handleGroups returns access groups the current user belongs to, including their targets.
@@ -425,10 +617,22 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	groupIDs, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(sess.UserID), nil)
+	opts := listOptsFromRequest(r)
+	paginate := opts != nil
+	pageLimit := 0
+	if paginate {
+		pageLimit = opts.Limit
+		opts = &access.ListOpts{Limit: pageLimit + 1, AfterID: opts.AfterID}
+	}
+	groupIDs, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(sess.UserID), opts)
 	if err != nil {
 		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	var nextCursor string
+	if paginate && pageLimit > 0 && len(groupIDs) > pageLimit {
+		groupIDs = groupIDs[:pageLimit]
+		nextCursor = string(groupIDs[pageLimit-1])
 	}
 	out := make([]groupResponse, 0, len(groupIDs))
 	for _, gid := range groupIDs {
@@ -446,21 +650,21 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 		}
 		tout := make([]targetResponse, 0, len(targets))
 		for _, t := range targets {
-			tout = append(tout, targetResponse{
-				ID:       string(t.ID),
-				Name:     t.Name,
-				Host:     t.Host,
-				Port:     t.Port,
-				Protocol: string(t.Protocol),
-				Path:     t.Path,
-			})
+			tout = append(tout, targetToResponse(t))
 		}
 		out = append(out, groupResponse{ID: string(g.ID), Name: g.Name, Targets: tout})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(out)
+	if paginate {
+		_ = json.NewEncoder(w).Encode(struct {
+			Items      []groupResponse `json:"items"`
+			NextCursor string          `json:"next_cursor,omitempty"`
+		}{Items: out, NextCursor: nextCursor})
+	} else {
+		_ = json.NewEncoder(w).Encode(out)
+	}
 }
 
 type createGroupRequest struct {
@@ -536,10 +740,22 @@ func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	ids, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
+	opts := listOptsFromRequest(r)
+	paginate := opts != nil
+	pageLimit := 0
+	if paginate {
+		pageLimit = opts.Limit
+		opts = &access.ListOpts{Limit: pageLimit + 1, AfterID: opts.AfterID}
+	}
+	ids, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), opts)
 	if err != nil {
 		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	var nextCursor string
+	if paginate && pageLimit > 0 && len(ids) > pageLimit {
+		ids = ids[:pageLimit]
+		nextCursor = string(ids[pageLimit-1])
 	}
 	targets, err := a.TargetStore.ListByIDs(ctx, ids, nil)
 	if err != nil {
@@ -548,28 +764,30 @@ func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]targetResponse, 0, len(targets))
 	for _, t := range targets {
-		out = append(out, targetResponse{
-			ID:       string(t.ID),
-			Name:     t.Name,
-			Host:     t.Host,
-			Port:     t.Port,
-			Protocol: string(t.Protocol),
-			Path:     t.Path,
-		})
+		out = append(out, targetToResponse(t))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(out)
+	if paginate {
+		_ = json.NewEncoder(w).Encode(struct {
+			Items      []targetResponse `json:"items"`
+			NextCursor string          `json:"next_cursor,omitempty"`
+		}{Items: out, NextCursor: nextCursor})
+	} else {
+		_ = json.NewEncoder(w).Encode(out)
+	}
 }
 
 type createTargetRequest struct {
-	Name     string `json:"name"`
-	Host     string `json:"host"`
-	Port     uint16 `json:"port"`
-	Protocol string `json:"protocol"`
-	Path     string `json:"path"`
-	GroupID  string `json:"group_id"`
+	Name        string `json:"name"`
+	Host        string `json:"host"`
+	Port        uint16 `json:"port"`
+	Protocol    string `json:"protocol"`
+	Path        string `json:"path"`
+	GroupID     string `json:"group_id"`
+	SSHUsername string `json:"ssh_username"`
+	SSHPassword string `json:"ssh_password"`
 }
 
 // handleCreateTarget creates a new target and adds it to the specified access group.
@@ -649,9 +867,13 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		if path == "" {
 			path = req.GroupID
 		}
-		_, err := a.TargetStore.CreateWithPath(ctx, access.TargetID(id), req.Name, req.Host, req.Port, protocol, access.GroupID(req.GroupID), path)
+		_, err := a.TargetStore.CreateWithPath(ctx, access.TargetID(id), req.Name, req.Host, req.Port, protocol, access.GroupID(req.GroupID), path, strings.TrimSpace(req.SSHUsername), req.SSHPassword)
 		if err == nil {
 			break
+		}
+		if errors.Is(err, access.ErrEncryptionKeyRequired) {
+			writeJSONError(w, err.Error(), http.StatusServiceUnavailable)
+			return
 		}
 		if !errors.Is(err, access.ErrTargetExists) {
 			writeJSONError(w, err.Error(), http.StatusInternalServerError)
@@ -666,14 +888,7 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	t, _ := a.TargetStore.Get(ctx, access.TargetID(id))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(targetResponse{
-		ID:       string(t.ID),
-		Name:     t.Name,
-		Host:     t.Host,
-		Port:     t.Port,
-		Protocol: string(t.Protocol),
-		Path:     t.Path,
-	})
+	_ = json.NewEncoder(w).Encode(targetToResponse(t))
 }
 
 func slugID(s string) string {

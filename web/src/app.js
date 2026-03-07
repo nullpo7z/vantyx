@@ -26,6 +26,7 @@ export function renderApp(container) {
       </main>
       <div id="add-target-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
       <div id="ssh-credential-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
+      <div id="active-sessions-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
     </div>
   `
 
@@ -133,6 +134,125 @@ export function renderApp(container) {
     })
   }
 
+  async function showActiveSessionsModal(selectedGroupIdForModal, targetsForModal) {
+    const modal = document.getElementById('active-sessions-modal')
+    modal.classList.remove('hidden')
+    const targetIdsInGroup = (targetsForModal || []).map((t) => t.id)
+    const modalTitle = targetIdsInGroup.length === 1 && targetsForModal[0].name
+      ? `アクティブなセッション — ${escapeHtml(targetsForModal[0].name)}`
+      : 'アクティブなセッション（再接続）'
+    modal.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50 max-h-[80vh] flex flex-col">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
+            <h3 class="font-semibold text-slate-800">${modalTitle}</h3>
+            <button id="active-sessions-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <div id="active-sessions-body" class="px-5 py-4 overflow-y-auto flex-1 min-h-0">
+            <p class="text-sm text-slate-500">読み込み中…</p>
+          </div>
+        </div>
+      </div>
+    `
+    const close = () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    modal.querySelector('#active-sessions-close').addEventListener('click', close)
+    const bodyEl = modal.querySelector('#active-sessions-body')
+    try {
+      const sessionsRes = await API.terminalSessions()
+      const allSessions = sessionsRes.items || []
+      const sessions = targetIdsInGroup.length > 0
+        ? allSessions.filter((s) => targetIdsInGroup.includes(s.target_id))
+        : allSessions
+      if (sessions.length === 0) {
+        const oneServer = targetIdsInGroup.length === 1
+        bodyEl.innerHTML = targetIdsInGroup.length > 0
+          ? (oneServer
+            ? '<p class="text-sm text-slate-500">このサーバーに対する再接続可能なセッションはありません。接続したあと、一度切断するとここに表示され、再接続できます。</p>'
+            : '<p class="text-sm text-slate-500">このグループ内のサーバーに対する再接続可能なセッションはありません。ターミナルで接続したあと、一度切断するとここに表示され、再接続できます。</p>')
+          : '<p class="text-sm text-slate-500">アクティブなセッションはありません。左のツリーでサーバー（グループ）を選択すると、そのグループに属するサーバー単位で表示されます。</p>'
+      } else {
+        const byTarget = {}
+        sessions.forEach((s) => {
+          const id = s.target_id
+          if (!byTarget[id]) byTarget[id] = []
+          byTarget[id].push(s)
+        })
+        const targetIds = Object.keys(byTarget).sort((a, b) => {
+          const na = byTarget[a][0].target_name || a
+          const nb = byTarget[b][0].target_name || b
+          return na.localeCompare(nb)
+        })
+        bodyEl.innerHTML = targetIds.map((targetId) => {
+          const list = byTarget[targetId]
+          const serverName = list[0].target_name || targetId
+          const rows = list.map((s) => {
+            const label = s.name || s.description || s.session_id
+            const title = [s.name, s.description, s.target_name].filter(Boolean).join(' — ')
+            return `<li class="flex items-center justify-between text-sm gap-2 pl-2"><span class="min-w-0 text-slate-700 truncate" title="${escapeHtml(title)}">${escapeHtml(label || '(無題)')}</span><a href="/terminal?session_id=${encodeURIComponent(s.session_id)}" target="_blank" rel="noreferrer" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shrink-0">再接続</a></li>`
+          }).join('')
+          return `<div class="mb-4"><h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">${escapeHtml(serverName)}</h4><ul class="space-y-1.5">${rows}</ul></div>`
+        }).join('')
+      }
+    } catch {
+      bodyEl.innerHTML = '<p class="text-sm text-red-600">セッション一覧の取得に失敗しました。</p>'
+    }
+  }
+
+  /** 保存済み認証のターゲット用: セッション名・説明だけ入力してからタブを開く */
+  function showStoredCredentialModal(targetId, targetName) {
+    const modal = document.getElementById('ssh-credential-modal')
+    modal.classList.remove('hidden')
+    modal.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+            <h3 class="font-semibold text-slate-800">接続: ${escapeHtml(targetName || targetId)}</h3>
+            <button id="ssh-cred-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <form id="ssh-cred-form">
+            <div class="px-6 py-5 space-y-5">
+              <p class="text-sm text-slate-600">セッション名と説明を入力してください（任意）。接続でコンソールを開きます。</p>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">セッション名（任意）</label>
+                <input type="text" id="ssh-cred-session-name" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: 本番デプロイ用" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">説明（任意）</label>
+                <input type="text" id="ssh-cred-session-desc" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: リリース作業用" />
+              </div>
+            </div>
+            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
+              <button type="button" id="ssh-cred-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
+              <button type="submit" id="ssh-cred-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">接続</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `
+    const close = () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    modal.querySelector('#ssh-cred-close').addEventListener('click', close)
+    modal.querySelector('#ssh-cred-cancel').addEventListener('click', close)
+    modal.querySelector('#ssh-cred-form').addEventListener('submit', (e) => {
+      e.preventDefault()
+      const sessionName = (modal.querySelector('#ssh-cred-session-name').value || '').trim()
+      const sessionDesc = (modal.querySelector('#ssh-cred-session-desc').value || '').trim()
+      const params = new URLSearchParams()
+      params.set('target_id', targetId)
+      params.set('target_name', targetName || '')
+      params.set('use_stored_credentials', '1')
+      params.set('session_name', sessionName)
+      params.set('session_description', sessionDesc)
+      window.open(`/terminal?${params.toString()}`, '_blank', 'noreferrer')
+      close()
+    })
+  }
+
   function showSSHCredentialModal(targetId, targetName) {
     const modal = document.getElementById('ssh-credential-modal')
     modal.classList.remove('hidden')
@@ -153,6 +273,14 @@ export function renderApp(container) {
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード</label>
                 <input type="password" id="ssh-cred-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">セッション名（任意）</label>
+                <input type="text" id="ssh-cred-session-name" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: 本番デプロイ用" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">説明（任意）</label>
+                <input type="text" id="ssh-cred-session-desc" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: リリース作業用セッション" />
               </div>
               <p id="ssh-cred-error" class="text-sm text-red-600 hidden"></p>
             </div>
@@ -175,17 +303,19 @@ export function renderApp(container) {
       const errorEl = modal.querySelector('#ssh-cred-error')
       const username = modal.querySelector('#ssh-cred-username').value.trim()
       const password = modal.querySelector('#ssh-cred-password').value
+      const sessionName = modal.querySelector('#ssh-cred-session-name').value.trim()
+      const sessionDesc = modal.querySelector('#ssh-cred-session-desc').value.trim()
       if (!username) {
         errorEl.textContent = 'ユーザー名を入力してください'
         errorEl.classList.remove('hidden')
         return
       }
       const token = randomToken()
-      pendingTerminalCreds[token] = { targetId, targetName, username, password }
+      pendingTerminalCreds[token] = { targetId, targetName, username, password, sessionName, sessionDesc }
       const url = `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&channel=${encodeURIComponent(token)}`
-      window.open(url, '_blank', 'noopener,noreferrer')
+      window.open(url, '_blank', 'noreferrer')
 
-      // 新しいタブとは BroadcastChannel で認証情報を受け渡しする（noopener でも動く）
+      // 新しいタブとは BroadcastChannel で認証情報を受け渡しする
       const bc = new BroadcastChannel(`vantyx-terminal-${token}`)
       const timeoutId = window.setTimeout(() => {
         try { bc.close() } catch { /* ignore */ }
@@ -197,7 +327,13 @@ export function renderApp(container) {
         const creds = pendingTerminalCreds[token]
         if (!creds) return
         try {
-          bc.postMessage({ type: 'credentials', username: creds.username, password: creds.password })
+          bc.postMessage({
+            type: 'credentials',
+            username: creds.username,
+            password: creds.password,
+            name: creds.sessionName || '',
+            description: creds.sessionDesc || '',
+          })
         } finally {
           window.clearTimeout(timeoutId)
           try { bc.close() } catch { /* ignore */ }
@@ -285,13 +421,26 @@ export function renderApp(container) {
           })
         })
       } else {
-        // SSH: 認証モーダル表示 → 入力後に新しいタブを開き、postMessage で認証情報を渡す。
+        mainContent.querySelectorAll('.active-sessions-btn').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.preventDefault()
+            const targetId = btn.dataset.targetId || ''
+            const targetName = btn.dataset.targetName || ''
+            showActiveSessionsModal(selectedGroupId, targetId ? [{ id: targetId, name: targetName }] : targets)
+          })
+        })
+        // SSH: 認証情報が保存済みならタブを直接開き、未保存なら認証モーダル表示。
         mainContent.querySelectorAll('.terminal-open-btn').forEach((btn) => {
           btn.addEventListener('click', (e) => {
             e.preventDefault()
             const id = btn.dataset.terminalTargetId || ''
             const name = btn.dataset.terminalTargetName || ''
-            if (id) showSSHCredentialModal(id, name)
+            if (!id) return
+            if (btn.dataset.hasStoredCredentials) {
+              showStoredCredentialModal(id, name)
+            } else {
+              showSSHCredentialModal(id, name)
+            }
           })
         })
         // 非 SSH はボタンのみでアラート。
@@ -384,6 +533,14 @@ export function renderApp(container) {
                   </select>
                 </div>
               </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名（任意）</label>
+                <input type="text" id="add-target-ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード（任意）</label>
+                <input type="password" id="add-target-ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="保存すると接続時に利用できます" />
+              </div>
               <p id="add-target-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
@@ -412,6 +569,8 @@ export function renderApp(container) {
       const host = modal.querySelector('#add-target-host').value.trim()
       const port = parseInt(modal.querySelector('#add-target-port').value, 10) || 22
       const protocol = modal.querySelector('#add-target-protocol').value
+      const ssh_username = modal.querySelector('#add-target-ssh-username').value.trim()
+      const ssh_password = modal.querySelector('#add-target-ssh-password').value
       if (!name || !host) {
         errorEl.textContent = '名前とホストを入力してください'
         errorEl.classList.remove('hidden')
@@ -424,7 +583,7 @@ export function renderApp(container) {
       }
       submitBtn.disabled = true
       try {
-        await API.createTarget({ name, host, port, protocol, group_id })
+        await API.createTarget({ name, host, port, protocol, group_id, ssh_username, ssh_password })
         modal.classList.add('hidden')
         modal.innerHTML = ''
         groupsCache = null
@@ -458,15 +617,20 @@ export function renderApp(container) {
               class="edit-btn-in-group rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 border border-slate-300 shadow-sm transition-colors disabled:opacity-50">
               編集
             </button>
-            ` : (t.protocol === 'ssh'
-            ? `<button type="button" data-terminal-target-id="${escapeHtml(t.id)}" data-terminal-target-name="${escapeHtml(t.name || '')}"
+            ` : `
+            <div class="flex items-center justify-end gap-2">
+              ${t.protocol === 'ssh'
+            ? `<button type="button" data-terminal-target-id="${escapeHtml(t.id)}" data-terminal-target-name="${escapeHtml(t.name || '')}" data-has-stored-credentials="${t.has_stored_credentials ? '1' : ''}"
               class="connect-btn-in-group terminal-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50">
               接続
             </button>`
             : `<button data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-protocol="${escapeHtml(t.protocol)}"
               class="connect-btn-in-group rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50">
               接続
-            </button>`)}
+            </button>`}
+              <button type="button" class="active-sessions-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name || '')}">アクティブなセッション</button>
+            </div>
+            `}
           </td>
         </tr>
       `,
@@ -607,7 +771,12 @@ export function renderApp(container) {
     showTreeView('manage')
   })
 
-  logoutBtn.addEventListener('click', () => {
+  logoutBtn.addEventListener('click', async () => {
+    try {
+      await API.logout()
+    } catch {
+      /* サーバーが応答しなくてもクライアント側のCookieは消す */
+    }
     document.cookie = 'vantyx_session=; path=/; max-age=0'
     renderLogin(container)
   })

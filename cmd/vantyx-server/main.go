@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/nullpo7z/vantyx/internal/httpapi"
+	"github.com/nullpo7z/vantyx/internal/sshd"
 )
 
 const (
@@ -35,8 +36,8 @@ const (
 	hstsMaxAge                = "31536000"
 	hstsIncludeSubdomains     = "includeSubDomains"
 	defaultShutdownTimeoutSec = 10
-	// Minimal CSP: script/style only from self; no framing (ASVS V14.4.3, V14.4.4).
-	cspValue = "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+	// CSP: default self; script/style from self + unpkg (Swagger UI). style-src 'unsafe-inline' 'unsafe-hashes' for Swagger UI and frontend inline style attributes (ASVS V14.4.3, V14.4.4).
+	cspValue = "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' https://unpkg.com 'unsafe-inline' 'unsafe-hashes'; frame-ancestors 'none'; base-uri 'self'"
 )
 
 func main() {
@@ -119,6 +120,27 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	var sshServer *sshd.Server
+	if sshListen := strings.TrimSpace(os.Getenv("VANTYX_SSH_LISTEN")); sshListen != "" {
+		var err error
+		sshServer, err = sshd.NewServer(sshd.Config{
+			UserStore:      app.UserStore,
+			TargetStore:    app.TargetStore,
+			GroupStore:     app.AccessGroupStore,
+			SessionManager: app.TerminalSessionManager,
+		})
+		if err != nil {
+			slog.Error("sshd setup failed", "error", err)
+			os.Exit(1)
+		}
+		go func() {
+			if err := sshServer.ListenAndServe(sshListen); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
+				slog.Error("sshd failed", "error", err)
+				// Cannot send to serverErrCh without making it size 3; use a separate channel or ignore after shutdown
+			}
+		}()
+	}
+
 	serverErrCh := make(chan error, 2)
 	go func() {
 		// #nosec G706 -- redirectAddr from env (VANTYX_HTTP_REDIRECT_ADDR)
@@ -160,9 +182,13 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(shutdownSec)*time.Second)
 	defer cancel()
 
-	// Shutdown both servers in parallel so each gets the full timeout window (no serial bias).
+	// Shutdown HTTP servers and SSH server in parallel.
 	var wg sync.WaitGroup
-	errCh := make(chan error, 2)
+	shutdownCount := 2
+	if sshServer != nil {
+		shutdownCount++
+	}
+	errCh := make(chan error, shutdownCount)
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
@@ -172,6 +198,13 @@ func main() {
 		defer wg.Done()
 		errCh <- httpsServer.Shutdown(ctx)
 	}()
+	if sshServer != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- sshServer.Shutdown()
+		}()
+	}
 	wg.Wait()
 	close(errCh)
 	for err := range errCh {

@@ -10,10 +10,10 @@ todos:
     status: completed
   - id: implement-ssh-telnet-session-manager
     content: SSH/Telnet 用の WebSocket プロキシとセッション永続化マネージャを実装する
-    status: in_progress
+    status: completed
   - id: add-asciinema-recording-and-log-storage
     content: Asciinema 形式でのターミナル録画とテキストログ保存・検索機能を追加する
-    status: pending
+    status: in_progress
   - id: implement-file-transfer-sftp-tftp
     content: SFTP/TFTP ファイル転送バックエンドとファイルマネージャー UI を実装する
     status: pending

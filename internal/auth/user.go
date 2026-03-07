@@ -14,10 +14,13 @@ type UserStore interface {
 	CreateUser(id, username, plainPassword string) (*User, error)
 	Authenticate(username, plainPassword string) (*User, error)
 	GetByID(id string) (*User, error)
+	UpdatePassword(userID, currentPlain, newPlain string) error
 }
 
 var (
-	ErrUserExists    = errors.New("user already exists")
-	ErrUserNotFound  = errors.New("user not found")
-	ErrInvalidSecret = errors.New("invalid credentials")
+	ErrUserExists       = errors.New("user already exists")
+	ErrUserNotFound     = errors.New("user not found")
+	ErrInvalidSecret    = errors.New("invalid credentials")
+	ErrWrongPassword    = errors.New("current password is wrong")
+	ErrPasswordUnchanged = errors.New("new password must differ from current")
 )

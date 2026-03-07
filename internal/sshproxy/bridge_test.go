@@ -190,7 +190,7 @@ func TestRunBridge_DialFails(t *testing.T) {
 			defer serverConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			_ = RunBridge(ctx, serverConn, "127.0.0.1", 1, "u", "p", nil, nil)
+			_ = RunBridge(ctx, serverConn, "127.0.0.1", 1, "u", "p", nil, nil, nil)
 		}()
 	}))
 	defer srv.Close()
@@ -233,7 +233,7 @@ func TestRunBridge_WithEchoSSHServer(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			_ = RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil, nil)
+			_ = RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil, nil, nil)
 		}()
 	}))
 	defer srv.Close()
@@ -285,7 +285,7 @@ func TestRunBridge_TouchCalled(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			touch := func() { touchCount.Add(1) }
-			_ = RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", touch, nil)
+			_ = RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", touch, nil, nil)
 		}()
 	}))
 	defer srv.Close()
@@ -336,7 +336,7 @@ func TestRunBridge_ContextCancelReturns(t *testing.T) {
 				time.Sleep(100 * time.Millisecond)
 				cancel()
 			}()
-			bridgeErr = RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil, nil)
+			bridgeErr = RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil, nil, nil)
 			close(done)
 		}()
 	}))
@@ -389,7 +389,7 @@ func runBridgeWithEchoServer(t *testing.T) (wsURL string, bridgeErrCh chan error
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			err := RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil, nil)
+			err := RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil, nil, nil)
 			bridgeErrCh <- err
 		}()
 	}))
@@ -567,7 +567,7 @@ func (o *onceReader) Read(p []byte) (int, error) {
 func TestRunBridge_GoroutineErrorPaths(t *testing.T) {
 	writeErr := errors.New("injected write error")
 	oldFactory := sessionFactory
-	sessionFactory = func(addr string, config *ssh.ClientConfig) (io.WriteCloser, io.Reader, io.Reader, func(int, int) error, func(), error) {
+	sessionFactory = func(addr string, config *ssh.ClientConfig, _, _ int) (io.WriteCloser, io.Reader, io.Reader, func(int, int) error, func(), error) {
 		return &errWriter{err: writeErr}, eofReader{}, eofReader{}, nil, func() {}, nil
 	}
 	defer func() { sessionFactory = oldFactory }()
@@ -583,7 +583,7 @@ func TestRunBridge_GoroutineErrorPaths(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", 22, "u", "p", nil, nil)
+			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", 22, "u", "p", nil, nil, nil)
 		}()
 	}))
 	defer srv.Close()
@@ -611,7 +611,7 @@ func TestRunBridge_GoroutineErrorPaths(t *testing.T) {
 // we close the server's WebSocket before Read returns so that conn.WriteMessage fails.
 func TestRunBridge_WriteMessageFails(t *testing.T) {
 	oldFactory := sessionFactory
-	sessionFactory = func(addr string, config *ssh.ClientConfig) (io.WriteCloser, io.Reader, io.Reader, func(int, int) error, func(), error) {
+	sessionFactory = func(addr string, config *ssh.ClientConfig, _, _ int) (io.WriteCloser, io.Reader, io.Reader, func(int, int) error, func(), error) {
 		return &errWriter{err: nil}, &onceReader{data: []byte("out"), delay: 200 * time.Millisecond}, eofReader{}, nil, func() {}, nil
 	}
 	defer func() { sessionFactory = oldFactory }()
@@ -631,7 +631,7 @@ func TestRunBridge_WriteMessageFails(t *testing.T) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			bridgeErrCh <- RunBridge(ctx, conn, "127.0.0.1", 22, "u", "p", nil, nil)
+			bridgeErrCh <- RunBridge(ctx, conn, "127.0.0.1", 22, "u", "p", nil, nil, nil)
 			_ = conn.Close()
 		}()
 		// Close before stdout Read returns so WriteMessage fails.
@@ -664,7 +664,7 @@ func TestRunBridge_WriteMessageFails(t *testing.T) {
 // TestRunBridge_StderrWriteMessageFails is like WriteMessageFails but for the stderr goroutine.
 func TestRunBridge_StderrWriteMessageFails(t *testing.T) {
 	oldFactory := sessionFactory
-	sessionFactory = func(addr string, config *ssh.ClientConfig) (io.WriteCloser, io.Reader, io.Reader, func(int, int) error, func(), error) {
+	sessionFactory = func(addr string, config *ssh.ClientConfig, _, _ int) (io.WriteCloser, io.Reader, io.Reader, func(int, int) error, func(), error) {
 		return &errWriter{err: nil}, eofReader{}, &onceReader{data: []byte("err"), delay: 200 * time.Millisecond}, nil, func() {}, nil
 	}
 	defer func() { sessionFactory = oldFactory }()
@@ -684,7 +684,7 @@ func TestRunBridge_StderrWriteMessageFails(t *testing.T) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			bridgeErrCh <- RunBridge(ctx, conn, "127.0.0.1", 22, "u", "p", nil, nil)
+			bridgeErrCh <- RunBridge(ctx, conn, "127.0.0.1", 22, "u", "p", nil, nil, nil)
 			_ = conn.Close()
 		}()
 		go func() {
@@ -717,7 +717,7 @@ func TestRunBridge_StderrWriteMessageFails(t *testing.T) {
 // sees Binary (writes), then may see CloseMessage (isDataMessage false, skip write).
 func TestRunBridge_NonTextNonBinaryMessage(t *testing.T) {
 	oldFactory := sessionFactory
-	sessionFactory = func(addr string, config *ssh.ClientConfig) (io.WriteCloser, io.Reader, io.Reader, func(int, int) error, func(), error) {
+	sessionFactory = func(addr string, config *ssh.ClientConfig, _, _ int) (io.WriteCloser, io.Reader, io.Reader, func(int, int) error, func(), error) {
 		return &errWriter{err: nil}, eofReader{}, eofReader{}, nil, func() {}, nil
 	}
 	defer func() { sessionFactory = oldFactory }()
@@ -733,7 +733,7 @@ func TestRunBridge_NonTextNonBinaryMessage(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", 22, "u", "p", nil, nil)
+			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", 22, "u", "p", nil, nil, nil)
 		}()
 	}))
 	defer srv.Close()
@@ -761,7 +761,7 @@ func TestRunBridge_NonTextNonBinaryMessage(t *testing.T) {
 // Client connects and closes without sending; the stdin goroutine's ReadMessage then returns an error.
 func TestRunBridge_ReadMessageFails(t *testing.T) {
 	oldFactory := sessionFactory
-	sessionFactory = func(addr string, config *ssh.ClientConfig) (io.WriteCloser, io.Reader, io.Reader, func(int, int) error, func(), error) {
+	sessionFactory = func(addr string, config *ssh.ClientConfig, _, _ int) (io.WriteCloser, io.Reader, io.Reader, func(int, int) error, func(), error) {
 		return &errWriter{err: nil}, eofReader{}, eofReader{}, nil, func() {}, nil
 	}
 	defer func() { sessionFactory = oldFactory }()
@@ -777,7 +777,7 @@ func TestRunBridge_ReadMessageFails(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", 22, "u", "p", nil, nil)
+			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", 22, "u", "p", nil, nil, nil)
 		}()
 	}))
 	defer srv.Close()

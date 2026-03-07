@@ -44,7 +44,13 @@ func (s *TelnetEchoServer) Start() error {
 
 func (s *TelnetEchoServer) acceptLoop() {
 	for {
-		conn, err := s.listener.Accept()
+		s.mu.Lock()
+		listener := s.listener
+		s.mu.Unlock()
+		if listener == nil {
+			return
+		}
+		conn, err := listener.Accept()
 		if err != nil {
 			return
 		}

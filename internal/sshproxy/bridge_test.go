@@ -192,7 +192,7 @@ func TestRunBridge_DialFails(t *testing.T) {
 			defer serverConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			_ = RunBridge(ctx, serverConn, "127.0.0.1", 1, "u", "p", nil, nil, nil)
+			_ = RunBridge(ctx, serverConn, "127.0.0.1", 1, "u", "p", "", "", nil, nil, nil)
 		}()
 	}))
 	defer srv.Close()
@@ -235,7 +235,7 @@ func TestRunBridge_WithEchoSSHServer(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			_ = RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil, nil, nil)
+			_ = RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", "", "", nil, nil, nil)
 		}()
 	}))
 	defer srv.Close()
@@ -287,7 +287,7 @@ func TestRunBridge_TouchCalled(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			touch := func() { touchCount.Add(1) }
-			_ = RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", touch, nil, nil)
+			_ = RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", "", "", touch, nil, nil)
 		}()
 	}))
 	defer srv.Close()
@@ -338,7 +338,7 @@ func TestRunBridge_ContextCancelReturns(t *testing.T) {
 				time.Sleep(100 * time.Millisecond)
 				cancel()
 			}()
-			bridgeErr = RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil, nil, nil)
+			bridgeErr = RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", "", "", nil, nil, nil)
 			close(done)
 		}()
 	}))
@@ -391,7 +391,7 @@ func runBridgeWithEchoServer(t *testing.T) (wsURL string, bridgeErrCh chan error
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			err := RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil, nil, nil)
+			err := RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", "", "", nil, nil, nil)
 			bridgeErrCh <- err
 		}()
 	}))
@@ -585,7 +585,7 @@ func TestRunBridge_GoroutineErrorPaths(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", 22, "u", "p", nil, nil, nil)
+			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", 22, "u", "p", "", "", nil, nil, nil)
 		}()
 	}))
 	defer srv.Close()
@@ -633,7 +633,7 @@ func TestRunBridge_WriteMessageFails(t *testing.T) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			bridgeErrCh <- RunBridge(ctx, conn, "127.0.0.1", 22, "u", "p", nil, nil, nil)
+			bridgeErrCh <- RunBridge(ctx, conn, "127.0.0.1", 22, "u", "p", "", "", nil, nil, nil)
 			_ = conn.Close()
 		}()
 		// Close before stdout Read returns so WriteMessage fails.
@@ -686,7 +686,7 @@ func TestRunBridge_StderrWriteMessageFails(t *testing.T) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			bridgeErrCh <- RunBridge(ctx, conn, "127.0.0.1", 22, "u", "p", nil, nil, nil)
+			bridgeErrCh <- RunBridge(ctx, conn, "127.0.0.1", 22, "u", "p", "", "", nil, nil, nil)
 			_ = conn.Close()
 		}()
 		go func() {
@@ -735,7 +735,7 @@ func TestRunBridge_NonTextNonBinaryMessage(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", 22, "u", "p", nil, nil, nil)
+			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", 22, "u", "p", "", "", nil, nil, nil)
 		}()
 	}))
 	defer srv.Close()
@@ -779,7 +779,7 @@ func TestRunBridge_ReadMessageFails(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", 22, "u", "p", nil, nil, nil)
+			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", 22, "u", "p", "", "", nil, nil, nil)
 		}()
 	}))
 	defer srv.Close()
@@ -876,7 +876,7 @@ func TestRunBridge_WithTeeAndStdinRecorder(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil, &teeBuf, recorder)
+			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", "", "", nil, &teeBuf, recorder)
 		}()
 	}))
 	defer srv.Close()
@@ -946,7 +946,7 @@ func TestRunBridgeStream_WithResizeAndTee(t *testing.T) {
 		_ = stdinW.Close()
 	}()
 
-	err = RunBridgeStream(ctx, stdinR, stdoutBuf, "127.0.0.1", port, "test", "test", 120, 40, resizeCh, func() { touchCount.Add(1) }, teeBuf, recorder)
+	err = RunBridgeStream(ctx, stdinR, stdoutBuf, "127.0.0.1", port, "test", "test", "", "", 120, 40, resizeCh, func() { touchCount.Add(1) }, teeBuf, recorder)
 	if err != nil {
 		t.Fatalf("RunBridgeStream: %v", err)
 	}
@@ -972,7 +972,7 @@ func TestRunBridgeStream_DialFails(t *testing.T) {
 	r, w := io.Pipe()
 	defer func() { _ = w.Close() }()
 
-	err := RunBridgeStream(ctx, r, io.Discard, "127.0.0.1", 1, "u", "p", 0, 0, nil, nil, nil, nil)
+	err := RunBridgeStream(ctx, r, io.Discard, "127.0.0.1", 1, "u", "p", "", "", 0, 0, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error when dialing closed port")
 	}
@@ -1005,7 +1005,7 @@ func TestRunBridgeStream_WithEchoServer(t *testing.T) {
 		_ = stdinW.Close()
 	}()
 
-	err = RunBridgeStream(ctx, stdinR, stdoutBuf, "127.0.0.1", port, "test", "test", 0, 0, nil, nil, nil, nil)
+	err = RunBridgeStream(ctx, stdinR, stdoutBuf, "127.0.0.1", port, "test", "test", "", "", 0, 0, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("RunBridgeStream: %v", err)
 	}
@@ -1044,7 +1044,7 @@ func TestRunBridgeDetachable_WithEchoServer(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			err := RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", output, attachCh, wsConn, nil, nil, nil, 0, 0)
+			err := RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", "", "", output, attachCh, wsConn, nil, nil, nil, 0, 0)
 			bridgeErrCh <- err
 		}()
 	}))
@@ -1123,7 +1123,7 @@ func TestRunBridgeDetachable_StreamAttach(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		bridgeErrCh <- RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", output, attachCh, nil, nil, nil, nil, 0, 0)
+		bridgeErrCh <- RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", "", "", output, attachCh, nil, nil, nil, nil, 0, 0)
 	}()
 
 	// Trigger attach so StreamAttach gets replay via WriteBinary

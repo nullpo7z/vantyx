@@ -58,6 +58,18 @@ func TestParsePtyReqPayload(t *testing.T) {
 	if c, r, ok := parsePtyReqPayload([]byte{0, 0, 0, 0}); ok {
 		t.Fatalf("expected !ok for short payload, got cols=%d rows=%d", c, r)
 	}
+	// termLen too large: payload length < 4+termLen+8
+	bigTerm := make([]byte, 12)
+	binary.BigEndian.PutUint32(bigTerm, 1000)
+	if _, _, ok := parsePtyReqPayload(bigTerm); ok {
+		t.Fatal("expected !ok when termLen exceeds payload")
+	}
+	// termLen very large so 4+termLen+8 > len(payload) (covers length check)
+	bigTerm2 := make([]byte, 12)
+	binary.BigEndian.PutUint32(bigTerm2, 0x80000000)
+	if _, _, ok := parsePtyReqPayload(bigTerm2); ok {
+		t.Fatal("expected !ok when 4+termLen+8 exceeds payload")
+	}
 	// Valid: term length 4 ("xterm"), then 4 bytes width, 4 bytes height (80, 24)
 	payload := make([]byte, 0, 20)
 	payload = binary.BigEndian.AppendUint32(payload, 4)
@@ -80,5 +92,17 @@ func TestParseWindowChangePayload(t *testing.T) {
 	cols, rows, ok := parseWindowChangePayload(payload)
 	if !ok || cols != 132 || rows != 40 {
 		t.Fatalf("expected 132,40,true got cols=%d rows=%d ok=%v", cols, rows, ok)
+	}
+	// Empty slice
+	if _, _, ok := parseWindowChangePayload(nil); ok {
+		t.Fatal("expected !ok for nil payload")
+	}
+	// Exactly 8 bytes: valid
+	payload8 := make([]byte, 8)
+	binary.BigEndian.PutUint32(payload8[0:4], 100)
+	binary.BigEndian.PutUint32(payload8[4:8], 50)
+	c, r, ok := parseWindowChangePayload(payload8)
+	if !ok || c != 100 || r != 50 {
+		t.Fatalf("expected 100,50,true got cols=%d rows=%d ok=%v", c, r, ok)
 	}
 }

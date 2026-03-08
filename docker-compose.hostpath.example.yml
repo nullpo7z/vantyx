@@ -1,0 +1,17 @@
+# ホストのディレクトリに実データを配置する例
+#
+# 使い方:
+#   1. このファイルを docker-compose.override.yml にコピー
+#   2. 下記の /path/to/vantyx を実際のパスに変更（例: /opt/vantyx）
+#   3. ディレクトリを作成: sudo mkdir -p /path/to/vantyx/{data,certs,recordings}
+#   4. docker compose up -d で起動（override が自動でマージされる）
+#
+# 権限: エントリポイントが起動時に /app/{certs,data,recordings} を nonroot (uid 65532) に chown します。
+# ホスト側で先にディレクトリを作っておけば、初回起動時に書き込み可能になります。
+
+services:
+  vantyx:
+    volumes:
+      - /path/to/vantyx/certs:/app/certs
+      - /path/to/vantyx/data:/app/data
+      - /path/to/vantyx/recordings:/app/recordings

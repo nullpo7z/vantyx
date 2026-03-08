@@ -10,6 +10,9 @@ info:
     - ローカルユーザー認証 (POST /api/login) と Cookie セッション
     - 自己情報取得 (GET /api/me)
     - アクセスグループの一覧・作成 (GET/POST /api/groups)。一覧は limit / after_id でキーセットページネーション対応。
+    - グループメンバー管理（管理者のみ）: GET/POST /api/groups/{group_id}/members、DELETE /api/groups/{group_id}/members/{user_id}。
+    - タグ（グループ・ターゲット・ユーザー）: GET/PUT /api/groups/{group_id}/tags、/api/targets/{target_id}/tags、/api/users/{user_id}/tags。同じタグを持つユーザーはそのタグが付いたターゲット（またはそのタグが付いたグループに属するターゲット）にアクセス可能。
+    - ユーザー登録・一覧（管理者のみ）: GET /api/users、POST /api/users。
     - ターゲットの一覧・作成 (GET/POST /api/targets)。一覧は limit / after_id でキーセットページネーション対応。
     - SSH WebSocket ターミナル (GET /ws/ssh)。認証後、ターゲットへの SSH をブリッジ。Phase 2 でセッション永続化・レジューム対応（切断後もブリッジ継続、GET /api/terminal/sessions で一覧、session_id で再接続）。
     - CLI SSH ゲートウェイ (Phase 2): VANTYX_SSH_LISTEN で有効化。ssh user@vantyx でログイン後、メニューからターゲット選択してプロキシ接続。
@@ -59,6 +62,26 @@ components:
       required:
         - user_id
         - username
+    User:
+      type: object
+      description: ユーザー（一覧・作成応答）。パスワードは含めない。
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+      required:
+        - id
+        - username
+    TagsResponse:
+      type: object
+      properties:
+        tags:
+          type: array
+          items:
+            type: string
+      required:
+        - tags
     Target:
       type: object
       description: 接続先ターゲット（サーバー）の情報。
@@ -363,6 +386,190 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/targets/{target_id}:
+    put:
+      summary: ターゲット（ホスト）の更新
+      description: 認証済みユーザーが、アクセス権のあるターゲットの名前・ホスト・ポート・プロトコル・パス・SSH認証情報を更新します。target_id は変更されません。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 更新するターゲットの ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                host:
+                  type: string
+                port:
+                  type: integer
+                  minimum: 1
+                  maximum: 65535
+                  default: 22
+                protocol:
+                  type: string
+                  enum: ["ssh", "telnet"]
+                  default: ssh
+                path:
+                  type: string
+                ssh_username:
+                  type: string
+                ssh_password:
+                  type: string
+                  description: 空文字で保存済みパスワードをクリア。非空のときは暗号化して保存（鍵必須）。
+              required:
+                - name
+                - host
+      responses:
+        '200':
+          description: 更新後のターゲット
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Target'
+        '400':
+          description: リクエスト不正
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 当該ターゲットへのアクセス権なし
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ターゲットが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: SSH パスワード保存時は暗号化鍵必須
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 更新失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: ターゲット（ホスト）の削除
+      description: 認証済みユーザーが、アクセス権のあるターゲットを削除します。グループとの紐づけも削除されます。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 削除完了
+        '400':
+          description: target_id 不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 当該ターゲットへのアクセス権なし
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ターゲットが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 削除失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/targets/{target_id}/tags:
+    get:
+      summary: ターゲットのタグ一覧
+      description: ターゲットに付与されたタグを返します。当該ターゲットへのアクセス権が必要。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TagsResponse'
+        '401':
+        '403':
+        '404':
+    put:
+      summary: ターゲットのタグを設定
+      description: ターゲットのタグを上書きします。当該ターゲットへのアクセス権が必要。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TagsResponse'
+        '400':
+        '401':
+        '403':
+        '404':
+
   /api/groups:
     get:
       summary: アクセスグループ一覧（所属 + ターゲット含む）
@@ -448,6 +655,402 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/groups/{group_id}/members:
+    get:
+      summary: グループメンバー一覧（管理者のみ）
+      description: 指定したアクセスグループに所属するユーザー一覧を返します。管理者（admin）のみ利用可能。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: after_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: メンバー一覧（id, username）
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '400':
+          description: group_id 不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 内部エラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: グループにメンバーを追加（管理者のみ）
+      description: 指定したアクセスグループにユーザーを追加します。管理者（admin）のみ利用可能。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id:
+                  type: string
+      responses:
+        '204':
+          description: 追加完了
+        '400':
+          description: リクエスト不正（user_id 不足など）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: グループまたはユーザーが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 内部エラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/groups/{group_id}/members/{user_id}:
+    delete:
+      summary: グループからメンバーを削除（管理者のみ）
+      description: 指定したアクセスグループからユーザーを削除します。管理者（admin）のみ利用可能。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 削除完了
+        '400':
+          description: group_id / user_id 不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: グループが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 内部エラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/groups/{group_id}/tags:
+    get:
+      summary: グループのタグ一覧
+      description: グループに付与されたタグを返します。グループ所属または管理者のみ。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: タグ一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TagsResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: グループに所属していない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: グループが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      summary: グループのタグを設定
+      description: グループのタグを上書きします。グループ所属または管理者のみ。タグは英数字・ハイフン・アンダースコア、1〜64文字。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: 設定後のタグ一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TagsResponse'
+        '400':
+        '401':
+        '403':
+        '404':
+          description: グループが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/users:
+    get:
+      summary: ユーザー一覧（管理者のみ）
+      description: 登録済みユーザー一覧を返します。パスワードは含みません。管理者（admin）のみ利用可能。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: ユーザー一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 内部エラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: ユーザー登録（管理者のみ）
+      description: 新しいユーザーを作成します。id を省略した場合は username からスラッグを自動生成。管理者（admin）のみ利用可能。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                id:
+                  type: string
+                  description: ユーザー ID。省略時は username から生成。
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '201':
+          description: 作成されたユーザー（id, username）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: リクエスト不正（username/password 不足など）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: ユーザーが既に存在（id または username 重複）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 内部エラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/users/{user_id}/tags:
+    get:
+      summary: ユーザーのタグ一覧（管理者のみ）
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TagsResponse'
+        '401':
+        '403':
+        '404':
+    put:
+      summary: ユーザーのタグを設定（管理者のみ）
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TagsResponse'
+        '400':
+        '401':
+        '403':
+        '404':
 
   /api/terminal/sessions:
     get:

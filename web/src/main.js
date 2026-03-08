@@ -2,6 +2,7 @@ import API from './api.js'
 import { renderLogin } from './login.js'
 import { renderApp } from './app.js'
 import { renderTerminalPage } from './terminal_page.js'
+import { renderFilesPage } from './files_page.js'
 
 const appEl = document.getElementById('app')
 
@@ -11,6 +12,25 @@ async function init() {
     try {
       await API.me()
       renderTerminalPage(appEl)
+    } catch {
+      appEl.innerHTML = `
+        <div class="min-h-screen flex items-center justify-center p-6">
+          <div class="w-full max-w-md bg-white rounded-lg shadow-sm border border-slate-200 p-6">
+            <h1 class="text-lg font-semibold text-slate-800 mb-2">ログインが必要です</h1>
+            <p class="text-sm text-slate-600 mb-4">このページを開くには先にログインしてください。</p>
+            <a href="/" class="inline-flex items-center justify-center rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700">ログイン画面へ</a>
+          </div>
+        </div>
+      `
+    }
+    return
+  }
+
+  // File manager page (SFTP; requires target_id in query).
+  if (window.location.pathname === '/files') {
+    try {
+      await API.me()
+      renderFilesPage(appEl)
     } catch {
       appEl.innerHTML = `
         <div class="min-h-screen flex items-center justify-center p-6">

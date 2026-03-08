@@ -94,7 +94,13 @@ export function renderTerminalPage(container) {
   const sessionDescInput = container.querySelector('#ssh-session-desc')
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const wsUrlNew = `${protocol}//${window.location.host}/ws/ssh?target_id=${encodeURIComponent(targetId)}`
+  /** 新規接続用 WebSocket URL。録画・PTY のサイズに使うため、ensureTerm() 実行後に呼ぶこと。 */
+  function getWsUrlNew() {
+    ensureTerm()
+    const c = term?.cols || 80
+    const r = term?.rows || 24
+    return `${protocol}//${window.location.host}/ws/ssh?target_id=${encodeURIComponent(targetId)}&cols=${c}&rows=${r}`
+  }
   const wsUrlResume = (sid) => `${protocol}//${window.location.host}/ws/ssh?session_id=${encodeURIComponent(sid)}`
 
   let term = null
@@ -171,8 +177,9 @@ export function renderTerminalPage(container) {
         try { ws.close() } catch { /* ignore */ }
         return
       }
-      if (!term) {
+      if (!ws._vantyxAttached) {
         startXterm(ws)
+        ws._vantyxAttached = true
       }
       if (typeof ev.data === 'string') {
         term.write(ev.data)
@@ -216,8 +223,10 @@ export function renderTerminalPage(container) {
     const description = typeof sessionDescription === 'string' ? sessionDescription.trim() : ''
     errorEl.classList.add('hidden')
     connectBtn.disabled = true
+    credsWrap.classList.add('hidden')
+    shellWrap.classList.remove('hidden')
 
-    const ws = new WebSocket(wsUrlNew)
+    const ws = new WebSocket(getWsUrlNew())
     ws.binaryType = 'arraybuffer'
     let sawError = false
     let sawFirstMessage = false
@@ -274,12 +283,12 @@ export function renderTerminalPage(container) {
         }
       }
 
-      if (!term) {
-        credsWrap.classList.add('hidden')
-        shellWrap.classList.remove('hidden')
+      credsWrap.classList.add('hidden')
+      shellWrap.classList.remove('hidden')
+      if (!ws._vantyxAttached) {
         startXterm(ws)
+        ws._vantyxAttached = true
       }
-
       if (typeof ev.data === 'string') {
         term.write(ev.data)
       } else {
@@ -318,10 +327,12 @@ export function renderTerminalPage(container) {
   function connectWithStoredCredentials(sessionName, sessionDescription) {
     if (!targetId) return
     errorEl.classList.add('hidden')
+    credsWrap.classList.add('hidden')
+    shellWrap.classList.remove('hidden')
     const name = typeof sessionName === 'string' ? sessionName.trim() : ''
     const description = typeof sessionDescription === 'string' ? sessionDescription.trim() : ''
 
-    const ws = new WebSocket(wsUrlNew)
+    const ws = new WebSocket(getWsUrlNew())
     ws.binaryType = 'arraybuffer'
     let sawError = false
     let sawFirstMessage = false
@@ -373,7 +384,12 @@ export function renderTerminalPage(container) {
           /* ignore */
         }
       }
-      if (!term) startXterm(ws)
+      credsWrap.classList.add('hidden')
+      shellWrap.classList.remove('hidden')
+      if (!ws._vantyxAttached) {
+        startXterm(ws)
+        ws._vantyxAttached = true
+      }
       if (typeof ev.data === 'string') {
         term.write(ev.data)
       } else {
@@ -514,7 +530,9 @@ export function renderTerminalPage(container) {
     }
   }
 
-  function startXterm(ws) {
+  /** ターミナルが無ければ作成して fit。録画・PTY の初期サイズに必要なので、WebSocket 接続前に呼ぶ。 */
+  function ensureTerm() {
+    if (term) return
     term = new Terminal({
       cursorBlink: true,
       theme: { background: '#020617', foreground: '#e2e8f0' },
@@ -526,24 +544,34 @@ export function renderTerminalPage(container) {
     term.loadAddon(new WebLinksAddon())
     term.open(xtermEl)
     fitAddon.fit()
-    sendResize(ws)
-    term.focus()
+  }
 
+  /** 既存の term に WebSocket を接続（onData, resize 送信）。ensureTerm の後に呼ぶ。 */
+  let currentWs = null
+  function attachWsToTerm(ws) {
+    currentWs = ws
+    term.focus()
+    sendResize(ws)
     term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(new TextEncoder().encode(data))
       }
     })
-
-    resizeObserver = new ResizeObserver(() => {
-      try { fitAddon.fit() } catch { /* ignore */ }
-      sendResize(ws)
-    })
-    resizeObserver.observe(xtermEl)
-
+    if (!resizeObserver) {
+      resizeObserver = new ResizeObserver(() => {
+        try { fitAddon.fit() } catch { /* ignore */ }
+        if (currentWs && currentWs.readyState === WebSocket.OPEN) sendResize(currentWs)
+      })
+      resizeObserver.observe(xtermEl)
+    }
     window.addEventListener('beforeunload', () => {
       try { ws.close() } catch { /* ignore */ }
     }, { once: true })
+  }
+
+  function startXterm(ws) {
+    ensureTerm()
+    attachWsToTerm(ws)
   }
 
   function sendResize(ws) {

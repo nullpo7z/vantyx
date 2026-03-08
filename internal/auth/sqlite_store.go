@@ -1,11 +1,15 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 	"unicode"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // SQLiteUserStore implements UserStore backed by SQLite.
@@ -224,6 +228,103 @@ func (s *SQLiteUserStore) UpdatePassword(userID, currentPlain, newPlain string) 
 		return ErrUserNotFound
 	}
 	return nil
+}
+
+// AddPublicKey adds an SSH public key (authorized_keys line) for the user. Returns key ID or error.
+func (s *SQLiteUserStore) AddPublicKey(userID, keyLine string) (int64, error) {
+	keyLine = strings.TrimSpace(keyLine)
+	if keyLine == "" {
+		return 0, ErrInvalidPublicKey
+	}
+	if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(keyLine)); err != nil {
+		return 0, ErrInvalidPublicKey
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM users WHERE id = ?`, userID).Scan(&exists); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, ErrUserNotFound
+		}
+		return 0, err
+	}
+	res, err := s.db.ExecContext(ctx, `INSERT INTO user_ssh_keys (user_id, key_line) VALUES (?, ?)`, userID, keyLine)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// ListPublicKeys returns all stored SSH public keys for the user.
+func (s *SQLiteUserStore) ListPublicKeys(userID string) ([]UserSSHKey, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `SELECT id, user_id, key_line, created_at FROM user_ssh_keys WHERE user_id = ? ORDER BY id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UserSSHKey
+	for rows.Next() {
+		var k UserSSHKey
+		if err := rows.Scan(&k.ID, &k.UserID, &k.KeyLine, &k.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// DeletePublicKey removes an SSH public key. The key must belong to the user.
+func (s *SQLiteUserStore) DeletePublicKey(userID string, keyID int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := s.db.ExecContext(ctx, `DELETE FROM user_ssh_keys WHERE user_id = ? AND id = ?`, userID, keyID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// AuthenticateByPublicKey authenticates a user by SSH public key (username + key). Returns the user on success.
+func (s *SQLiteUserStore) AuthenticateByPublicKey(username string, key ssh.PublicKey) (*User, error) {
+	if username == "" || key == nil {
+		return nil, ErrInvalidSecret
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var u User
+	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, COALESCE(role, 'user') FROM users WHERE username = ?`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role)
+	if err == sql.ErrNoRows {
+		return nil, ErrInvalidSecret
+	}
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT key_line FROM user_ssh_keys WHERE user_id = ?`, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keyMarshal := key.Marshal()
+	for rows.Next() {
+		var keyLine string
+		if err := rows.Scan(&keyLine); err != nil {
+			return nil, err
+		}
+		stored, _, _, _, err := ssh.ParseAuthorizedKey([]byte(keyLine))
+		if err != nil {
+			continue
+		}
+		if bytes.Equal(stored.Marshal(), keyMarshal) {
+			return &u, nil
+		}
+	}
+	return nil, ErrInvalidSecret
 }
 
 // SQLiteSessionStore implements SessionStore backed by SQLite.

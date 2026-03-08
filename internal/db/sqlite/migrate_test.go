@@ -19,7 +19,7 @@ func TestMigrate(t *testing.T) {
 	}
 
 	// Verify tables exist
-	tables := []string{"users", "access_groups", "targets", "user_groups", "group_targets", "sessions"}
+	tables := []string{"users", "access_groups", "targets", "user_groups", "group_targets", "sessions", "user_ssh_keys"}
 	for _, name := range tables {
 		var n int
 		err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&n)

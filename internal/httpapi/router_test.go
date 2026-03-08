@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -58,6 +61,32 @@ func TestApp_LoginFailure(t *testing.T) {
 	res := w.Result()
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, res.StatusCode)
+	}
+}
+
+func TestApp_Login_InvalidBody(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_ListUsers_Forbidden(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	_, _ = app.UserStore.CreateUser("u1", "user1", "User123!", auth.RoleUser)
+	sess, _ := app.SessionStore.Create("u1")
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin, got %d", w.Result().StatusCode)
 	}
 }
 
@@ -169,7 +198,7 @@ func TestApp_Targets_WithTargets(t *testing.T) {
 
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Host1", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("default"), "default", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Host1", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("default"), "default", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("default"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -675,8 +704,8 @@ func TestApp_Targets_PaginationResponse(t *testing.T) {
 	router := app.NewRouter()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("default"), "default", "", "")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "10.0.0.2", 22, access.ProtocolSSH, access.GroupID("default"), "default", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("default"), "default", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "10.0.0.2", 22, access.ProtocolSSH, access.GroupID("default"), "default", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("default"), access.TargetID("t1"))
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("default"), access.TargetID("t2"))
 	sess, _ := app.SessionStore.Create("admin")
@@ -804,19 +833,6 @@ func TestApp_CreateTarget_InvalidProtocol_BadRequest(t *testing.T) {
 	res := w.Result()
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid protocol, got %d", res.StatusCode)
-	}
-}
-
-func TestApp_Login_InvalidBody(t *testing.T) {
-	app := newTestApp(t)
-	router := app.NewRouter()
-
-	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader([]byte("not json")))
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	if w.Result().StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
 	}
 }
 
@@ -1039,6 +1055,555 @@ func TestApp_ChangePassword_Unauthorized(t *testing.T) {
 	}
 }
 
+const testSSHAuthorizedKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl user@host"
+
+func TestApp_SSHKeys_List_Unauthorized(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/me/ssh-keys", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_SSHKeys_ListAddDelete(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	// List empty
+	req := httptest.NewRequest(http.MethodGet, "/api/me/ssh-keys", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("list expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+	var list []struct {
+		ID        int64  `json:"id"`
+		KeyLine   string `json:"key_line"`
+		CreatedAt string `json:"created_at"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected empty list, got %+v", list)
+	}
+
+	// Add key
+	addBody := []byte(`{"authorized_key":"` + testSSHAuthorizedKey + `"}`)
+	addReq := httptest.NewRequest(http.MethodPost, "/api/me/ssh-keys", bytes.NewReader(addBody))
+	addReq.Header.Set("Content-Type", "application/json")
+	addReq.AddCookie(cookie)
+	addW := httptest.NewRecorder()
+	router.ServeHTTP(addW, addReq)
+	if addW.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("add expected 201, got %d body=%s", addW.Result().StatusCode, addW.Body.String())
+	}
+	var added struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(addW.Body).Decode(&added); err != nil {
+		t.Fatalf("decode add response: %v", err)
+	}
+	if added.ID <= 0 {
+		t.Fatalf("expected positive id, got %d", added.ID)
+	}
+
+	// List returns one
+	req2 := httptest.NewRequest(http.MethodGet, "/api/me/ssh-keys", nil)
+	req2.AddCookie(cookie)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Result().StatusCode != http.StatusOK {
+		t.Fatalf("list after add expected 200, got %d", w2.Result().StatusCode)
+	}
+	if err := json.NewDecoder(w2.Body).Decode(&list); err != nil {
+		t.Fatalf("decode list 2: %v", err)
+	}
+	if len(list) != 1 || list[0].KeyLine != testSSHAuthorizedKey {
+		t.Fatalf("expected one key, got %+v", list)
+	}
+
+	// Delete
+	delReq := httptest.NewRequest(http.MethodDelete, "/api/me/ssh-keys/"+fmt.Sprintf("%d", added.ID), nil)
+	delReq.AddCookie(cookie)
+	delW := httptest.NewRecorder()
+	router.ServeHTTP(delW, delReq)
+	if delW.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("delete expected 204, got %d body=%s", delW.Result().StatusCode, delW.Body.String())
+	}
+}
+
+func TestApp_SSHKeys_Add_InvalidKey(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"authorized_key":"not-a-valid-key"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/me/ssh-keys", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid key, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestApp_SSHKeys_Add_EmptyKey(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"authorized_key":""}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/me/ssh-keys", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty key, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_SSHKeys_Delete_InvalidKeyID(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/me/ssh-keys/abc", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid key_id, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_SSHKeys_Delete_NotFound(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/me/ssh-keys/99999", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing key, got %d", w.Result().StatusCode)
+	}
+}
+
+// userStoreFailingAddPublicKey makes AddPublicKey return a generic error to cover writeInternalError path.
+type userStoreFailingAddPublicKey struct {
+	auth.UserStore
+}
+
+func (u *userStoreFailingAddPublicKey) AddPublicKey(userID, keyLine string) (int64, error) {
+	return 0, errors.New("injected add public key error")
+}
+
+func TestApp_SSHKeys_Add_InternalError(t *testing.T) {
+	app := newTestApp(t)
+	app.UserStore = &userStoreFailingAddPublicKey{UserStore: app.UserStore}
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"authorized_key":"` + testSSHAuthorizedKey + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/me/ssh-keys", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on AddPublicKey error, got %d", w.Result().StatusCode)
+	}
+}
+
+// setupAppWithTargetAndSFTPMock creates an app with one group, one target (SSH with creds), admin has access, and SFTPClientFactory returns a mock.
+func setupAppWithTargetAndSFTPMock(t *testing.T) (*App, *MockSFTPClient, string) {
+	t.Helper()
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i)
+	}
+	os.Setenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(key))
+	defer os.Unsetenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY")
+	app := newTestApp(t)
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, err := app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "host", 22, access.ProtocolSSH, access.GroupID("g1"), "", "root", "pass", "", "")
+	if err != nil {
+		t.Fatalf("CreateWithPath: %v", err)
+	}
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+	mock := NewMockSFTPClient()
+	app.SFTPClientFactory = func(context.Context, *access.Target) (FileTransferClient, error) { return mock, nil }
+	return app, mock, "t1"
+}
+
+func TestApp_Files_ListWithMock(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	mock.AddDir("/", []MockFileInfo{
+		{Name_: "a.txt", Size_: 10, IsDir_: false, Mod_: time.Now()},
+		{Name_: "dir", Size_: 0, IsDir_: true, Mod_: time.Now()},
+	})
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/"+targetID+"/files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+	var list []struct {
+		Name   string `json:"name"`
+		Size   int64  `json:"size"`
+		IsDir  bool   `json:"is_dir"`
+		ModTime string `json:"mod_time"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 entries, got %+v", list)
+	}
+}
+
+func TestApp_Files_List_Unauthorized(t *testing.T) {
+	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	router := app.NewRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/"+targetID+"/files?path=/", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_DownloadWithMock(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	mock.AddFile("/data.txt", []byte("hello world"))
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/"+targetID+"/files/download?path=/data.txt", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+	if body := w.Body.String(); body != "hello world" {
+		t.Fatalf("expected body hello world, got %q", body)
+	}
+}
+
+func TestApp_Files_Download_DirectoryRejected(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	mock.AddDir("/sub", nil)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/"+targetID+"/files/download?path=/sub", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 (cannot download directory), got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_UploadWithMock(t *testing.T) {
+	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	var buf bytes.Buffer
+	mp := multipart.NewWriter(&buf)
+	_ = mp.WriteField("path", "/uploaded.txt")
+	fw, _ := mp.CreateFormFile("file", "uploaded.txt")
+	_, _ = fw.Write([]byte("upload content"))
+	_ = mp.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/targets/"+targetID+"/files/upload", &buf)
+	req.Header.Set("Content-Type", mp.FormDataContentType())
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestApp_Files_DeleteWithMock(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	mock.AddFile("/to-delete.txt", []byte("x"))
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/targets/"+targetID+"/files?path=/to-delete.txt", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_Delete_RootRejected(t *testing.T) {
+	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/targets/"+targetID+"/files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 (cannot delete root), got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_GetTargetAndSFTPClient_NoTargetID(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	// Path with empty target_id segment: /api/targets//files
+	req := httptest.NewRequest(http.MethodGet, "/api/targets//files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 (target_id required), got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_FactoryReturnsError(t *testing.T) {
+	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	app.SFTPClientFactory = func(context.Context, *access.Target) (FileTransferClient, error) {
+		return nil, errors.New("injected connect error")
+	}
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/"+targetID+"/files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_GetTarget_TargetNotFound(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/nonexistent/files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_GetTarget_Forbidden(t *testing.T) {
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i)
+	}
+	os.Setenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(key))
+	defer os.Unsetenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY")
+	app := newTestApp(t)
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "T2", "host", 22, access.ProtocolSSH, access.GroupID("g2"), "", "root", "pass", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g2"), access.TargetID("t2"))
+	app.SFTPClientFactory = func(context.Context, *access.Target) (FileTransferClient, error) { return NewMockSFTPClient(), nil }
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/t2/files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 (admin not in g2), got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_GetTarget_NonSSH(t *testing.T) {
+	app := newTestApp(t)
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "host", 23, access.ProtocolTelnet, access.GroupID("g1"), "", "", "", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/t1/files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 (only SSH), got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestApp_Files_GetTarget_NoStoredCredentials(t *testing.T) {
+	app := newTestApp(t)
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "host", 22, access.ProtocolSSH, access.GroupID("g1"), "", "", "", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/t1/files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 (stored credentials required), got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_List_ReadDirError(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	mock.ReadDirErr = errors.New("readdir failed")
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/"+targetID+"/files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_Download_OpenError(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	mock.OpenErr = errors.New("open failed")
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/"+targetID+"/files/download?path=/x.txt", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_Upload_NoPath(t *testing.T) {
+	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	var buf bytes.Buffer
+	mp := multipart.NewWriter(&buf)
+	fw, _ := mp.CreateFormFile("file", "x.txt")
+	_, _ = fw.Write([]byte("x"))
+	_ = mp.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/targets/"+targetID+"/files/upload", &buf)
+	req.Header.Set("Content-Type", mp.FormDataContentType())
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 (path required), got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_Upload_CreateError(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	mock.CreateErr = errors.New("create failed")
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	var buf bytes.Buffer
+	mp := multipart.NewWriter(&buf)
+	_ = mp.WriteField("path", "/up.txt")
+	fw, _ := mp.CreateFormFile("file", "up.txt")
+	_, _ = fw.Write([]byte("data"))
+	_ = mp.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/targets/"+targetID+"/files/upload", &buf)
+	req.Header.Set("Content-Type", mp.FormDataContentType())
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_Delete_RemoveError(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	mock.AddFile("/f.txt", []byte("x"))
+	mock.RemoveErr = errors.New("remove failed")
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/targets/"+targetID+"/files?path=/f.txt", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_Files_List_MethodNotAllowed(t *testing.T) {
+	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodPost, "/api/targets/"+targetID+"/files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", w.Result().StatusCode)
+	}
+}
+
 func TestApp_CreateGroup_UnauthorizedNoCookie(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
@@ -1252,7 +1817,7 @@ type targetStoreFailingCreate struct {
 	access.TargetStore
 }
 
-func (t *targetStoreFailingCreate) CreateWithPath(ctx context.Context, id access.TargetID, name, host string, port uint16, protocol access.Protocol, groupID access.GroupID, path string, sshUsername, sshPassword string) (*access.Target, error) {
+func (t *targetStoreFailingCreate) CreateWithPath(ctx context.Context, id access.TargetID, name, host string, port uint16, protocol access.Protocol, groupID access.GroupID, path string, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (*access.Target, error) {
 	return nil, errors.New("injected create target error")
 }
 
@@ -1798,7 +2363,7 @@ func TestApp_Groups_WithTargets(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Host1", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Host1", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -1829,9 +2394,9 @@ func TestApp_Groups_TwoGroupsWithTargets(t *testing.T) {
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g2"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t3"), "H3", "3.3.3.3", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t3"), "H3", "3.3.3.3", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t2"))
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g2"), access.TargetID("t3"))
@@ -1862,7 +2427,7 @@ func TestApp_UpdateTarget_Success(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Old", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Old", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -1893,7 +2458,7 @@ func TestApp_UpdateTarget_Forbidden(t *testing.T) {
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g2"), access.TargetID("t2"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -1923,7 +2488,7 @@ func TestApp_UpdateTarget_ServiceUnavailableWhenEncryptionKeyMissing(t *testing.
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -1952,7 +2517,7 @@ func TestApp_DeleteTarget_Success(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -1977,7 +2542,7 @@ func TestApp_DeleteTarget_Forbidden(t *testing.T) {
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g2"), access.TargetID("t2"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -2064,12 +2629,225 @@ func TestApp_ListTags_Authenticated(t *testing.T) {
 	}
 }
 
+func TestApp_ListTags_Unauthorized(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/tags", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_GroupTags_GroupIDRequired(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/groups//tags", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_GroupTags_Unauthorized(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	_, _ = app.AccessGroupStore.Create(context.Background(), access.GroupID("g1"), "G1")
+	req := httptest.NewRequest(http.MethodGet, "/api/groups/g1/tags", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_GroupTags_Forbidden(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
+	_, _ = app.UserStore.CreateUser("u1", "user1", "User123!", auth.RoleUser)
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("u1"), access.GroupID("g1"))
+	sess, _ := app.SessionStore.Create("u1")
+	req := httptest.NewRequest(http.MethodGet, "/api/groups/g2/tags", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_SetGroupTags_GroupIDRequired(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodPut, "/api/groups//tags", bytes.NewReader([]byte(`{"tags":[]}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_SetGroupTags_Unauthorized(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	_, _ = app.AccessGroupStore.Create(context.Background(), access.GroupID("g1"), "G1")
+	req := httptest.NewRequest(http.MethodPut, "/api/groups/g1/tags", bytes.NewReader([]byte(`{"tags":["x"]}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_SetGroupTags_NotFound(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodPut, "/api/groups/nonexistent/tags", bytes.NewReader([]byte(`{"tags":[]}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_SetGroupTags_InvalidBody(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	_, _ = app.AccessGroupStore.Create(context.Background(), access.GroupID("g1"), "G1")
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodPut, "/api/groups/g1/tags", bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_ListFiles_RelativePath(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	mock.AddDir("/", []MockFileInfo{{Name_: "sub", Size_: 0, IsDir_: true, Mod_: time.Now()}})
+	mock.AddDir("/sub", nil)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/"+targetID+"/files?path=sub", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for path=sub (relative), got %d %s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestApp_AddGroupMember_UserNotFound(t *testing.T) {
+	app := newTestApp(t)
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"user_id":"nonexistent"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/groups/g1/members", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 (user not found), got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_AddGroupMember_GroupNotFound(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"user_id":"admin"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/groups/nonexistent/members", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 (group not found), got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_AddGroupMember_EmptyUserID(t *testing.T) {
+	app := newTestApp(t)
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"user_id":""}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/groups/g1/members", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_RemoveGroupMember_EmptyIDs(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/groups//members/u1", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 (group_id required), got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_GetRecordingFile_RecordingIDRequired(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings//file", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_GetRecordingFile_Unauthorized(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/some-id/file", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Result().StatusCode)
+	}
+}
+
 func TestApp_TargetTags_Admin(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
 	sess, _ := app.SessionStore.Create("admin")
@@ -2087,7 +2865,7 @@ func TestApp_SetTargetTags_Admin(t *testing.T) {
 	router := app.NewRouter()
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
 	body := []byte(`{"tags":["web"]}`)
@@ -2125,17 +2903,6 @@ func TestApp_GetRecordingFile_NotFound(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Result().StatusCode)
-	}
-}
-
-func TestApp_GetRecordingFile_Unauthorized(t *testing.T) {
-	app := newTestApp(t)
-	router := app.NewRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/recordings/any/file", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Result().StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Result().StatusCode)
 	}
 }
 

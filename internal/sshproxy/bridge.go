@@ -128,7 +128,30 @@ type StdinRecorder interface {
 	RecordInput(p []byte)
 }
 
-// RunBridge connects to the target host via SSH with password auth, opens a PTY shell,
+// AuthMethods builds SSH auth methods from password and/or PEM private key (with optional passphrase).
+// Key is tried first when present. Used by bridge and by internal/sftp.
+func AuthMethods(password, privateKeyPEM, keyPassphrase string) ([]ssh.AuthMethod, error) {
+	var out []ssh.AuthMethod
+	if privateKeyPEM != "" {
+		var signer ssh.Signer
+		var err error
+		if keyPassphrase != "" {
+			signer, err = ssh.ParsePrivateKeyWithPassphrase([]byte(privateKeyPEM), []byte(keyPassphrase))
+		} else {
+			signer, err = ssh.ParsePrivateKey([]byte(privateKeyPEM))
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ssh.PublicKeys(signer))
+	}
+	if password != "" {
+		out = append(out, ssh.Password(password))
+	}
+	return out, nil
+}
+
+// RunBridge connects to the target host via SSH (password and/or public key auth), opens a PTY shell,
 // and bridges WebSocket messages to SSH stdin and SSH stdout/stderr to WebSocket.
 // The first message from the client is not read here; the caller must pass credentials
 // and consume the first message before calling RunBridge.
@@ -136,12 +159,14 @@ type StdinRecorder interface {
 // If tee is non-nil, a copy of stdout and stderr is written to tee for session replay.
 // If stdinRecorder is non-nil, it is called when data is written to the target stdin.
 // RunBridge blocks until ctx is done or the WebSocket or SSH session closes.
-func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint16, username, password string, touch func(), tee io.Writer, stdinRecorder StdinRecorder) error {
+func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, touch func(), tee io.Writer, stdinRecorder StdinRecorder) error {
+	auth, err := AuthMethods(password, privateKeyPEM, keyPassphrase)
+	if err != nil {
+		return err
+	}
 	config := &ssh.ClientConfig{
 		User: username,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(password),
-		},
+		Auth: auth,
 		// #nosec G106 -- Phase 2: accept any host key; verify in Phase 3
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         15 * time.Second,
@@ -260,12 +285,14 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 // If touch is non-nil, it is called when data is read from localStdin.
 // If tee is non-nil, target stdout/stderr is also written to tee.
 // If stdinRecorder is non-nil, it is called when data is written to the target stdin.
-func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.Writer, host string, port uint16, username, password string, ptyCols, ptyRows int, resizeChan <-chan TerminalSize, touch func(), tee io.Writer, stdinRecorder StdinRecorder) error {
+func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.Writer, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, ptyCols, ptyRows int, resizeChan <-chan TerminalSize, touch func(), tee io.Writer, stdinRecorder StdinRecorder) error {
+	auth, err := AuthMethods(password, privateKeyPEM, keyPassphrase)
+	if err != nil {
+		return err
+	}
 	config := &ssh.ClientConfig{
 		User: username,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(password),
-		},
+		Auth: auth,
 		// #nosec G106 -- Phase 2: accept any host key; verify in Phase 3
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         15 * time.Second,
@@ -410,12 +437,14 @@ func (s *StreamAttach) Close() error {
 // Touch is called on client activity. If tee is non-nil, a copy of stdout/stderr is written to tee (e.g. asciinema file).
 // If stdinRecorder is non-nil, it is called when data is written to the target stdin. The bridge exits when ctx is done or SSH session closes.
 // initialCols and initialRows are the terminal size for the PTY (e.g. from client); 0 lets the factory use defaults.
-func RunBridgeDetachable(ctx context.Context, host string, port uint16, username, password string, output *session.RingBuffer, attachCh <-chan session.AttachReq, initialConn interface{}, touch func(), tee io.Writer, stdinRecorder StdinRecorder, initialCols, initialRows int) error {
+func RunBridgeDetachable(ctx context.Context, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, output *session.RingBuffer, attachCh <-chan session.AttachReq, initialConn interface{}, touch func(), tee io.Writer, stdinRecorder StdinRecorder, initialCols, initialRows int) error {
+	auth, err := AuthMethods(password, privateKeyPEM, keyPassphrase)
+	if err != nil {
+		return err
+	}
 	config := &ssh.ClientConfig{
 		User: username,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(password),
-		},
+		Auth: auth,
 		// #nosec G106 -- Phase 2: accept any host key; verify in Phase 3
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         15 * time.Second,
@@ -636,11 +665,14 @@ func portString(port uint16) string {
 }
 
 // Credentials is the JSON shape of the first WebSocket message for SSH auth.
+// When using stored credentials (server-side), PrivateKey and PrivateKeyPassphrase may be set from the target.
 type Credentials struct {
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	Name        string `json:"name"`        // セッション名（識別用・任意）
-	Description string `json:"description"` // 説明（任意）
+	Username              string `json:"username"`
+	Password              string `json:"password"`
+	PrivateKey            string `json:"-"` // PEM; set server-side when using stored key
+	PrivateKeyPassphrase  string `json:"-"` // passphrase for encrypted PEM
+	Name                  string `json:"name"`        // セッション名（識別用・任意）
+	Description           string `json:"description"` // 説明（任意）
 }
 
 // ReadCredentials reads the first WebSocket text message and parses it as Credentials.

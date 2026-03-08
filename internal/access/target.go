@@ -26,14 +26,17 @@ type Target struct {
 	// SSH credentials (optional). Stored when registering the server.
 	SSHUsername string
 	SSHPassword string
+	// SSH public key auth: PEM-encoded private key and optional passphrase. Encrypted at rest like SSHPassword.
+	SSHPrivateKey          string
+	SSHPrivateKeyPassphrase string
 }
 
 // TargetStore defines the behavior required for managing targets.
 type TargetStore interface {
 	Create(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol) (*Target, error)
-	CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string, sshUsername, sshPassword string) (*Target, error)
+	CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (*Target, error)
 	Get(ctx context.Context, id TargetID) (*Target, error)
-	Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword string) (*Target, error)
+	Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (*Target, error)
 	Delete(ctx context.Context, id TargetID) error
 	ListByIDs(ctx context.Context, ids []TargetID, opts *ListOpts) ([]*Target, error)
 	// Tags: ターゲットに付与されたタグ。ユーザーが同じタグを持つとアクセス可能。

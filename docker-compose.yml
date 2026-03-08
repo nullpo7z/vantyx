@@ -15,16 +15,21 @@ services:
       - VANTYX_SSH_LISTEN=:2222
       # DB をボリュームに保存（未設定時は data/vantyx.db）
       - VANTYX_SQLITE_PATH=/app/data/vantyx.db
+      # ターミナル録画（Asciinema）を有効にする場合に指定。未設定時は録画しない。
+      - VANTYX_RECORDINGS_DIR=/app/recordings
       # サーバー登録で SSH パスワードを保存する場合に必須（AES-256-GCM 用、32 バイトを Base64 にした値）。未設定時はパスワード保存で 503。
       # 生成: openssl rand -base64 32。本番では .env に記載して env_file で読み込むか、シークレット管理を推奨。
       - VANTYX_SSH_PASSWORD_ENCRYPTION_KEY=${VANTYX_SSH_PASSWORD_ENCRYPTION_KEY:-}
     env_file:
       - .env
     volumes:
-      - vantyx_certs:/app/certs
-      - vantyx_data:/app/data
-    # 証明書を自前で用意する場合: ./certs:/app/certs などに差し替え
+      - /path/to/vantyx/certs:/app/certs
+      - /path/to/vantyx/data:/app/data
+      - /path/to/vantyx/recordings:/app/recordings
+    # ホストの実パスにデータを置く場合: docker-compose.hostpath.example.yml を参照し
+    # docker-compose.override.yml で volumes を差し替え（例: /path/to/vantyx/data:/app/data）
 
 volumes:
   vantyx_certs:
   vantyx_data:
+  vantyx_recordings:

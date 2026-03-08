@@ -76,6 +76,15 @@ func NewServer(cfg Config) (*Server, error) {
 		}
 	}
 	config := &ssh.ServerConfig{
+		PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			user, err := cfg.UserStore.AuthenticateByPublicKey(c.User(), key)
+			if err != nil {
+				return nil, err
+			}
+			return &ssh.Permissions{
+				Extensions: map[string]string{"user_id": user.ID},
+			}, nil
+		},
 		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
 			user, err := cfg.UserStore.Authenticate(c.User(), string(pass))
 			if err != nil {
@@ -103,10 +112,16 @@ func (s *Server) ListenAndServe(addr string) error {
 	if err != nil {
 		return err
 	}
+	return s.Serve(listener)
+}
+
+// Serve accepts connections from listener and serves CLI SSH until Shutdown or listener closed.
+// Used by ListenAndServe; also allows tests to pass a listener (e.g. from net.Listen("tcp", "127.0.0.1:0")).
+func (s *Server) Serve(listener net.Listener) error {
 	s.mu.Lock()
 	s.listener = listener
 	s.mu.Unlock()
-	slog.Info("sshd listening", "addr", addr)
+	slog.Info("sshd listening", "addr", listener.Addr().String())
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -120,6 +135,16 @@ func (s *Server) ListenAndServe(addr string) error {
 		}
 		go s.handleConn(conn)
 	}
+}
+
+// Addr returns the listener's address when the server is serving; nil otherwise (for tests that need the address after ListenAndServe).
+func (s *Server) Addr() net.Addr {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listener != nil {
+		return s.listener.Addr()
+	}
+	return nil
 }
 
 // Shutdown closes the listener so ListenAndServe returns.
@@ -856,7 +881,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 					},
 					CloseFn: func() error { return channel.Close() },
 				}
-				bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, streamAttach, touch, nil, nil, 0, 0)
+				bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, nil, nil, 0, 0)
 			})
 			if err != nil {
 				prompt("Session start failed: %v\r\n", err)

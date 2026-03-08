@@ -1,5 +1,7 @@
 import API from './api.js'
 import { renderLogin } from './login.js'
+import * as AsciinemaPlayer from 'asciinema-player'
+import 'asciinema-player/dist/bundle/asciinema-player.css'
 
 export function renderApp(container) {
   container.innerHTML = `
@@ -9,7 +11,9 @@ export function renderApp(container) {
           <h1 class="text-xl font-semibold tracking-wide">Vantyx</h1>
           <nav class="flex items-center gap-6">
             <a href="#" id="nav-targets" class="text-sm font-semibold border-b-2 border-white pb-1 transition-opacity">ホーム</a>
-            <a href="#" id="nav-groups" class="text-sm opacity-80 hover:opacity-100 transition-opacity">サーバー管理</a>
+            <a href="#" id="nav-recordings" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">録画</a>
+            <a href="#" id="nav-groups" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">サーバー管理</a>
+            <a href="#" id="nav-users" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">ユーザー管理</a>
             <a href="/docs" id="nav-api-ref" target="_blank" rel="noopener noreferrer" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">API リファレンス</a>
           </nav>
         </div>
@@ -25,8 +29,13 @@ export function renderApp(container) {
         </div>
       </main>
       <div id="add-target-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
+      <div id="add-user-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
+      <div id="add-member-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
+      <div id="edit-tags-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
       <div id="ssh-credential-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
       <div id="active-sessions-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
+      <div id="recording-player-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
+      <div id="change-password-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
     </div>
   `
 
@@ -34,12 +43,18 @@ export function renderApp(container) {
   const userNameEl = document.getElementById('user-name')
   const logoutBtn = document.getElementById('logout-btn')
   const navTargets = document.getElementById('nav-targets')
+  const navRecordings = document.getElementById('nav-recordings')
   const navGroups = document.getElementById('nav-groups')
+  const navUsers = document.getElementById('nav-users')
 
   let meData = null
   let groupsCache = null
   let selectedGroupId = ''
   let expandedGroups = new Set()
+  /** 録画ページ用: 選択中のグループID・ターゲットID（サーバー）・表示名 */
+  let selectedRecordingsGroupId = ''
+  let selectedRecordingsTargetId = ''
+  let selectedRecordingsTargetName = ''
   /** 新しいタブに渡す SSH 認証情報（BroadcastChannel 用） */
   const pendingTerminalCreds = Object.create(null)
 
@@ -64,11 +79,617 @@ export function renderApp(container) {
             <dd class="mt-1 text-sm text-slate-800 sm:mt-0 sm:col-span-2">${escapeHtml(meData.username)}</dd>
           </div>
         </dl>
+        <div class="px-4 py-3 border-t border-slate-200">
+          <button type="button" id="btn-change-password" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">パスワードを変更</button>
+        </div>
       </div>
     `
+    mainContent.querySelector('#btn-change-password').addEventListener('click', showChangePasswordModal)
     // ユーザー情報表示中はどのタブもアクティブ表示にしない
+    const navHidden = meData?.role !== 'admin' ? ' hidden' : ''
     navTargets.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
-    navGroups.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
+    navGroups.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
+    navUsers.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
+    navRecordings.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
+  }
+
+  async function showUsersPage() {
+    const navHidden = meData?.role !== 'admin' ? ' hidden' : ''
+    navTargets.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
+    navGroups.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
+    navUsers.className = 'text-sm font-semibold border-b-2 border-white pb-1 transition-opacity' + navHidden
+    navRecordings.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
+    mainContent.innerHTML = '<p class="text-slate-500">読み込み中…</p>'
+    try {
+      const users = await API.users()
+      const rows = (users || []).map((u) => {
+        const userTags = Array.isArray(u.tags) ? u.tags : []
+        return `
+        <tr class="border-b border-slate-200 hover:bg-slate-50">
+          <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(u.id)}</td>
+          <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(u.username)}</td>
+          <td class="px-4 py-2 text-sm text-slate-600">${escapeHtml(u.role || 'user')}</td>
+          <td class="px-4 py-2"><div class="flex flex-wrap items-center gap-2">${userTags.length ? renderTagPills(userTags) : '<span class="text-xs text-slate-400">—</span>'} <button type="button" class="edit-user-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 ml-1" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-user-role="${escapeHtml(u.role || 'user')}" data-user-tags="${escapeHtml((userTags || []).join(','))}">編集</button></div></td>
+        </tr>
+      `
+      }).join('')
+      mainContent.innerHTML = `
+        <div class="w-full flex flex-col">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-medium text-slate-800">ユーザー管理</h2>
+            <button type="button" id="btn-add-user" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">ユーザーを追加</button>
+          </div>
+          <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="min-w-full text-left text-sm">
+                <thead class="bg-slate-50 border-b border-slate-200">
+                  <tr>
+                    <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザーID</th>
+                    <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザー名</th>
+                    <th class="px-4 py-2 text-xs font-semibold text-slate-700">ロール</th>
+                    <th class="px-4 py-2 text-xs font-semibold text-slate-700">タグ</th>
+                  </tr>
+                </thead>
+                <tbody>${rows || '<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">ユーザーがありません</td></tr>'}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      `
+      mainContent.querySelector('#btn-add-user').addEventListener('click', showAddUserModal)
+      mainContent.querySelectorAll('.edit-user-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const user = {
+            id: btn.dataset.userId || '',
+            username: btn.dataset.username || '',
+            role: btn.dataset.userRole || 'user',
+            tags: (btn.dataset.userTags || '').split(',').map((s) => s.trim()).filter(Boolean),
+          }
+          if (user.id) showEditUserModal(user)
+        })
+      })
+    } catch (e) {
+      mainContent.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(e.message || '取得に失敗しました')}</p>`
+    }
+  }
+
+  function showRecordingPlayerModal(recordingId, label) {
+    const modal = document.getElementById('recording-player-modal')
+    modal.classList.remove('hidden')
+    const fileUrl = `/api/recordings/${encodeURIComponent(recordingId)}/file`
+    modal.innerHTML = `
+      <div id="recording-player-backdrop" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-slate-900 rounded-lg shadow-xl w-full max-w-4xl mx-4 overflow-hidden border border-slate-700 flex flex-col max-h-[90vh]">
+          <div class="px-5 py-3 border-b border-slate-700 flex items-center justify-between bg-slate-800 shrink-0">
+            <h3 class="font-semibold text-slate-200">録画再生 — ${escapeHtml(label || recordingId)}</h3>
+            <button id="recording-player-close" class="text-slate-400 hover:text-white text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <div id="recording-player-container" class="p-4 overflow-auto flex-1 min-h-0"></div>
+        </div>
+      </div>
+    `
+    const container = modal.querySelector('#recording-player-container')
+    let player = null
+    try {
+      // 録画ファイルの width/height のまま表示（fit 指定なし＝崩れ防止）
+      player = AsciinemaPlayer.create(fileUrl, container, {})
+    } catch (err) {
+      container.innerHTML = `<p class="text-sm text-red-400">再生の読み込みに失敗しました: ${escapeHtml(err.message || String(err))}</p>`
+    }
+    const close = () => {
+      if (player && typeof player.dispose === 'function') {
+        try { player.dispose() } catch { /* ignore */ }
+      }
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    modal.querySelector('#recording-player-close').addEventListener('click', close)
+    modal.querySelector('#recording-player-backdrop').addEventListener('click', (e) => { if (e.target.id === 'recording-player-backdrop') close() })
+  }
+
+  async function showRecordingsPage() {
+    const navHidden = meData?.role !== 'admin' ? ' hidden' : ''
+    navTargets.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
+    navGroups.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
+    navUsers.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
+    navRecordings.className = 'text-sm font-semibold border-b-2 border-white pb-1 transition-opacity'
+    mainContent.innerHTML = '<div class="flex gap-6 w-full h-full"><p class="text-slate-500">読み込み中…</p></div>'
+    try {
+      if (!groupsCache) {
+        groupsCache = await API.groups()
+      }
+      const groups = groupsCache
+      const treeRoot = buildGroupTree(groups || [])
+      const treeHtml = renderGroupTree(treeRoot, 0, selectedRecordingsGroupId)
+      const selectedGroup = (groups || []).find((g) => g.id === selectedRecordingsGroupId)
+      const targets = selectedGroup ? (selectedGroup.targets || []) : []
+
+      let sectionContent = ''
+      let sectionHeader = ''
+
+      if (selectedRecordingsTargetId) {
+        const res = await API.recordings({ target_id: selectedRecordingsTargetId })
+        const items = (res && res.items) || []
+        const rows = items.map((r) => {
+          const label = [r.started_at || '', r.target_id || ''].filter(Boolean).join(' — ') || r.id
+          return `
+          <tr class="border-b border-slate-200 hover:bg-slate-50">
+            <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(r.started_at || '')}</td>
+            <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(r.ended_at || '—')}</td>
+            <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(r.session_name || '—')}</td>
+            <td class="px-4 py-2 text-sm text-slate-600 max-w-[12rem] truncate" title="${escapeHtml(r.session_description || '')}">${escapeHtml(r.session_description || '—')}</td>
+            <td class="px-4 py-2 text-sm text-slate-600">${escapeHtml(r.channel_type || '')}</td>
+            <td class="px-4 py-2">
+              <div class="flex items-center gap-2">
+                <button type="button" class="recording-play-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-id="${escapeHtml(r.id)}" data-label="${escapeHtml(label)}">再生</button>
+                <a href="/api/recordings/${encodeURIComponent(r.id)}/file" download="${escapeHtml(r.id)}.cast" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">ダウンロード</a>
+              </div>
+            </td>
+          </tr>
+        `
+        }).join('')
+        sectionHeader = `
+          <div class="flex items-center gap-3 flex-wrap">
+            <button type="button" id="recordings-back-to-servers" class="text-xs text-sky-600 hover:text-sky-800 hover:underline">← サーバー一覧</button>
+            <h2 class="text-sm font-semibold text-slate-800">${escapeHtml(selectedRecordingsTargetName || selectedRecordingsTargetId)} — 録画一覧</h2>
+            <span class="text-xs text-slate-500">${items.length} 件</span>
+          </div>
+        `
+        sectionContent = `
+          <div class="overflow-x-auto flex-1 min-h-0">
+            <table class="min-w-full text-left text-sm">
+              <thead class="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">開始</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">終了</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">セッション名</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">説明</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">チャネル</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">操作</th>
+                </tr>
+              </thead>
+              <tbody>${rows || '<tr><td colspan="6" class="px-4 py-6 text-center text-slate-500">このサーバーの録画はありません</td></tr>'}</tbody>
+            </table>
+          </div>
+        `
+      } else if (selectedRecordingsGroupId && targets.length > 0) {
+        const targetRows = targets.map((t) => `
+          <tr class="border-b border-slate-200 hover:bg-slate-50">
+            <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(t.name || t.id || '')}</td>
+            <td class="px-4 py-2 text-sm text-slate-600 font-mono">${escapeHtml(t.host || '')}</td>
+            <td class="px-4 py-2">
+              <button type="button" class="recordings-view-target-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name || t.id || '')}">録画を見る</button>
+            </td>
+          </tr>
+        `).join('')
+        sectionHeader = `
+          <h2 class="text-sm font-semibold text-slate-800">${escapeHtml(selectedRecordingsGroupId)} — サーバー一覧</h2>
+          <span class="text-xs text-slate-500">${targets.length} サーバー</span>
+        `
+        sectionContent = `
+          <div class="overflow-x-auto flex-1 min-h-0">
+            <table class="min-w-full text-left text-sm">
+              <thead class="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">サーバー名</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">ホスト</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">操作</th>
+                </tr>
+              </thead>
+              <tbody>${targetRows}</tbody>
+            </table>
+          </div>
+        `
+      } else if (selectedRecordingsGroupId && targets.length === 0) {
+        sectionHeader = `<h2 class="text-sm font-semibold text-slate-800">${escapeHtml(selectedRecordingsGroupId)}</h2>`
+        sectionContent = '<div class="px-5 py-8 text-center text-sm text-slate-500">このグループにサーバーがありません。</div>'
+      } else {
+        sectionHeader = '<h2 class="text-sm font-semibold text-slate-800">録画</h2>'
+        sectionContent = '<div class="px-5 py-8 text-center text-sm text-slate-500">左のグループを選択し、サーバー一覧から「録画を見る」でそのサーバーの録画を表示します。</div>'
+      }
+
+      mainContent.innerHTML = `
+        <div class="flex gap-6 w-full h-full">
+          <aside class="w-64 flex-col border-r border-slate-200 bg-white shadow-sm shrink-0 rounded-lg overflow-hidden flex">
+            <div class="px-4 py-3 border-b border-slate-200 text-sm font-semibold text-slate-700">アクセスグループ</div>
+            <div class="px-3 py-3 text-xs text-slate-800 overflow-y-auto flex-1 min-h-0" id="recordings-tree-container">
+              ${treeHtml || '<p class="text-slate-500 p-2">グループがありません。</p>'}
+            </div>
+          </aside>
+          <section class="flex-1 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col min-h-0">
+            <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50 flex-wrap gap-2">
+              ${sectionHeader}
+            </div>
+            ${sectionContent}
+          </section>
+        </div>
+      `
+
+      mainContent.querySelector('#recordings-back-to-servers')?.addEventListener('click', () => {
+        selectedRecordingsTargetId = ''
+        selectedRecordingsTargetName = ''
+        showRecordingsPage()
+      })
+      mainContent.querySelectorAll('.recordings-view-target-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          selectedRecordingsTargetId = btn.dataset.targetId || ''
+          selectedRecordingsTargetName = btn.dataset.targetName || ''
+          showRecordingsPage()
+        })
+      })
+      mainContent.querySelectorAll('.recording-play-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          showRecordingPlayerModal(btn.dataset.id || '', btn.dataset.label || '')
+        })
+      })
+
+      mainContent.querySelectorAll('[data-group-toggle="1"]').forEach((el) => {
+        el.addEventListener('click', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          const gid = el.getAttribute('data-group-id') || ''
+          if (!gid) return
+          expandedGroups.has(gid) ? expandedGroups.delete(gid) : expandedGroups.add(gid)
+          showRecordingsPage()
+        })
+      })
+      mainContent.querySelectorAll('[data-group-select="1"]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const gid = el.getAttribute('data-group-id') || ''
+          selectedRecordingsGroupId = gid
+          selectedRecordingsTargetId = ''
+          selectedRecordingsTargetName = ''
+          showRecordingsPage()
+        })
+      })
+    } catch (e) {
+      mainContent.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(e.message || '取得に失敗しました')}</p>`
+    }
+  }
+
+  function showAddUserModal() {
+    const modal = document.getElementById('add-user-modal')
+    modal.classList.remove('hidden')
+    modal.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+            <h3 class="font-semibold text-slate-800">ユーザーを追加</h3>
+            <button id="add-user-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <form id="add-user-form">
+            <div class="px-6 py-5 space-y-5">
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザー名</label>
+                <input type="text" id="add-user-username" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: alice" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">パスワード</label>
+                <input type="password" id="add-user-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="8文字以上・大文字・小文字・数字・記号" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">ロール</label>
+                <select id="add-user-role" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザーID（任意）</label>
+                <input type="text" id="add-user-id" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="省略時はユーザー名から自動生成" />
+              </div>
+              <p id="add-user-error" class="text-sm text-red-600 hidden"></p>
+            </div>
+            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
+              <button type="button" id="add-user-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
+              <button type="submit" id="add-user-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">追加</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `
+    const close = () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    modal.querySelector('#add-user-close').addEventListener('click', close)
+    modal.querySelector('#add-user-cancel').addEventListener('click', close)
+    modal.querySelector('#add-user-form').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const errorEl = modal.querySelector('#add-user-error')
+      const submitBtn = modal.querySelector('#add-user-submit')
+      errorEl.classList.add('hidden')
+      const username = modal.querySelector('#add-user-username').value.trim()
+      const password = modal.querySelector('#add-user-password').value
+      const role = modal.querySelector('#add-user-role').value || 'user'
+      const id = modal.querySelector('#add-user-id').value.trim() || undefined
+      if (!username || !password) {
+        errorEl.textContent = 'ユーザー名とパスワードを入力してください'
+        errorEl.classList.remove('hidden')
+        return
+      }
+      submitBtn.disabled = true
+      try {
+        await API.createUser({ id, username, password, role })
+        close()
+        await showUsersPage()
+      } catch (err) {
+        errorEl.textContent = err.message || '追加に失敗しました'
+        errorEl.classList.remove('hidden')
+      } finally {
+        submitBtn.disabled = false
+      }
+    })
+  }
+
+  function showEditUserModal(user) {
+    const modal = document.getElementById('edit-tags-modal')
+    modal.classList.remove('hidden')
+    const tagsStr = (user.tags || []).join(', ')
+    modal.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+            <h3 class="font-semibold text-slate-800">ユーザーを編集</h3>
+            <button id="edit-user-modal-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <form id="edit-user-form">
+            <div class="px-6 py-5 space-y-5">
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザーID</label>
+                <p class="text-sm text-slate-800">${escapeHtml(user.id)}</p>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザー名</label>
+                <p class="text-sm text-slate-800">${escapeHtml(user.username)}</p>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">ロール</label>
+                <p class="text-sm text-slate-800">${escapeHtml(user.role || 'user')}</p>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">タグ（カンマ区切り）</label>
+                <input type="text" id="edit-user-tags-input" value="${escapeHtml(tagsStr)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: prod, network, ops" />
+                <div id="edit-user-tags-input-picker" class="mt-2"></div>
+              </div>
+              <p id="edit-user-error" class="text-sm text-red-600 hidden"></p>
+            </div>
+            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
+              <button type="button" id="edit-user-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
+              <button type="submit" id="edit-user-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">保存</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `
+    const close = () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    modal.querySelector('#edit-user-modal-close').addEventListener('click', close)
+    modal.querySelector('#edit-user-cancel').addEventListener('click', close)
+    fillExistingTagsPicker(modal, 'edit-user-tags-input')
+    modal.querySelector('#edit-user-form').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const errorEl = modal.querySelector('#edit-user-error')
+      const submitBtn = modal.querySelector('#edit-user-submit')
+      const raw = modal.querySelector('#edit-user-tags-input').value.trim()
+      const tags = raw ? raw.split(',').map((t) => t.trim()).filter(Boolean) : []
+      errorEl.classList.add('hidden')
+      submitBtn.disabled = true
+      try {
+        await API.setUserTags(user.id, tags)
+        close()
+        await showUsersPage()
+      } catch (err) {
+        errorEl.textContent = err.message || '保存に失敗しました'
+        errorEl.classList.remove('hidden')
+      } finally {
+        submitBtn.disabled = false
+      }
+    })
+  }
+
+  function showChangePasswordModal() {
+    const modal = document.getElementById('change-password-modal')
+    modal.classList.remove('hidden')
+    modal.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+            <h3 class="font-semibold text-slate-800">パスワードを変更</h3>
+            <button id="change-password-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <form id="change-password-form">
+            <div class="px-6 py-5 space-y-5">
+              <div>
+                <label for="change-password-current" class="block text-xs font-medium text-slate-600 mb-1.5">現在のパスワード</label>
+                <input type="password" id="change-password-current" autocomplete="current-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="現在のパスワード" />
+              </div>
+              <div>
+                <label for="change-password-new" class="block text-xs font-medium text-slate-600 mb-1.5">新しいパスワード</label>
+                <input type="password" id="change-password-new" autocomplete="new-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="8文字以上・大文字・小文字・数字・記号" />
+              </div>
+              <div>
+                <label for="change-password-confirm" class="block text-xs font-medium text-slate-600 mb-1.5">新しいパスワード（確認）</label>
+                <input type="password" id="change-password-confirm" autocomplete="new-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="もう一度入力" />
+              </div>
+              <p id="change-password-error" class="text-sm text-red-600 hidden"></p>
+            </div>
+            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
+              <button type="button" id="change-password-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
+              <button type="submit" id="change-password-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">変更</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `
+    const close = () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    modal.querySelector('#change-password-close').addEventListener('click', close)
+    modal.querySelector('#change-password-cancel').addEventListener('click', close)
+    modal.querySelector('#change-password-form').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const errorEl = modal.querySelector('#change-password-error')
+      const submitBtn = modal.querySelector('#change-password-submit')
+      const current = modal.querySelector('#change-password-current').value
+      const newPass = modal.querySelector('#change-password-new').value
+      const confirmPass = modal.querySelector('#change-password-confirm').value
+      errorEl.classList.add('hidden')
+      if (newPass !== confirmPass) {
+        errorEl.textContent = '新しいパスワードが一致しません'
+        errorEl.classList.remove('hidden')
+        return
+      }
+      submitBtn.disabled = true
+      try {
+        await API.changePassword(current, newPass)
+        close()
+        showUserInfo()
+      } catch (err) {
+        errorEl.textContent = err.message || 'パスワードの変更に失敗しました'
+        errorEl.classList.remove('hidden')
+      } finally {
+        submitBtn.disabled = false
+      }
+    })
+  }
+
+  function showEditTagsModal({ type, id, label, currentTags, onSaved }) {
+    const modal = document.getElementById('edit-tags-modal')
+    modal.classList.remove('hidden')
+    const tagsStr = (currentTags || []).join(', ')
+    modal.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+            <h3 class="font-semibold text-slate-800">タグを編集 — ${escapeHtml(label)}</h3>
+            <button id="edit-tags-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <form id="edit-tags-form">
+            <div class="px-6 py-5 space-y-5">
+              <p class="text-sm text-slate-600">タグはアクセス権の付与に使われます。ユーザーとターゲット（またはグループ）で同じタグを持つとアクセス可能になります。英数字・ハイフン・アンダースコア、1〜64文字。</p>
+              ${currentTags.length ? `<div class="flex flex-wrap gap-2">${renderTagPills(currentTags)}</div>` : ''}
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">タグ（カンマ区切り）</label>
+                <input type="text" id="edit-tags-input" value="${escapeHtml(tagsStr)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: prod, network, ops" />
+                <div id="edit-tags-input-picker" class="mt-2"></div>
+              </div>
+              <p id="edit-tags-error" class="text-sm text-red-600 hidden"></p>
+            </div>
+            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
+              <button type="button" id="edit-tags-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
+              <button type="submit" id="edit-tags-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">保存</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `
+    const close = () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    fillExistingTagsPicker(modal, 'edit-tags-input')
+    modal.querySelector('#edit-tags-close').addEventListener('click', close)
+    modal.querySelector('#edit-tags-cancel').addEventListener('click', close)
+    modal.querySelector('#edit-tags-form').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const errorEl = modal.querySelector('#edit-tags-error')
+      const submitBtn = modal.querySelector('#edit-tags-submit')
+      const raw = modal.querySelector('#edit-tags-input').value.trim()
+      const tags = raw ? raw.split(',').map((t) => t.trim()).filter(Boolean) : []
+      errorEl.classList.add('hidden')
+      submitBtn.disabled = true
+      try {
+        if (type === 'group') await API.setGroupTags(id, tags)
+        else if (type === 'target') await API.setTargetTags(id, tags)
+        else if (type === 'user') await API.setUserTags(id, tags)
+        close()
+        if (onSaved) await onSaved()
+      } catch (err) {
+        errorEl.textContent = err.message || '保存に失敗しました'
+        errorEl.classList.remove('hidden')
+      } finally {
+        submitBtn.disabled = false
+      }
+    })
+  }
+
+  async function showAddMemberModal(groupId, currentMemberIds) {
+    const modal = document.getElementById('add-member-modal')
+    modal.classList.remove('hidden')
+    modal.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+            <h3 class="font-semibold text-slate-800">メンバーを追加</h3>
+            <button id="add-member-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <form id="add-member-form">
+            <div class="px-6 py-5 space-y-5">
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザー</label>
+                <select id="add-member-user" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                  <option value="">選択してください</option>
+                </select>
+              </div>
+              <p id="add-member-error" class="text-sm text-red-600 hidden"></p>
+            </div>
+            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
+              <button type="button" id="add-member-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
+              <button type="submit" id="add-member-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">追加</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `
+    const close = () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    modal.querySelector('#add-member-close').addEventListener('click', close)
+    modal.querySelector('#add-member-cancel').addEventListener('click', close)
+    const selectEl = modal.querySelector('#add-member-user')
+    try {
+      const users = await API.users()
+      const existingSet = new Set(currentMemberIds || [])
+      const toAdd = (users || []).filter((u) => !existingSet.has(u.id))
+      toAdd.forEach((u) => {
+        const opt = document.createElement('option')
+        opt.value = u.id
+        opt.textContent = `${u.username} (${u.id})`
+        selectEl.appendChild(opt)
+      })
+      if (toAdd.length === 0) {
+        selectEl.innerHTML = '<option value="">追加できるユーザーがいません</option>'
+        selectEl.disabled = true
+      }
+    } catch {
+      selectEl.innerHTML = '<option value="">ユーザー一覧の取得に失敗しました</option>'
+      selectEl.disabled = true
+    }
+    modal.querySelector('#add-member-form').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const errorEl = modal.querySelector('#add-member-error')
+      const submitBtn = modal.querySelector('#add-member-submit')
+      const userId = selectEl.value?.trim()
+      if (!userId) return
+      errorEl.classList.add('hidden')
+      submitBtn.disabled = true
+      try {
+        await API.addGroupMember(groupId, userId)
+        close()
+        groupsCache = null
+        await showTreeView('manage', true)
+      } catch (err) {
+        errorEl.textContent = err.message || '追加に失敗しました'
+        errorEl.classList.remove('hidden')
+      } finally {
+        submitBtn.disabled = false
+      }
+    })
   }
 
   function showAddGroupModal() {
@@ -143,7 +764,7 @@ export function renderApp(container) {
       : 'アクティブなセッション（再接続）'
     modal.innerHTML = `
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50 max-h-[80vh] flex flex-col">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 overflow-hidden border border-slate-200/50 max-h-[90vh] flex flex-col">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
             <h3 class="font-semibold text-slate-800">${modalTitle}</h3>
             <button id="active-sessions-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
@@ -189,11 +810,17 @@ export function renderApp(container) {
           const list = byTarget[targetId]
           const serverName = list[0].target_name || targetId
           const rows = list.map((s) => {
-            const label = s.name || s.description || s.session_id
-            const title = [s.name, s.description, s.target_name].filter(Boolean).join(' — ')
-            return `<li class="flex items-center justify-between text-sm gap-2 pl-2"><span class="min-w-0 text-slate-700 truncate" title="${escapeHtml(title)}">${escapeHtml(label || '(無題)')}</span><a href="/terminal?session_id=${encodeURIComponent(s.session_id)}" target="_blank" rel="noreferrer" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shrink-0">再接続</a></li>`
+            const titleText = s.name ? escapeHtml(s.name) : '(無題)'
+            const descHtml = s.description ? `<p class="text-xs text-slate-500 mt-0.5 break-words">${escapeHtml(s.description)}</p>` : ''
+            return `<li class="flex items-start justify-between gap-3 py-2 px-3 rounded border border-slate-100 hover:bg-slate-50">
+              <div class="min-w-0 flex-1">
+                <p class="text-sm font-medium text-slate-800">${titleText}</p>
+                ${descHtml}
+              </div>
+              <a href="/terminal?session_id=${encodeURIComponent(s.session_id)}" target="_blank" rel="noreferrer" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shrink-0 self-center">再接続</a>
+            </li>`
           }).join('')
-          return `<div class="mb-4"><h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">${escapeHtml(serverName)}</h4><ul class="space-y-1.5">${rows}</ul></div>`
+          return `<div class="mb-4"><h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">${escapeHtml(serverName)}</h4><ul class="space-y-2">${rows}</ul></div>`
         }).join('')
       }
     } catch {
@@ -375,6 +1002,8 @@ export function renderApp(container) {
       const addTargetBtnHtml = isManageMode
         ? `<button type="button" id="btn-add-target-in-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50" ${selectedGroupId ? '' : 'disabled'}>サーバーを追加</button>`
         : ''
+      const isAdmin = meData?.role === 'admin'
+      const showMembersSection = isManageMode && isAdmin && selectedGroupId
 
       mainContent.dataset.treeMode = mode
       mainContent.innerHTML = `
@@ -400,6 +1029,7 @@ export function renderApp(container) {
             </div>
             <div class="px-5 py-4">
               ${renderGroupTargetsTable(targets, mode)}
+              ${showMembersSection ? '<div id="group-members-container" class="mt-6 border-t border-slate-200 pt-4"><p class="text-slate-500">読み込み中…</p></div>' : ''}
             </div>
           </section>
         </div>
@@ -407,6 +1037,86 @@ export function renderApp(container) {
       const newTreeContainer = mainContent.querySelector('aside .overflow-y-auto')
       if (newTreeContainer && scrollPos > 0) {
         newTreeContainer.scrollTop = scrollPos
+      }
+
+      if (showMembersSection) {
+        const membersContainer = mainContent.querySelector('#group-members-container')
+        if (membersContainer) {
+          Promise.all([API.groupMembers(selectedGroupId), API.groupTags(selectedGroupId).catch(() => ({ tags: [] }))])
+            .then(([members, tagsRes]) => {
+              const memberIds = (members || []).map((m) => m.id)
+              const groupTags = (tagsRes && tagsRes.tags) ? tagsRes.tags : []
+              const tagsHtml = `
+                <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <h3 class="text-sm font-semibold text-slate-700 mb-1">タグ</h3>
+                    <p class="text-xs text-slate-500">同じタグを持つユーザーはこのグループのターゲットにアクセスできます</p>
+                    <div class="flex flex-wrap gap-2 mt-2">
+                      ${groupTags.length ? renderTagPills(groupTags) : '<span class="text-xs text-slate-400">タグなし</span>'}
+                    </div>
+                  </div>
+                  <button type="button" id="btn-edit-group-tags" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">タグを編集</button>
+                </div>
+              `
+              const rows = (members || []).map((m) => `
+                <tr class="border-b border-slate-200 hover:bg-slate-50">
+                  <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(m.id)}</td>
+                  <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(m.username)}</td>
+                  <td class="px-4 py-2 text-right">
+                    <button type="button" class="remove-member-btn rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50" data-user-id="${escapeHtml(m.id)}">削除</button>
+                  </td>
+                </tr>
+              `).join('')
+              membersContainer.innerHTML = `
+                ${tagsHtml}
+                <h3 class="text-sm font-semibold text-slate-700 mb-2">メンバー（アクセス権）</h3>
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-xs text-slate-500">${memberIds.length} 人</span>
+                  <button type="button" id="btn-add-member" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">メンバーを追加</button>
+                </div>
+                <div class="overflow-x-auto border border-slate-200 rounded-lg">
+                  <table class="min-w-full text-left text-sm">
+                    <thead class="bg-slate-50 border-b border-slate-200">
+                      <tr>
+                        <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザーID</th>
+                        <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザー名</th>
+                        <th class="px-4 py-2"></th>
+                      </tr>
+                    </thead>
+                    <tbody>${rows || '<tr><td colspan="3" class="px-4 py-4 text-center text-slate-500">メンバーがいません</td></tr>'}</tbody>
+                  </table>
+                </div>
+              `
+              membersContainer.querySelector('#btn-edit-group-tags')?.addEventListener('click', async () => {
+                const tagsRes = await API.groupTags(selectedGroupId).catch(() => ({ tags: [] }))
+                const currentTags = (tagsRes && tagsRes.tags) ? tagsRes.tags : []
+                showEditTagsModal({
+                  type: 'group',
+                  id: selectedGroupId,
+                  label: selectedGroupId,
+                  currentTags,
+                  onSaved: () => showTreeView('manage', true),
+                })
+              })
+              membersContainer.querySelector('#btn-add-member')?.addEventListener('click', () => showAddMemberModal(selectedGroupId, memberIds))
+              membersContainer.querySelectorAll('.remove-member-btn').forEach((btn) => {
+                btn.addEventListener('click', async () => {
+                  const uid = btn.dataset.userId || ''
+                  if (!uid || !confirm(`「${escapeHtml(uid)}」をこのグループから削除してもよろしいですか？`)) return
+                  try {
+                    await API.removeGroupMember(selectedGroupId, uid)
+                    groupsCache = null
+                    await showTreeView('manage', true)
+                  } catch (err) {
+                    alert(err.message || '削除に失敗しました')
+                  }
+                })
+              })
+            })
+            .catch(() => {
+              membersContainer.innerHTML = '<p class="text-sm text-red-600">メンバー一覧の取得に失敗しました</p>'
+            })
+        }
       }
 
       if (isManageMode) {
@@ -417,7 +1127,32 @@ export function renderApp(container) {
         })
         mainContent.querySelectorAll('.edit-btn-in-group').forEach((btn) => {
           btn.addEventListener('click', () => {
-            alert('サーバー情報の編集機能は未実装です。')
+            const target = {
+              id: btn.dataset.targetId || '',
+              name: btn.dataset.targetName || '',
+              host: btn.dataset.targetHost || '',
+              port: parseInt(btn.dataset.targetPort, 10) || 22,
+              protocol: btn.dataset.targetProtocol || 'ssh',
+              path: btn.dataset.targetPath || '',
+              ssh_username: btn.dataset.targetSshUsername || '',
+              tags: (btn.dataset.targetTags || '').split(',').map((s) => s.trim()).filter(Boolean),
+            }
+            if (target.id) showEditTargetModal(target)
+          })
+        })
+        mainContent.querySelectorAll('.delete-btn-in-group').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const targetId = btn.dataset.targetId || ''
+            const targetName = btn.dataset.targetName || ''
+            if (!targetId) return
+            if (!confirm(`「${escapeHtml(targetName) || targetId}」を削除してもよろしいですか？`)) return
+            try {
+              await API.deleteTarget(targetId)
+              groupsCache = null
+              await showTreeView('manage')
+            } catch (err) {
+              alert(err.message || '削除に失敗しました')
+            }
           })
         })
       } else {
@@ -469,12 +1204,16 @@ export function renderApp(container) {
         })
       })
 
+      const navHidden = meData?.role !== 'admin' ? ' hidden' : ''
+      navRecordings.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
       if (isManageMode) {
         navTargets.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
-        navGroups.className = 'text-sm font-semibold border-b-2 border-white pb-1 transition-opacity'
+        navGroups.className = 'text-sm font-semibold border-b-2 border-white pb-1 transition-opacity' + navHidden
+        navUsers.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
       } else {
         navTargets.className = 'text-sm font-semibold border-b-2 border-white pb-1 transition-opacity'
-        navGroups.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
+        navGroups.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
+        navUsers.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
       }
 
     } catch (e) {
@@ -541,6 +1280,14 @@ export function renderApp(container) {
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード（任意）</label>
                 <input type="password" id="add-target-ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="保存すると接続時に利用できます" />
               </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH 秘密鍵（PEM・任意）</label>
+                <textarea id="add-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" placeholder="-----BEGIN ... 形式の秘密鍵を貼り付け。パスワードとどちらかまたは両方設定可"></textarea>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
+                <input type="password" id="add-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="暗号化された秘密鍵の場合" />
+              </div>
               <p id="add-target-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
@@ -571,6 +1318,8 @@ export function renderApp(container) {
       const protocol = modal.querySelector('#add-target-protocol').value
       const ssh_username = modal.querySelector('#add-target-ssh-username').value.trim()
       const ssh_password = modal.querySelector('#add-target-ssh-password').value
+      const ssh_private_key = modal.querySelector('#add-target-ssh-private-key').value
+      const ssh_private_key_passphrase = modal.querySelector('#add-target-ssh-key-passphrase').value
       if (!name || !host) {
         errorEl.textContent = '名前とホストを入力してください'
         errorEl.classList.remove('hidden')
@@ -583,7 +1332,7 @@ export function renderApp(container) {
       }
       submitBtn.disabled = true
       try {
-        await API.createTarget({ name, host, port, protocol, group_id, ssh_username, ssh_password })
+        await API.createTarget({ name, host, port, protocol, group_id, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase })
         modal.classList.add('hidden')
         modal.innerHTML = ''
         groupsCache = null
@@ -597,26 +1346,154 @@ export function renderApp(container) {
     })
   }
 
+  function showEditTargetModal(target) {
+    const modal = document.getElementById('add-target-modal')
+    modal.classList.remove('hidden')
+    modal.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-xl mx-4 overflow-hidden border border-slate-200/50">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+            <h3 class="font-semibold text-slate-800">サーバーを編集</h3>
+            <button id="edit-target-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <form id="edit-target-form" data-edit-target-id="${escapeHtml(target.id)}">
+            <div class="px-6 py-5 space-y-5">
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">名前</label>
+                <input type="text" id="edit-target-name" required value="${escapeHtml(target.name)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">ホスト</label>
+                <input type="text" id="edit-target-host" required value="${escapeHtml(target.host)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">ポート</label>
+                  <input type="number" id="edit-target-port" min="1" max="65535" value="${target.port || 22}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">プロトコル</label>
+                  <select id="edit-target-protocol" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                    <option value="ssh" ${(target.protocol || 'ssh') === 'ssh' ? 'selected' : ''}>SSH</option>
+                    <option value="telnet" ${target.protocol === 'telnet' ? 'selected' : ''}>Telnet</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名（任意）</label>
+                <input type="text" id="edit-target-ssh-username" value="${escapeHtml(target.ssh_username || '')}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード（任意）</label>
+                <input type="password" id="edit-target-ssh-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="変更する場合のみ入力（空のままなら変更しません）" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH 秘密鍵（PEM・任意）</label>
+                <textarea id="edit-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" placeholder="${target.has_ssh_key ? '設定済み。上書きする場合は新しい鍵を貼り付け' : '-----BEGIN ... 形式の秘密鍵を貼り付け'}" autocomplete="off"></textarea>
+                ${target.has_ssh_key ? '<label class="mt-1.5 flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" id="edit-target-clear-ssh-key" class="rounded border-slate-300" /> 保存済み秘密鍵をクリア</label>' : ''}
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
+                <input type="password" id="edit-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="変更する場合のみ入力" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">タグ（カンマ区切り）</label>
+                <input type="text" id="edit-target-tags" value="${escapeHtml((target.tags || []).join(', '))}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: prod, network, ops" />
+                <div id="edit-target-tags-picker" class="mt-2"></div>
+              </div>
+              <p id="edit-target-error" class="text-sm text-red-600 hidden"></p>
+            </div>
+            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
+              <button type="button" id="edit-target-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
+              <button type="submit" id="edit-target-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">更新</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `
+    fillExistingTagsPicker(modal, 'edit-target-tags')
+    modal.querySelector('#edit-target-close').addEventListener('click', () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    })
+    modal.querySelector('#edit-target-cancel').addEventListener('click', () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    })
+    modal.querySelector('#edit-target-form').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const form = modal.querySelector('#edit-target-form')
+      const targetId = form.dataset.editTargetId || ''
+      if (!targetId) return
+      const errorEl = modal.querySelector('#edit-target-error')
+      const submitBtn = modal.querySelector('#edit-target-submit')
+      errorEl.classList.add('hidden')
+      const name = modal.querySelector('#edit-target-name').value.trim()
+      const host = modal.querySelector('#edit-target-host').value.trim()
+      const port = parseInt(modal.querySelector('#edit-target-port').value, 10) || 22
+      const protocol = modal.querySelector('#edit-target-protocol').value
+      const ssh_username = modal.querySelector('#edit-target-ssh-username').value.trim()
+      const pwVal = modal.querySelector('#edit-target-ssh-password').value
+      const ssh_password = pwVal === '' ? undefined : pwVal
+      const keyVal = modal.querySelector('#edit-target-ssh-private-key').value.trim()
+      const clearKeyChecked = modal.querySelector('#edit-target-clear-ssh-key') && modal.querySelector('#edit-target-clear-ssh-key').checked
+      const ssh_private_key = clearKeyChecked ? '' : (keyVal === '' ? undefined : keyVal)
+      const keyPassVal = modal.querySelector('#edit-target-ssh-key-passphrase').value
+      const ssh_private_key_passphrase = clearKeyChecked ? '' : (keyPassVal === '' ? undefined : keyPassVal)
+      const tagsRaw = modal.querySelector('#edit-target-tags').value.trim()
+      const tags = tagsRaw ? tagsRaw.split(',').map((s) => s.trim()).filter(Boolean) : []
+      if (!name || !host) {
+        errorEl.textContent = '名前とホストを入力してください'
+        errorEl.classList.remove('hidden')
+        return
+      }
+      submitBtn.disabled = true
+      try {
+        await API.updateTarget(targetId, { name, host, port, protocol, path: target.path || '', ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase })
+        await API.setTargetTags(targetId, tags)
+        modal.classList.add('hidden')
+        modal.innerHTML = ''
+        groupsCache = null
+        await showTreeView('manage')
+      } catch (err) {
+        errorEl.textContent = err.message || '更新に失敗しました'
+        errorEl.classList.remove('hidden')
+      } finally {
+        submitBtn.disabled = false
+      }
+    })
+  }
+
   function renderGroupTargetsTable(targets, mode = 'manage') {
     const isManageMode = mode === 'manage'
     if (!targets || targets.length === 0) {
       return '<p class="text-sm text-slate-500">このグループに登録されているサーバーはありません。</p>'
     }
+    const targetTags = (t) => Array.isArray(t.tags) ? t.tags : []
     const rows = targets
       .slice()
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
       .map(
-        (t) => `
+        (t) => {
+          const tags = targetTags(t)
+          return `
         <tr class="border-b border-slate-200 hover:bg-slate-50">
           <td class="px-4 py-2 text-sm text-slate-900 font-medium">${escapeHtml(t.name)}</td>
           <td class="px-4 py-2 text-sm text-slate-500">${escapeHtml(t.host)}:${t.port}</td>
           <td class="px-4 py-2 text-sm text-slate-500">${escapeHtml(t.protocol)}</td>
+          ${isManageMode ? `<td class="px-4 py-2"><div class="flex flex-wrap items-center gap-2">${tags.length ? renderTagPills(tags) : '<span class="text-xs text-slate-400">—</span>'}</div></td>` : ''}
           <td class="px-4 py-2 text-right">
             ${isManageMode ? `
-            <button data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}"
-              class="edit-btn-in-group rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 border border-slate-300 shadow-sm transition-colors disabled:opacity-50">
-              編集
-            </button>
+            <div class="flex items-center justify-end gap-2">
+              <button type="button" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-target-host="${escapeHtml(t.host)}" data-target-port="${t.port}" data-target-protocol="${escapeHtml(t.protocol || 'ssh')}" data-target-path="${escapeHtml(t.path || '')}" data-target-ssh-username="${escapeHtml(t.ssh_username || '')}" data-target-tags="${escapeHtml((tags || []).join(','))}"
+                class="edit-btn-in-group rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 border border-slate-300 shadow-sm transition-colors">
+                編集
+              </button>
+              <button type="button" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}"
+                class="delete-btn-in-group rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 shadow-sm transition-colors">
+                削除
+              </button>
+            </div>
             ` : `
             <div class="flex items-center justify-end gap-2">
               ${t.protocol === 'ssh'
@@ -628,14 +1505,17 @@ export function renderApp(container) {
               class="connect-btn-in-group rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50">
               接続
             </button>`}
+              ${t.protocol === 'ssh' && (t.has_stored_credentials || t.has_ssh_key) ? `<a href="/files?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(t.name || '')}" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">ファイル</a>` : ''}
               <button type="button" class="active-sessions-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name || '')}">アクティブなセッション</button>
             </div>
             `}
           </td>
         </tr>
-      `,
+      `
+        }
       )
       .join('')
+    const theadTags = isManageMode ? '<th class="px-4 py-2 text-xs font-semibold text-slate-700">タグ</th>' : ''
     return `
       <div class="overflow-x-auto">
         <table class="min-w-full text-left text-sm">
@@ -644,6 +1524,7 @@ export function renderApp(container) {
               <th class="px-4 py-2 text-xs font-semibold text-slate-700">名前</th>
               <th class="px-4 py-2 text-xs font-semibold text-slate-700">ホスト</th>
               <th class="px-4 py-2 text-xs font-semibold text-slate-700">プロトコル</th>
+              ${theadTags}
               <th class="px-4 py-2"></th>
             </tr>
           </thead>
@@ -677,7 +1558,9 @@ export function renderApp(container) {
     return root
   }
 
-  function renderGroupTree(node, depth) {
+  /** selectedIdForHighlight: 省略時は selectedGroupId を使用（ホーム/サーバー管理）。録画ページでは selectedRecordingsGroupId を渡す */
+  function renderGroupTree(node, depth, selectedIdForHighlight) {
+    const selectedId = selectedIdForHighlight !== undefined ? selectedIdForHighlight : selectedGroupId
     const children = node.children || {}
     const keys = Object.keys(children)
     if (keys.length === 0) {
@@ -686,7 +1569,7 @@ export function renderApp(container) {
     const padClass = depth > 0 ? 'pl-4 border-l border-black ml-2' : ''
     let html = `<ul class="space-y-1 ${padClass}">`
     if (depth === 0) {
-      const isSelectedRoot = selectedGroupId === ''
+      const isSelectedRoot = selectedId === ''
       const rowClassRoot = isSelectedRoot ? 'bg-sky-100 text-sky-800 font-medium' : ''
       html += `
         <li>
@@ -707,7 +1590,7 @@ export function renderApp(container) {
       .forEach((key) => {
         const child = children[key]
         const count = (child.group && child.group.targets ? child.group.targets.length : 0) || 0
-        const isSelected = child.id === selectedGroupId
+        const isSelected = child.id === selectedId
         const rowClass = isSelected ? 'bg-sky-100 text-sky-800 font-medium' : ''
         const hasChildren = child.children && Object.keys(child.children).length > 0
         const isExpanded = expandedGroups.has(child.id)
@@ -737,8 +1620,17 @@ export function renderApp(container) {
     try {
       meData = await API.me()
       userNameEl.textContent = meData.username
-      if (meData.user_id === 'admin') {
-        document.getElementById('nav-api-ref')?.classList.remove('hidden')
+      const isAdmin = meData.role === 'admin'
+      const navApiRef = document.getElementById('nav-api-ref')
+      navRecordings?.classList.remove('hidden')
+      if (isAdmin) {
+        navApiRef?.classList.remove('hidden')
+        navUsers?.classList.remove('hidden')
+        navGroups?.classList.remove('hidden')
+      } else {
+        navApiRef?.classList.add('hidden')
+        navUsers?.classList.add('hidden')
+        navGroups?.classList.add('hidden')
       }
     } catch {
       renderLogin(container)
@@ -760,6 +1652,12 @@ export function renderApp(container) {
     showTreeView('home')
   })
 
+  navRecordings.addEventListener('click', (e) => {
+    e.preventDefault()
+    if (!meData) return
+    showRecordingsPage()
+  })
+
   userNameEl.addEventListener('click', (e) => {
     e.preventDefault()
     if (!meData) return
@@ -769,6 +1667,12 @@ export function renderApp(container) {
   navGroups.addEventListener('click', (e) => {
     e.preventDefault()
     showTreeView('manage')
+  })
+
+  navUsers?.addEventListener('click', (e) => {
+    e.preventDefault()
+    if (!meData || meData.role !== 'admin') return
+    showUsersPage()
   })
 
   logoutBtn.addEventListener('click', async () => {
@@ -786,4 +1690,45 @@ function escapeHtml(s) {
   const div = document.createElement('div')
   div.textContent = s
   return div.innerHTML
+}
+
+/** Proxmox風のタグピル（角丸・枠線・タグアイコン）を返す。tags は文字列配列。 */
+function renderTagPills(tags) {
+  if (!tags || tags.length === 0) {
+    return '<span class="text-xs text-slate-400">—</span>'
+  }
+  const tagIcon = '<svg class="shrink-0 opacity-70" width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M2 1.5C2 1.22 2.22 1 2.5 1H7.5l3 3-3 3H2.5C2.22 7 2 6.78 2 6.5v-5z"/></svg>'
+  return tags
+    .map((t) => `<span class="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 shadow-sm">${tagIcon}${escapeHtml(t)}</span>`)
+    .join('')
+}
+
+/** モーダル内のタグ入力欄の下に「登録済みのタグから選択」を表示し、クリックで入力欄に追加する */
+function fillExistingTagsPicker(modalEl, inputId) {
+  const input = modalEl.querySelector(`#${inputId}`)
+  const container = modalEl.querySelector(`#${inputId}-picker`)
+  if (!input || !container) return
+  API.tags()
+    .then((res) => {
+      const allTags = (res && res.tags) || []
+      if (allTags.length === 0) {
+        container.innerHTML = ''
+        return
+      }
+      container.innerHTML = `<p class="text-xs text-slate-500 mb-1.5">登録済みのタグから選択:</p><div class="flex flex-wrap gap-2">${allTags.map((t) => `<button type="button" class="existing-tag-pill rounded border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-sky-50 hover:border-sky-300 transition-colors" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`).join('')}</div>`
+      container.querySelectorAll('.existing-tag-pill').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const tag = (btn.dataset.tag || '').trim()
+          if (!tag) return
+          const raw = input.value.trim()
+          const current = raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : []
+          if (!current.includes(tag)) {
+            input.value = current.length ? `${raw}, ${tag}` : tag
+          }
+        })
+      })
+    })
+    .catch(() => {
+      container.innerHTML = ''
+    })
 }

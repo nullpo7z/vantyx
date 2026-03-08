@@ -73,14 +73,19 @@ func readTerminalCredentials(conn *websocket.Conn, target *access.Target) (sshpr
 		return sshproxy.Credentials{}, errInvalidCredentials
 	}
 	if m.UseStoredCredentials {
-		if target.SSHUsername == "" || target.SSHPassword == "" {
+		if target.SSHUsername == "" {
+			return sshproxy.Credentials{}, errNoStoredCredentials
+		}
+		if target.SSHPassword == "" && target.SSHPrivateKey == "" {
 			return sshproxy.Credentials{}, errNoStoredCredentials
 		}
 		return sshproxy.Credentials{
-			Username:    target.SSHUsername,
-			Password:    target.SSHPassword,
-			Name:        m.Name,
-			Description: m.Description,
+			Username:             target.SSHUsername,
+			Password:             target.SSHPassword,
+			PrivateKey:           target.SSHPrivateKey,
+			PrivateKeyPassphrase: target.SSHPrivateKeyPassphrase,
+			Name:                 m.Name,
+			Description:          m.Description,
 		}, nil
 	}
 	if m.Username == "" {
@@ -525,7 +530,7 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		}
 	}
 
-	if err := sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, termSess.Output, termSess.AttachCh, conn, touch, tee, stdinRecorder, cols, rows); err != nil {
+	if err := sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, conn, touch, tee, stdinRecorder, cols, rows); err != nil {
 		log.Printf("terminal bridge ended session_id=%s err=%v", id, err)
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+err.Error()))
 	} else {

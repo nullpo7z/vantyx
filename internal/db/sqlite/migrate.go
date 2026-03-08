@@ -102,6 +102,8 @@ func Migrate(db *sql.DB) error {
 	for _, alter := range []string{
 		`ALTER TABLE targets ADD COLUMN ssh_username TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE targets ADD COLUMN ssh_password TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE targets ADD COLUMN ssh_private_key TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE targets ADD COLUMN ssh_private_key_passphrase TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.ExecContext(ctx, alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return err
@@ -114,7 +116,7 @@ func Migrate(db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `UPDATE users SET role = 'admin' WHERE id = 'admin'`); err != nil {
 		return err
 	}
-	// Recordings: optional session name/description (from terminal session StartOptions).
+		// Recordings: optional session name/description (from terminal session StartOptions).
 	for _, alter := range []string{
 		`ALTER TABLE recordings ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE recordings ADD COLUMN session_description TEXT NOT NULL DEFAULT ''`,
@@ -123,5 +125,13 @@ func Migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	// User SSH public keys for SSH server (vantyx) public key authentication.
+	_, _ = db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS user_ssh_keys (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id TEXT NOT NULL,
+		key_line TEXT NOT NULL,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	)`)
 	return nil
 }

@@ -984,9 +984,9 @@ func TestSQLiteTargetStore_Update_ExecError(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("update failed")
-	mock.ExpectExec("UPDATE targets SET").WithArgs("n", "h", 22, "ssh", "", "", "", "t1").WillReturnError(wantErr)
+	mock.ExpectExec("UPDATE targets SET").WithArgs("n", "h", 22, "ssh", "", "", "", "", "", "t1").WillReturnError(wantErr)
 
-	_, err = store.Update(ctx, "t1", "n", "h", 22, ProtocolSSH, "", "", "")
+	_, err = store.Update(ctx, "t1", "n", "h", 22, ProtocolSSH, "", "", "", "", "")
 	if err != wantErr {
 		t.Fatalf("Update: got %v", err)
 	}
@@ -1005,9 +1005,9 @@ func TestSQLiteTargetStore_Update_RowsAffectedZero(t *testing.T) {
 	store := NewSQLiteTargetStore(db, nil, nil)
 	ctx := context.Background()
 
-	mock.ExpectExec("UPDATE targets SET").WithArgs("n", "h", 22, "ssh", "", "", "", "missing").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("UPDATE targets SET").WithArgs("n", "h", 22, "ssh", "", "", "", "", "", "missing").WillReturnResult(sqlmock.NewResult(0, 0))
 
-	_, err = store.Update(ctx, "missing", "n", "h", 22, ProtocolSSH, "", "", "")
+	_, err = store.Update(ctx, "missing", "n", "h", 22, ProtocolSSH, "", "", "", "", "")
 	if err != ErrTargetNotFound {
 		t.Fatalf("Update: got %v", err)
 	}
@@ -1026,12 +1026,12 @@ func TestSQLiteTargetStore_Update_Success(t *testing.T) {
 	store := NewSQLiteTargetStore(db, nil, nil)
 	ctx := context.Background()
 
-	mock.ExpectExec("UPDATE targets SET").WithArgs("new", "10.0.0.2", 2222, "telnet", "path", "user", "", "t1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE targets SET").WithArgs("new", "10.0.0.2", 2222, "telnet", "path", "user", "", "", "", "t1").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT id, name, host, port, protocol, path").WithArgs("t1").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "name", "host", "port", "protocol", "path", "ssh_username", "ssh_password"}).
-			AddRow("t1", "new", "10.0.0.2", 2222, "telnet", "path", "user", ""))
+		sqlmock.NewRows([]string{"id", "name", "host", "port", "protocol", "path", "ssh_username", "ssh_password", "ssh_private_key", "ssh_private_key_passphrase"}).
+			AddRow("t1", "new", "10.0.0.2", 2222, "telnet", "path", "user", "", "", ""))
 
-	got, err := store.Update(ctx, "t1", "new", "10.0.0.2", 2222, ProtocolTelnet, "path", "user", "")
+	got, err := store.Update(ctx, "t1", "new", "10.0.0.2", 2222, ProtocolTelnet, "path", "user", "", "", "")
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}

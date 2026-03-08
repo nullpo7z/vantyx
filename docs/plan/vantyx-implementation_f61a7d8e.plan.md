@@ -13,10 +13,10 @@ todos:
     status: completed
   - id: add-asciinema-recording-and-log-storage
     content: Asciinema 形式でのターミナル録画とテキストログ保存・検索機能を追加する
-    status: in_progress
+    status: completed
   - id: implement-file-transfer-sftp-tftp
     content: SFTP/TFTP ファイル転送バックエンドとファイルマネージャー UI を実装する
-    status: pending
+    status: completed
   - id: implement-vnc-rdp-remote-desktop
     content: noVNC ベースの VNC プロキシと RDP ブリッジを実装する
     status: pending

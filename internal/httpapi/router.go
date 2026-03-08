@@ -98,6 +98,9 @@ type App struct {
 	TerminalSessionManager terminalSessionStarter
 	LoginRateLimiter       *loginRateLimiter
 	DB                     *sql.DB
+
+	// SFTPClientFactory is optional. When set (e.g. in tests), file transfer handlers use it instead of connecting to a real SSH server.
+	SFTPClientFactory SFTPClientFactoryFunc
 }
 
 // newAppDBOpen, newAppMigrate, and newAppUserStore are set in tests to inject failures for coverage.
@@ -237,6 +240,9 @@ func (a *App) NewRouter() http.Handler {
 	r.Post("/api/logout", a.handleLogout)
 	r.Get("/api/me", a.handleMe)
 	r.Post("/api/me/password", a.handleChangePassword)
+	r.Get("/api/me/ssh-keys", a.handleListSSHKeys)
+	r.Post("/api/me/ssh-keys", a.handleAddSSHKey)
+	r.Delete("/api/me/ssh-keys/{key_id}", a.handleDeleteSSHKey)
 
 	// Access groups (requires auth)
 	r.Get("/api/groups", a.handleGroups)
@@ -274,6 +280,12 @@ func (a *App) NewRouter() http.Handler {
 	// Recordings (asciinema): list and download (owner only)
 	r.Get("/api/recordings", a.handleListRecordings)
 	r.Get("/api/recordings/{recording_id}/file", a.handleGetRecordingFile)
+
+	// File transfer (SFTP): list, download, upload, delete (requires auth + target access + stored credentials)
+	r.Get("/api/targets/{target_id}/files/download", a.handleDownloadFile)
+	r.Post("/api/targets/{target_id}/files/upload", a.handleUploadFile)
+	r.Get("/api/targets/{target_id}/files", a.handleListFiles)
+	r.Delete("/api/targets/{target_id}/files", a.handleDeleteFile)
 
 	// Admin-only: API spec and reference (Swagger UI)
 	r.Get("/api/spec", a.handleAPISpec)
@@ -510,6 +522,100 @@ func (a *App) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type sshKeyResponse struct {
+	ID        int64  `json:"id"`
+	KeyLine   string `json:"key_line"`
+	CreatedAt string `json:"created_at"`
+}
+
+type addSSHKeyRequest struct {
+	AuthorizedKey string `json:"authorized_key"`
+}
+
+// handleListSSHKeys returns the current user's SSH public keys (for vantyx SSH login).
+func (a *App) handleListSSHKeys(w http.ResponseWriter, r *http.Request) {
+	userID := a.currentUserID(r)
+	if userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	keys, err := a.UserStore.ListPublicKeys(userID)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	out := make([]sshKeyResponse, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, sshKeyResponse{
+			ID:        k.ID,
+			KeyLine:   k.KeyLine,
+			CreatedAt: k.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// handleAddSSHKey adds an SSH public key for the current user (authorized_keys format).
+func (a *App) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
+	userID := a.currentUserID(r)
+	if userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req addSSHKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.AuthorizedKey == "" {
+		writeJSONError(w, "authorized_key is required", http.StatusBadRequest)
+		return
+	}
+	id, err := a.UserStore.AddPublicKey(userID, req.AuthorizedKey)
+	if err != nil {
+		if errors.Is(err, auth.ErrInvalidPublicKey) {
+			writeJSONError(w, "invalid SSH public key", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, auth.ErrUserNotFound) {
+			writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(sshKeyResponse{ID: id, KeyLine: req.AuthorizedKey, CreatedAt: time.Now().UTC().Format(time.RFC3339)})
+}
+
+// handleDeleteSSHKey removes an SSH public key for the current user.
+func (a *App) handleDeleteSSHKey(w http.ResponseWriter, r *http.Request) {
+	userID := a.currentUserID(r)
+	if userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	keyIDStr := chi.URLParam(r, "key_id")
+	keyID, err := strconv.ParseInt(keyIDStr, 10, 64)
+	if err != nil || keyID <= 0 {
+		writeJSONError(w, "invalid key_id", http.StatusBadRequest)
+		return
+	}
+	err = a.UserStore.DeletePublicKey(userID, keyID)
+	if err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			writeJSONError(w, "key not found", http.StatusNotFound)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // currentUserID returns the authenticated user's ID from the session cookie, or "" if not authenticated.
 func (a *App) currentUserID(r *http.Request) string {
 	c, err := r.Cookie("vantyx_session")
@@ -604,6 +710,7 @@ type targetResponse struct {
 	Path                 string   `json:"path"`
 	SSHUsername          string   `json:"ssh_username,omitempty"`
 	HasStoredCredentials bool     `json:"has_stored_credentials,omitempty"`
+	HasSSHKey            bool     `json:"has_ssh_key,omitempty"`
 	Tags                 []string `json:"tags,omitempty"`
 }
 
@@ -627,8 +734,11 @@ func targetToResponse(t *access.Target, tags []string) targetResponse {
 	if tags == nil {
 		r.Tags = []string{}
 	}
-	if t.SSHUsername != "" && t.SSHPassword != "" {
+	if t.SSHUsername != "" && (t.SSHPassword != "" || t.SSHPrivateKey != "") {
 		r.HasStoredCredentials = true
+	}
+	if t.SSHPrivateKey != "" {
+		r.HasSSHKey = true
 	}
 	return r
 }
@@ -1279,14 +1389,16 @@ func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 }
 
 type createTargetRequest struct {
-	Name        string `json:"name"`
-	Host        string `json:"host"`
-	Port        uint16 `json:"port"`
-	Protocol    string `json:"protocol"`
-	Path        string `json:"path"`
-	GroupID     string `json:"group_id"`
-	SSHUsername string `json:"ssh_username"`
-	SSHPassword string `json:"ssh_password"`
+	Name                 string `json:"name"`
+	Host                 string `json:"host"`
+	Port                 uint16 `json:"port"`
+	Protocol             string `json:"protocol"`
+	Path                 string `json:"path"`
+	GroupID              string `json:"group_id"`
+	SSHUsername          string `json:"ssh_username"`
+	SSHPassword          string `json:"ssh_password"`
+	SSHPrivateKey        string `json:"ssh_private_key"`
+	SSHPrivateKeyPassphrase string `json:"ssh_private_key_passphrase"`
 }
 
 // handleCreateTarget creates a new target and adds it to the specified access group.
@@ -1366,7 +1478,7 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		if path == "" {
 			path = req.GroupID
 		}
-		_, err := a.TargetStore.CreateWithPath(ctx, access.TargetID(id), req.Name, req.Host, req.Port, protocol, access.GroupID(req.GroupID), path, strings.TrimSpace(req.SSHUsername), req.SSHPassword)
+		_, err := a.TargetStore.CreateWithPath(ctx, access.TargetID(id), req.Name, req.Host, req.Port, protocol, access.GroupID(req.GroupID), path, strings.TrimSpace(req.SSHUsername), req.SSHPassword, strings.TrimSpace(req.SSHPrivateKey), req.SSHPrivateKeyPassphrase)
 		if err == nil {
 			break
 		}
@@ -1392,13 +1504,15 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateTargetRequest struct {
-	Name        string  `json:"name"`
-	Host        string  `json:"host"`
-	Port        uint16  `json:"port"`
-	Protocol    string  `json:"protocol"`
-	Path        string  `json:"path"`
-	SSHUsername string  `json:"ssh_username"`
-	SSHPassword *string `json:"ssh_password,omitempty"` // nil = 変更しない、空文字 = 保存済みパスワードをクリア
+	Name                   string  `json:"name"`
+	Host                   string  `json:"host"`
+	Port                   uint16  `json:"port"`
+	Protocol               string  `json:"protocol"`
+	Path                   string  `json:"path"`
+	SSHUsername            string  `json:"ssh_username"`
+	SSHPassword            *string `json:"ssh_password,omitempty"`             // nil = 変更しない、空文字 = クリア
+	SSHPrivateKey          *string `json:"ssh_private_key,omitempty"`          // nil = 変更しない、空文字 = クリア
+	SSHPrivateKeyPassphrase *string `json:"ssh_private_key_passphrase,omitempty"` // nil = 変更しない、空文字 = クリア
 }
 
 // handleUpdateTarget updates an existing target. Caller must have access to the target.
@@ -1461,17 +1575,23 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "protocol must be ssh or telnet", http.StatusBadRequest)
 		return
 	}
-	sshPassword := ""
+	var sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string
+	cur, errCur := a.TargetStore.Get(ctx, access.TargetID(targetID))
+	if errCur == nil {
+		sshPassword = cur.SSHPassword
+		sshPrivateKey = cur.SSHPrivateKey
+		sshPrivateKeyPassphrase = cur.SSHPrivateKeyPassphrase
+	}
 	if req.SSHPassword != nil {
 		sshPassword = *req.SSHPassword
-	} else {
-		// パスワード省略時は現状維持のため取得
-		cur, errCur := a.TargetStore.Get(ctx, access.TargetID(targetID))
-		if errCur == nil {
-			sshPassword = cur.SSHPassword
-		}
 	}
-	t, err := a.TargetStore.Update(ctx, access.TargetID(targetID), req.Name, req.Host, req.Port, protocol, req.Path, strings.TrimSpace(req.SSHUsername), sshPassword)
+	if req.SSHPrivateKey != nil {
+		sshPrivateKey = strings.TrimSpace(*req.SSHPrivateKey)
+	}
+	if req.SSHPrivateKeyPassphrase != nil {
+		sshPrivateKeyPassphrase = *req.SSHPrivateKeyPassphrase
+	}
+	t, err := a.TargetStore.Update(ctx, access.TargetID(targetID), req.Name, req.Host, req.Port, protocol, req.Path, strings.TrimSpace(req.SSHUsername), sshPassword, sshPrivateKey, sshPrivateKeyPassphrase)
 	if err != nil {
 		if errors.Is(err, access.ErrTargetNotFound) {
 			writeJSONError(w, "target not found", http.StatusNotFound)

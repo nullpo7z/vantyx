@@ -645,11 +645,11 @@ func NewSQLiteTargetStore(db *sql.DB, cfg *StoreConfig, encKey []byte) *SQLiteTa
 
 // Create inserts a new target without path (group_id and path empty; may fail if FK requires a group).
 func (s *SQLiteTargetStore) Create(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol) (*Target, error) {
-	return s.CreateWithPath(ctx, id, name, host, port, protocol, "", "", "", "")
+	return s.CreateWithPath(ctx, id, name, host, port, protocol, "", "", "", "", "", "")
 }
 
-// CreateWithPath inserts a new target with group_id, path, and optional SSH credentials.
-func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string, sshUsername, sshPassword string) (*Target, error) {
+// CreateWithPath inserts a new target with group_id, path, and optional SSH credentials (password and/or private key).
+func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (*Target, error) {
 	if err := validateTargetID(id); err != nil {
 		return nil, err
 	}
@@ -667,7 +667,7 @@ func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, nam
 			return nil, err
 		}
 	}
-	if sshPassword != "" && (s.encKey == nil || len(s.encKey) != secret.KeySize) {
+	if (sshPassword != "" || sshPrivateKey != "") && (s.encKey == nil || len(s.encKey) != secret.KeySize) {
 		return nil, ErrEncryptionKeyRequired
 	}
 	storedPassword := sshPassword
@@ -678,31 +678,49 @@ func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, nam
 			return nil, errEnc
 		}
 	}
+	storedKey := sshPrivateKey
+	if sshPrivateKey != "" {
+		var errEnc error
+		storedKey, errEnc = secret.Encrypt(s.encKey, sshPrivateKey)
+		if errEnc != nil {
+			return nil, errEnc
+		}
+	}
+	storedKeyPass := sshPrivateKeyPassphrase
+	if sshPrivateKeyPassphrase != "" {
+		var errEnc error
+		storedKeyPass, errEnc = secret.Encrypt(s.encKey, sshPrivateKeyPassphrase)
+		if errEnc != nil {
+			return nil, errEnc
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO targets (id, name, host, port, protocol, group_id, path, ssh_username, ssh_password)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, string(id), name, host, int(port), string(protocol), string(groupID), path, sshUsername, storedPassword)
+		INSERT INTO targets (id, name, host, port, protocol, group_id, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, string(id), name, host, int(port), string(protocol), string(groupID), path, sshUsername, storedPassword, storedKey, storedKeyPass)
 	if err != nil {
 		return nil, ErrTargetExists
 	}
 	return &Target{
-		ID:          id,
-		Name:        name,
-		Host:        host,
-		Port:        port,
-		Protocol:    protocol,
-		Path:        path,
-		SSHUsername: sshUsername,
-		SSHPassword: sshPassword,
+		ID:                    id,
+		Name:                  name,
+		Host:                  host,
+		Port:                  port,
+		Protocol:              protocol,
+		Path:                  path,
+		SSHUsername:           sshUsername,
+		SSHPassword:           sshPassword,
+		SSHPrivateKey:         sshPrivateKey,
+		SSHPrivateKeyPassphrase: sshPrivateKeyPassphrase,
 	}, nil
 }
 
 // Update updates a target's name, host, port, protocol, path, and optional SSH credentials.
-// Target ID and group_id are not changed. If sshPassword is non-empty, encKey must be set (same as CreateWithPath).
-func (s *SQLiteTargetStore) Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword string) (*Target, error) {
+// Target ID and group_id are not changed. Non-empty sshPassword or sshPrivateKey require encKey.
+func (s *SQLiteTargetStore) Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (*Target, error) {
 	if err := validateTargetID(id); err != nil {
 		return nil, err
 	}
@@ -715,7 +733,7 @@ func (s *SQLiteTargetStore) Update(ctx context.Context, id TargetID, name, host 
 	if err := validateProtocol(protocol); err != nil {
 		return nil, err
 	}
-	if sshPassword != "" && (s.encKey == nil || len(s.encKey) != secret.KeySize) {
+	if (sshPassword != "" || sshPrivateKey != "") && (s.encKey == nil || len(s.encKey) != secret.KeySize) {
 		return nil, ErrEncryptionKeyRequired
 	}
 	storedPassword := sshPassword
@@ -726,13 +744,29 @@ func (s *SQLiteTargetStore) Update(ctx context.Context, id TargetID, name, host 
 			return nil, errEnc
 		}
 	}
+	storedKey := sshPrivateKey
+	if sshPrivateKey != "" {
+		var errEnc error
+		storedKey, errEnc = secret.Encrypt(s.encKey, sshPrivateKey)
+		if errEnc != nil {
+			return nil, errEnc
+		}
+	}
+	storedKeyPass := sshPrivateKeyPassphrase
+	if sshPrivateKeyPassphrase != "" {
+		var errEnc error
+		storedKeyPass, errEnc = secret.Encrypt(s.encKey, sshPrivateKeyPassphrase)
+		if errEnc != nil {
+			return nil, errEnc
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE targets SET name = ?, host = ?, port = ?, protocol = ?, path = ?, ssh_username = ?, ssh_password = ?, updated_at = CURRENT_TIMESTAMP
+		UPDATE targets SET name = ?, host = ?, port = ?, protocol = ?, path = ?, ssh_username = ?, ssh_password = ?, ssh_private_key = ?, ssh_private_key_passphrase = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, name, host, int(port), string(protocol), path, strings.TrimSpace(sshUsername), storedPassword, string(id))
+	`, name, host, int(port), string(protocol), path, strings.TrimSpace(sshUsername), storedPassword, storedKey, storedKeyPass, string(id))
 	if err != nil {
 		return nil, err
 	}
@@ -771,24 +805,17 @@ func (s *SQLiteTargetStore) Get(ctx context.Context, id TargetID) (*Target, erro
 	var idStr string
 	var port int
 	var proto string
-	var storedPassword string
+	var storedPassword, storedKey, storedKeyPass string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,'')
+		SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,'')
 		FROM targets
 		WHERE id = ?
-	`, string(id)).Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword)
+	`, string(id)).Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass)
 	if err == nil {
 		t.ID = TargetID(idStr)
-		if storedPassword != "" && s.encKey != nil && len(s.encKey) == secret.KeySize {
-			dec, errDec := secret.Decrypt(s.encKey, storedPassword)
-			if errDec == nil {
-				t.SSHPassword = dec
-			} else {
-				t.SSHPassword = storedPassword
-			}
-		} else {
-			t.SSHPassword = storedPassword
-		}
+		t.SSHPassword = decryptOrPlain(s.encKey, storedPassword)
+		t.SSHPrivateKey = decryptOrPlain(s.encKey, storedKey)
+		t.SSHPrivateKeyPassphrase = decryptOrPlain(s.encKey, storedKeyPass)
 	}
 	if err == sql.ErrNoRows {
 		return nil, ErrTargetNotFound
@@ -803,6 +830,19 @@ func (s *SQLiteTargetStore) Get(ctx context.Context, id TargetID) (*Target, erro
 	t.Port = uint16(port)
 	t.Protocol = Protocol(proto)
 	return &t, nil
+}
+
+func decryptOrPlain(encKey []byte, stored string) string {
+	if stored == "" {
+		return ""
+	}
+	if encKey != nil && len(encKey) == secret.KeySize {
+		dec, err := secret.Decrypt(encKey, stored)
+		if err == nil {
+			return dec
+		}
+	}
+	return stored
 }
 
 // ListByIDs returns targets for the given IDs in one query (preserves order, skips missing).
@@ -857,7 +897,7 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 		err := func() error {
 			// #nosec G202 -- placeholders is "?,?,?" from len(chunk); args are validated TargetIDs
 			rows, err := s.db.QueryContext(ctx, `
-				SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,'')
+				SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,'')
 				FROM targets
 				WHERE id IN (`+placeholders+`)`, args...)
 			if err != nil {
@@ -869,24 +909,17 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 				var idStr string
 				var port int
 				var proto string
-				var storedPassword string
-				if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword); err != nil {
+				var storedPassword, storedKey, storedKeyPass string
+				if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass); err != nil {
 					return err
 				}
 				if port >= 0 && port <= 65535 {
 					t.ID = TargetID(idStr)
 					t.Port = uint16(port)
 					t.Protocol = Protocol(proto)
-					if storedPassword != "" && s.encKey != nil && len(s.encKey) == secret.KeySize {
-						dec, errDec := secret.Decrypt(s.encKey, storedPassword)
-						if errDec == nil {
-							t.SSHPassword = dec
-						} else {
-							t.SSHPassword = storedPassword
-						}
-					} else {
-						t.SSHPassword = storedPassword
-					}
+					t.SSHPassword = decryptOrPlain(s.encKey, storedPassword)
+					t.SSHPrivateKey = decryptOrPlain(s.encKey, storedKey)
+					t.SSHPrivateKeyPassphrase = decryptOrPlain(s.encKey, storedKeyPass)
 					byID[TargetID(idStr)] = &t
 				}
 			}

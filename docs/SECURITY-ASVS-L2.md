@@ -37,7 +37,7 @@
 |------|------|------|
 | V5.1 入力のホワイトリスト・型・長さの検証 | ✅ | グループ/ターゲット ID は正規表現・長さ制限 (`access/sqlite_store.go`)。プロトコルは ssh/telnet のみ |
 | V5.2 SQL インジェクション対策 | ✅ | プレースホルダ `?` 使用（ExecContext/QueryRowContext）。文字列連結なし |
-| V5.3 出力エンコーディング（XSS） | ✅ | フロントで `escapeHtml()` によりユーザー由来表示をエスケープ |
+| V5.3 出力エンコーディング（XSS） | ✅ | フロントで `escapeHtml()` によりユーザー由来の表示をエスケープ |
 | V5.4 危険な文字・パス操作の制御 | ✅ | ホスト名は IP または hostname パターン。filepath.Clean でパストラバーサル対策 |
 
 ## 5. 暗号 (Cryptography)
@@ -53,7 +53,7 @@
 
 | 要件 | 状態 | 備考 |
 |------|------|------|
-| V8.1 エラー時にスタックトレース等をクライアントに返さない | ✅ | JSON で汎用メッセージのみ。内部エラーはログ |
+| V8.1 エラー時にスタックトレース等をクライアントに返さない | ✅ | 5xx は `writeInternalError` / `writeServiceUnavailableError` で汎用メッセージのみ。実詳細はサーバーログに記録 |
 | V8.2 監査ログ・認証イベントの記録 | ✅ | ログイン成功/失敗、ターミナル接続/拒否を log.Printf で記録 |
 
 ## 7. データ保護
@@ -77,7 +77,7 @@
 |------|------|------|
 | V14.4.1 X-Frame-Options | ✅ | DENY |
 | V14.4.2 CORS | ✅ | VANTYX_CORS_ALLOWED_ORIGINS で明示的オリジンのみ許可 |
-| V14.4.3 Content-Security-Policy | ✅ | default-src 'self'; script/style は self + unpkg（Swagger UI）; frame-ancestors 'none' |
+| V14.4.3 Content-Security-Policy | ✅ | default-src 'self'; script-src に wasm-unsafe-eval（録画プレイヤー用）; script/style は self + unpkg（Swagger UI）; frame-ancestors 'none' |
 | V14.4.4 X-Content-Type-Options | ✅ | nosniff |
 | V14.4.6 HSTS | ✅ | Strict-Transport-Security（HTTPS レスポンスのみ） |
 | V14.4 Cache-Control | ✅ | no-store, max-age=0 |
@@ -107,10 +107,13 @@
 5. **初期パスワードの強制変更（ASVS V2.2）**  
    ログイン応答に `require_password_change: true` を返す（admin かつパスワードがデフォルトのとき）。フロントでパスワード変更画面を表示。`POST /api/me/password` で現在パスワード・新パスワードを送信し、`UserStore.UpdatePassword` で更新。
 
+6. **V8.1 内部エラー漏洩の排除**  
+   500/503 応答で `err.Error()` を返していた箇所を、`writeInternalError` / `writeServiceUnavailableError` に統一。クライアントには "internal error" / "service unavailable" のみ返し、詳細はサーバー側でログ出力。
+
 ## 推奨する追加対策（任意）
 
 - **監査ログの永続化**: 現状は標準出力。本番ではファイル/外部ログ基盤への出力を検討。
 
 ---
 
-*最終確認: 2025年。ASVS 5.0 Level 2 を参照。*
+*最終確認: 2026年。ASVS 5.0 Level 2 に準拠したセキュリティチェックを実施。コードベース検証に基づく。*

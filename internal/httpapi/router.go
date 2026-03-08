@@ -596,11 +596,11 @@ func (a *App) handleDocs(w http.ResponseWriter, r *http.Request) {
 }
 
 type targetResponse struct {
-	ID                   string `json:"id"`
-	Name                 string `json:"name"`
-	Host                 string `json:"host"`
-	Port                 uint16 `json:"port"`
-	Protocol             string `json:"protocol"`
+	ID                   string   `json:"id"`
+	Name                 string   `json:"name"`
+	Host                 string   `json:"host"`
+	Port                 uint16   `json:"port"`
+	Protocol             string   `json:"protocol"`
 	Path                 string   `json:"path"`
 	SSHUsername          string   `json:"ssh_username,omitempty"`
 	HasStoredCredentials bool     `json:"has_stored_credentials,omitempty"`

@@ -87,7 +87,7 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
           echo "$HOME/go/bin" >> $GITHUB_PATH
       - name: Run gosec
-        run: gosec -exclude=G703 -exclude=G304 -exclude=G706 -exclude=G104 ./...
+        run: gosec -exclude=G703,G304,G706,G104 ./...
 
   build-docker:
     runs-on: ubuntu-latest

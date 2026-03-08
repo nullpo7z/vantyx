@@ -360,15 +360,15 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		items = append(items, map[string]interface{}{
-			"id":                   id,
-			"user_id":              userID,
-			"target_id":            tID,
-			"session_id":           sessID,
-			"channel_type":         channelType,
-			"started_at":           startedAt,
-			"ended_at":             endedAt.String,
-			"session_name":         sessName,
-			"session_description":  sessDesc,
+			"id":                  id,
+			"user_id":             userID,
+			"target_id":           tID,
+			"session_id":          sessID,
+			"channel_type":        channelType,
+			"started_at":          startedAt,
+			"ended_at":            endedAt.String,
+			"session_name":        sessName,
+			"session_description": sessDesc,
 		})
 	}
 	writeJSON(w, map[string]interface{}{"items": items})
@@ -430,7 +430,7 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tryOpen := func(path string) (*os.File, error) {
-		return os.Open(path)
+		return os.Open(path) // #nosec G304 -- path validated above (no .. or prefix)
 	}
 	sanitizeBasename := func(name string) string {
 		const ext = ".cast"
@@ -484,14 +484,14 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 	var stdinRecorder sshproxy.StdinRecorder
 	var recordingCloser func()
 	if recordingDir := os.Getenv("VANTYX_RECORDINGS_DIR"); recordingDir != "" {
-		_ = os.MkdirAll(recordingDir, 0750)
+		_ = os.MkdirAll(recordingDir, 0750) // #nosec G703 -- path from env, dir is admin-configured
 		// セッションIDは RFC3339Nano でコロンを含むため、ファイル名として使う場合はサニタイズ（Windows 等で不可の文字を置換）
 		safeName := strings.ReplaceAll(string(id), ":", "-")
 		safeName = strings.ReplaceAll(safeName, ".", "-")
 		castPath := filepath.Join(recordingDir, safeName+".cast")
-		f, err := os.Create(castPath)
+		f, err := os.Create(castPath) // #nosec G703 G304 -- path under recordingDir, safeName sanitized
 		if err != nil {
-			log.Printf("recording create failed session_id=%s path=%s err=%v", id, castPath, err)
+			log.Printf("recording create failed session_id=%s path=%s err=%v", id, castPath, err) // #nosec G706 -- log for debugging
 		} else {
 			startedAt := time.Now().UTC()
 			w, h := cols, rows

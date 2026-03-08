@@ -626,7 +626,6 @@ func TestSQLiteAccessGroupStore_AddUserToGroup_CanceledContext(t *testing.T) {
 	}
 }
 
-
 // TestSQLiteAccessGroupStore_RemoveUserFromGroup_NotFoundAndCanceled covers ErrGroupNotFound and Exec error.
 func TestSQLiteAccessGroupStore_RemoveUserFromGroup_NotFoundAndCanceled(t *testing.T) {
 	groups, _ := newTestSQLiteStores(t)

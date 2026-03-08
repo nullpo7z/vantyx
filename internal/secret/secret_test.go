@@ -89,3 +89,63 @@ func TestLoadKeyFromEnv(t *testing.T) {
 		t.Fatal("expected nil when env unset")
 	}
 }
+
+func TestDecrypt_InvalidKey(t *testing.T) {
+	key := make([]byte, KeySize)
+	enc, _ := Encrypt(key, "x")
+	_, err := Decrypt([]byte("short"), enc)
+	if err != ErrInvalidKey {
+		t.Fatalf("Decrypt wrong key length: got %v", err)
+	}
+}
+
+func TestDecrypt_InvalidBase64(t *testing.T) {
+	key := make([]byte, KeySize)
+	_, err := Decrypt(key, "v1:!!!")
+	if err != ErrInvalidInput {
+		t.Fatalf("Decrypt bad base64: got %v", err)
+	}
+}
+
+func TestDecrypt_TooShortPayload(t *testing.T) {
+	key := make([]byte, KeySize)
+	// base64 of less than NonceSize bytes
+	short := base64.RawStdEncoding.EncodeToString([]byte("short"))
+	_, err := Decrypt(key, CiphertextVersionPrefix+short)
+	if err != ErrInvalidInput {
+		t.Fatalf("Decrypt too short: got %v", err)
+	}
+}
+
+func TestDecrypt_TamperedCiphertext(t *testing.T) {
+	key := make([]byte, KeySize)
+	enc, _ := Encrypt(key, "secret")
+	raw, _ := base64.RawStdEncoding.DecodeString(enc[len(CiphertextVersionPrefix):])
+	// Tamper ciphertext part (after nonce) so GCM auth fails
+	if len(raw) > NonceSize {
+		raw[NonceSize] ^= 0xff
+	}
+	tampered := CiphertextVersionPrefix + base64.RawStdEncoding.EncodeToString(raw)
+	_, err := Decrypt(key, tampered)
+	if err != ErrDecrypt {
+		t.Fatalf("Decrypt tampered: got %v", err)
+	}
+}
+
+func TestLoadKeyFromEnv_InvalidBase64(t *testing.T) {
+	const envKey = "VANTYX_TEST_ENCRYPTION_KEY"
+	defer os.Unsetenv(envKey)
+	os.Setenv(envKey, "!!!")
+	if LoadKeyFromEnv(envKey) != nil {
+		t.Fatal("expected nil for invalid base64")
+	}
+}
+
+func TestLoadKeyFromEnv_WrongKeyLength(t *testing.T) {
+	const envKey = "VANTYX_TEST_ENCRYPTION_KEY"
+	defer os.Unsetenv(envKey)
+	os.Setenv(envKey, base64.StdEncoding.EncodeToString([]byte("16 bytes only!!")))
+	if LoadKeyFromEnv(envKey) != nil {
+		t.Fatal("expected nil for wrong key length")
+	}
+}

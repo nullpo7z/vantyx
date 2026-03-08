@@ -27,7 +27,7 @@ func newTestSQLiteAccessGroupStoreWithUser(t *testing.T, userID string) *SQLiteA
 	t.Helper()
 	store := newTestSQLiteAccessGroupStore(t)
 	userStore := auth.NewSQLiteUserStore(store.db)
-	if _, err := userStore.CreateUser(userID, userID, "Passw0rd!"); err != nil && err != auth.ErrUserExists {
+	if _, err := userStore.CreateUser(userID, userID, "Passw0rd!", ""); err != nil && err != auth.ErrUserExists {
 		t.Fatalf("create user: %v", err)
 	}
 	return store
@@ -71,6 +71,29 @@ func TestSQLiteAccessGroupStore_CreateAndMembership(t *testing.T) {
 	}
 	if len(ids) != 0 {
 		t.Fatalf("expected empty for unknown user, got %v", ids)
+	}
+
+	userIDs, err := store.UserIDsForGroup(ctx, "g1", nil)
+	if err != nil {
+		t.Fatalf("UserIDsForGroup: %v", err)
+	}
+	if len(userIDs) != 1 || string(userIDs[0]) != "user1" {
+		t.Fatalf("expected [user1], got %v", userIDs)
+	}
+	if err := store.RemoveUserFromGroup(ctx, "user1", "g1"); err != nil {
+		t.Fatalf("RemoveUserFromGroup: %v", err)
+	}
+	userIDs2, _ := store.UserIDsForGroup(ctx, "g1", nil)
+	if len(userIDs2) != 0 {
+		t.Fatalf("expected empty after remove, got %v", userIDs2)
+	}
+}
+
+func TestSQLiteAccessGroupStore_RemoveUserFromGroup_UnknownGroup(t *testing.T) {
+	ctx := context.Background()
+	store := newTestSQLiteAccessGroupStore(t)
+	if err := store.RemoveUserFromGroup(ctx, "u1", "missing"); err != ErrGroupNotFound {
+		t.Fatalf("expected ErrGroupNotFound, got %v", err)
 	}
 }
 

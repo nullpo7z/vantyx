@@ -37,10 +37,15 @@ type AccessGroupStore interface {
 	Create(ctx context.Context, id GroupID, name string) (*AccessGroup, error)
 	Get(ctx context.Context, id GroupID) (*AccessGroup, error)
 	AddUserToGroup(ctx context.Context, userID UserID, groupID GroupID) error
+	RemoveUserFromGroup(ctx context.Context, userID UserID, groupID GroupID) error
+	UserIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]UserID, error)
 	AddTargetToGroup(ctx context.Context, groupID GroupID, targetID TargetID) error
 	GroupIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]GroupID, error)
 	TargetIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]TargetID, error)
 	TargetIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]TargetID, error)
+	// Tags: グループに付与されたタグ。タグ一致でもアクセス権を付与する。
+	TagsForGroup(ctx context.Context, groupID GroupID) ([]string, error)
+	SetGroupTags(ctx context.Context, groupID GroupID, tags []string) error
 }
 
 var (

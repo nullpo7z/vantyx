@@ -2,16 +2,24 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/recording"
 	"github.com/nullpo7z/vantyx/internal/session"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
@@ -153,7 +161,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	allowed, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 	allowedSet := make(map[access.TargetID]struct{})
@@ -209,8 +217,20 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		Name:        creds.Name,
 		Description: creds.Description,
 	}
+	q := r.URL.Query()
+	cols, rows := 80, 24
+	if c := q.Get("cols"); c != "" {
+		if n, err := strconv.Atoi(c); err == nil && n > 0 && n <= 512 {
+			cols = n
+		}
+	}
+	if rv := q.Get("rows"); rv != "" {
+		if n, err := strconv.Atoi(rv); err == nil && n > 0 && n <= 256 {
+			rows = n
+		}
+	}
 	_, err = a.TerminalSessionManager.Start(id, opts, func(ctx context.Context, termSess *session.Session) {
-		runDetachableBridge(ctx, termSess, a.TerminalSessionManager, id, conn, target, creds)
+		a.runDetachableBridge(ctx, termSess, a.TerminalSessionManager, id, conn, target, creds, cols, rows)
 	})
 	if err != nil {
 		// #nosec G706 -- audit log; err from Start
@@ -300,6 +320,147 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleListRecordings returns recordings for the current user (metadata only, no file_path).
+func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("vantyx_session")
+	if err != nil || cookie.Value == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	authSess, err := a.SessionStore.Get(cookie.Value)
+	if err != nil {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if a.DB == nil {
+		writeJSON(w, map[string]interface{}{"items": []interface{}{}})
+		return
+	}
+	ctx := r.Context()
+	q := r.URL.Query()
+	targetID := q.Get("target_id")
+	query := `SELECT id, user_id, target_id, session_id, channel_type, started_at, ended_at, COALESCE(session_name, ''), COALESCE(session_description, '') FROM recordings WHERE user_id = ?`
+	args := []interface{}{authSess.UserID}
+	if targetID != "" {
+		query += ` AND target_id = ?`
+		args = append(args, targetID)
+	}
+	query += ` ORDER BY started_at DESC LIMIT 200`
+	rows, err := a.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	defer rows.Close()
+	var items []map[string]interface{}
+	for rows.Next() {
+		var id, userID, tID, sessID, channelType, startedAt, sessName, sessDesc string
+		var endedAt sql.NullString
+		if err := rows.Scan(&id, &userID, &tID, &sessID, &channelType, &startedAt, &endedAt, &sessName, &sessDesc); err != nil {
+			continue
+		}
+		items = append(items, map[string]interface{}{
+			"id":                   id,
+			"user_id":              userID,
+			"target_id":            tID,
+			"session_id":           sessID,
+			"channel_type":         channelType,
+			"started_at":           startedAt,
+			"ended_at":             endedAt.String,
+			"session_name":         sessName,
+			"session_description":  sessDesc,
+		})
+	}
+	writeJSON(w, map[string]interface{}{"items": items})
+}
+
+// handleGetRecordingFile serves the asciinema .cast file; caller must own the recording.
+func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("vantyx_session")
+	if err != nil || cookie.Value == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	authSess, err := a.SessionStore.Get(cookie.Value)
+	if err != nil {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	rawID := chi.URLParam(r, "recording_id")
+	if rawID == "" {
+		writeJSONError(w, "recording_id required", http.StatusBadRequest)
+		return
+	}
+	recordingID := rawID
+	if decoded, e := url.PathUnescape(rawID); e == nil {
+		recordingID = decoded
+	}
+	if a.DB == nil {
+		writeJSONError(w, "recordings not available", http.StatusServiceUnavailable)
+		return
+	}
+	var filePath string
+	err = a.DB.QueryRowContext(r.Context(), `SELECT file_path FROM recordings WHERE id = ? AND user_id = ?`, recordingID, authSess.UserID).Scan(&filePath)
+	if err == sql.ErrNoRows {
+		writeJSONError(w, "recording not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	recordingDir := os.Getenv("VANTYX_RECORDINGS_DIR")
+	if recordingDir == "" {
+		writeJSONError(w, "recordings not configured", http.StatusServiceUnavailable)
+		return
+	}
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		writeJSONError(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	absDir, err := filepath.Abs(recordingDir)
+	if err != nil {
+		writeJSONError(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	rel, err := filepath.Rel(absDir, absPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		writeJSONError(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	tryOpen := func(path string) (*os.File, error) {
+		return os.Open(path)
+	}
+	sanitizeBasename := func(name string) string {
+		const ext = ".cast"
+		if !strings.HasSuffix(name, ext) {
+			s := strings.ReplaceAll(name, ":", "-")
+			return strings.ReplaceAll(s, ".", "-")
+		}
+		prefix := name[:len(name)-len(ext)]
+		safe := strings.ReplaceAll(prefix, ":", "-")
+		safe = strings.ReplaceAll(safe, ".", "-")
+		return safe + ext
+	}
+	f, err := tryOpen(filePath)
+	if err != nil {
+		dir, base := filepath.Dir(filePath), filepath.Base(filePath)
+		safeBase := sanitizeBasename(base)
+		if safeBase != base {
+			f, err = tryOpen(filepath.Join(dir, safeBase))
+		}
+	}
+	if err != nil {
+		writeJSONError(w, "recording file not found", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(filePath))
+	_, _ = io.Copy(w, f)
+}
+
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
@@ -307,7 +468,9 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 
 // runDetachableBridge starts the SSH bridge and keeps it running when the client detaches.
 // Initial conn is attached first; further attaches (resume) come via termSess.AttachCh.
-func runDetachableBridge(ctx context.Context, termSess *session.Session, manager terminalSessionStarter, id session.ID, conn *websocket.Conn, target *access.Target, creds sshproxy.Credentials) {
+// When VANTYX_RECORDINGS_DIR is set, asciinema-format recording is written and metadata stored in recordings table.
+// cols and rows are the initial terminal size (from client) for PTY and recording; 0 uses bridge default.
+func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session, manager terminalSessionStarter, id session.ID, conn *websocket.Conn, target *access.Target, creds sshproxy.Credentials, cols, rows int) {
 	_ = conn.WriteMessage(websocket.TextMessage, []byte(""))
 	// Send session_id so the client can reconnect (resume) without credentials.
 	if b, err := json.Marshal(struct {
@@ -316,7 +479,53 @@ func runDetachableBridge(ctx context.Context, termSess *session.Session, manager
 		_ = conn.WriteMessage(websocket.TextMessage, b)
 	}
 	touch := func() { manager.Touch(id) }
-	if err := sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, termSess.Output, termSess.AttachCh, conn, touch); err != nil {
+
+	var tee io.Writer
+	var stdinRecorder sshproxy.StdinRecorder
+	var recordingCloser func()
+	if recordingDir := os.Getenv("VANTYX_RECORDINGS_DIR"); recordingDir != "" {
+		_ = os.MkdirAll(recordingDir, 0750)
+		// セッションIDは RFC3339Nano でコロンを含むため、ファイル名として使う場合はサニタイズ（Windows 等で不可の文字を置換）
+		safeName := strings.ReplaceAll(string(id), ":", "-")
+		safeName = strings.ReplaceAll(safeName, ".", "-")
+		castPath := filepath.Join(recordingDir, safeName+".cast")
+		f, err := os.Create(castPath)
+		if err != nil {
+			log.Printf("recording create failed session_id=%s path=%s err=%v", id, castPath, err)
+		} else {
+			startedAt := time.Now().UTC()
+			w, h := cols, rows
+			if w <= 0 {
+				w = 80
+			}
+			if h <= 0 {
+				h = 24
+			}
+			asc := recording.NewAsciinemaWriter(f, w, h)
+			tee = asc
+			stdinRecorder = asc
+			if a.DB != nil {
+				sessName := termSess.Name
+				sessDesc := termSess.Description
+				if _, err := a.DB.ExecContext(ctx, `INSERT INTO recordings (id, user_id, target_id, session_id, channel_type, file_path, started_at, session_name, session_description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					string(id), termSess.UserID, termSess.TargetID, string(id), "browser", castPath, startedAt.Format("2006-01-02 15:04:05"), sessName, sessDesc); err != nil {
+					log.Printf("recording insert failed session_id=%s err=%v", id, err)
+				}
+			}
+			recordingCloser = func() {
+				_ = f.Sync() // バッファをディスクにフラッシュしてから閉じる
+				_ = f.Close()
+				if a.DB != nil {
+					_, _ = a.DB.ExecContext(context.Background(), `UPDATE recordings SET ended_at = ? WHERE id = ?`, time.Now().UTC().Format("2006-01-02 15:04:05"), string(id))
+				}
+			}
+		}
+		if recordingCloser != nil {
+			defer recordingCloser()
+		}
+	}
+
+	if err := sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, termSess.Output, termSess.AttachCh, conn, touch, tee, stdinRecorder, cols, rows); err != nil {
 		log.Printf("terminal bridge ended session_id=%s err=%v", id, err)
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+err.Error()))
 	} else {
@@ -324,6 +533,7 @@ func runDetachableBridge(ctx context.Context, termSess *session.Session, manager
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("session_ended: SSH session closed"))
 	}
 	_ = conn.Close()
-	// サーバー側でセッションが終了したため、バックエンドのセッションも破棄（再接続不可にする）
-	manager.Stop(id)
+	// コールバックから return すると Manager の goroutine が sess.done を close し delete(m.sessions, id) するため、
+	// ここで manager.Stop(id) を呼ぶとデッドロックになる（Stop は <-sess.done で待つが、return するまで done は close されない）。
+	// セッション一覧からの削除はコールバック return 時に自動で行われる。
 }

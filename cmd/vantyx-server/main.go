@@ -36,8 +36,8 @@ const (
 	hstsMaxAge                = "31536000"
 	hstsIncludeSubdomains     = "includeSubDomains"
 	defaultShutdownTimeoutSec = 10
-	// CSP: default self; script/style from self + unpkg (Swagger UI). style-src 'unsafe-inline' 'unsafe-hashes' for Swagger UI and frontend inline style attributes (ASVS V14.4.3, V14.4.4).
-	cspValue = "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' https://unpkg.com 'unsafe-inline' 'unsafe-hashes'; frame-ancestors 'none'; base-uri 'self'"
+	// CSP: default self; script/style from self + unpkg (Swagger UI). script-src includes sha256 hash for /docs inline init script (ASVS V14.4.3). wasm-unsafe-eval required for asciinema-player (WebAssembly).
+	cspValue = "default-src 'self'; script-src 'self' https://unpkg.com 'sha256-s8+L0bCTMcFupV+e7ZrRCMZiZTxI6IiNza6yMagaWHs=' 'wasm-unsafe-eval'; style-src 'self' https://unpkg.com 'unsafe-inline' 'unsafe-hashes'; frame-ancestors 'none'; base-uri 'self'"
 )
 
 func main() {

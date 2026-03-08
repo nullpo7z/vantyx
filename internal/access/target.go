@@ -33,7 +33,12 @@ type TargetStore interface {
 	Create(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol) (*Target, error)
 	CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string, sshUsername, sshPassword string) (*Target, error)
 	Get(ctx context.Context, id TargetID) (*Target, error)
+	Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword string) (*Target, error)
+	Delete(ctx context.Context, id TargetID) error
 	ListByIDs(ctx context.Context, ids []TargetID, opts *ListOpts) ([]*Target, error)
+	// Tags: ターゲットに付与されたタグ。ユーザーが同じタグを持つとアクセス可能。
+	TagsForTarget(ctx context.Context, targetID TargetID) ([]string, error)
+	SetTargetTags(ctx context.Context, targetID TargetID, tags []string) error
 }
 
 var (

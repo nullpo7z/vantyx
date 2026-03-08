@@ -367,7 +367,7 @@ func TestAPISpec_ForbiddenNonAdmin(t *testing.T) {
 	ctx := context.Background()
 	app := newTestApp(t)
 	router := app.NewRouter()
-	_, _ = app.UserStore.CreateUser("user1", "user1", "Pass123!")
+	_, _ = app.UserStore.CreateUser("user1", "user1", "Pass123!", "")
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("user1"), access.GroupID("g1"))
 	sess, _ := app.SessionStore.Create("user1")
@@ -406,6 +406,128 @@ func TestDocs_UnauthorizedAndAdmin(t *testing.T) {
 	}
 	if !bytes.Contains(w2.Body.Bytes(), []byte("swagger-ui")) {
 		t.Fatal("expected swagger-ui in docs body")
+	}
+}
+
+func TestUsers_AdminOnly(t *testing.T) {
+	ctx := context.Background()
+	app := newTestApp(t)
+	router := app.NewRouter()
+	_, _ = app.UserStore.CreateUser("u1", "user1", "Pass123!", "")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("u1"), access.GroupID("g1"))
+	adminSess, _ := app.SessionStore.Create("admin")
+	userSess, _ := app.SessionStore.Create("u1")
+
+	// Non-admin: 403 on GET /api/users
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: userSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin GET /api/users expected 403, got %d", w.Result().StatusCode)
+	}
+
+	// Admin: 200 and list includes admin + u1
+	req2 := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req2.AddCookie(&http.Cookie{Name: "vantyx_session", Value: adminSess.ID, Path: "/"})
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Result().StatusCode != http.StatusOK {
+		t.Fatalf("admin GET /api/users expected 200, got %d body=%s", w2.Result().StatusCode, w2.Body.Bytes())
+	}
+	var users []struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(w2.Body).Decode(&users); err != nil {
+		t.Fatalf("decode users: %v", err)
+	}
+	if len(users) < 2 {
+		t.Fatalf("expected at least admin and u1, got %d", len(users))
+	}
+
+	// Admin: POST /api/users creates user
+	body := []byte(`{"username":"newuser","password":"NewPass1!"}`)
+	req3 := httptest.NewRequest(http.MethodPost, "/api/users", bytes.NewReader(body))
+	req3.AddCookie(&http.Cookie{Name: "vantyx_session", Value: adminSess.ID, Path: "/"})
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	router.ServeHTTP(w3, req3)
+	if w3.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("admin POST /api/users expected 201, got %d body=%s", w3.Result().StatusCode, w3.Body.Bytes())
+	}
+	var created struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(w3.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created user: %v", err)
+	}
+	if created.Username != "newuser" {
+		t.Fatalf("expected username newuser, got %s", created.Username)
+	}
+}
+
+func TestGroupMembers_AdminOnly(t *testing.T) {
+	ctx := context.Background()
+	app := newTestApp(t)
+	router := app.NewRouter()
+	_, _ = app.UserStore.CreateUser("u1", "user1", "Pass123!", "")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("u1"), access.GroupID("g1"))
+	adminSess, _ := app.SessionStore.Create("admin")
+	userSess, _ := app.SessionStore.Create("u1")
+
+	// Non-admin: 403 on GET /api/groups/g1/members
+	req := httptest.NewRequest(http.MethodGet, "/api/groups/g1/members", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: userSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin GET group members expected 403, got %d", w.Result().StatusCode)
+	}
+
+	// Admin: 200 and members include u1
+	req2 := httptest.NewRequest(http.MethodGet, "/api/groups/g1/members", nil)
+	req2.AddCookie(&http.Cookie{Name: "vantyx_session", Value: adminSess.ID, Path: "/"})
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Result().StatusCode != http.StatusOK {
+		t.Fatalf("admin GET group members expected 200, got %d", w2.Result().StatusCode)
+	}
+	var members []struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(w2.Body).Decode(&members); err != nil {
+		t.Fatalf("decode members: %v", err)
+	}
+	if len(members) != 1 || members[0].ID != "u1" {
+		t.Fatalf("expected [u1], got %+v", members)
+	}
+
+	// Admin: POST add member (admin to g1)
+	body := []byte(`{"user_id":"admin"}`)
+	req3 := httptest.NewRequest(http.MethodPost, "/api/groups/g1/members", bytes.NewReader(body))
+	req3.AddCookie(&http.Cookie{Name: "vantyx_session", Value: adminSess.ID, Path: "/"})
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	router.ServeHTTP(w3, req3)
+	if w3.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("admin POST group member expected 204, got %d", w3.Result().StatusCode)
+	}
+	// Admin: DELETE remove member u1
+	req4 := httptest.NewRequest(http.MethodDelete, "/api/groups/g1/members/u1", nil)
+	req4.AddCookie(&http.Cookie{Name: "vantyx_session", Value: adminSess.ID, Path: "/"})
+	w4 := httptest.NewRecorder()
+	router.ServeHTTP(w4, req4)
+	if w4.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("admin DELETE group member expected 204, got %d", w4.Result().StatusCode)
+	}
+	members2, _ := app.AccessGroupStore.UserIDsForGroup(ctx, access.GroupID("g1"), nil)
+	if len(members2) != 1 || string(members2[0]) != "admin" {
+		t.Fatalf("after remove u1, expected [admin], got %v", members2)
 	}
 }
 
@@ -993,7 +1115,7 @@ type userStoreFailingCreateUser struct {
 	auth.UserStore
 }
 
-func (u *userStoreFailingCreateUser) CreateUser(id, username, plainPassword string) (*auth.User, error) {
+func (u *userStoreFailingCreateUser) CreateUser(id, username, plainPassword, role string) (*auth.User, error) {
 	return nil, errors.New("injected create user error")
 }
 
@@ -1290,6 +1412,41 @@ func TestApp_CreateTarget_EmptyName(t *testing.T) {
 
 	if w.Result().StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
+	}
+}
+
+// TestApp_CreateTarget_ServiceUnavailableWhenEncryptionKeyMissing triggers writeServiceUnavailableError (503) when SSH password is set but VANTYX_SSH_PASSWORD_ENCRYPTION_KEY is not set.
+func TestApp_CreateTarget_ServiceUnavailableWhenEncryptionKeyMissing(t *testing.T) {
+	oldVal := os.Getenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY")
+	os.Unsetenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY")
+	defer func() {
+		if oldVal != "" {
+			_ = os.Setenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY", oldVal)
+		}
+	}()
+
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
+	sess, _ := app.SessionStore.Create("admin")
+
+	body := []byte(`{"name":"Srv","host":"10.0.0.1","port":22,"protocol":"ssh","group_id":"default","ssh_username":"root","ssh_password":"secret"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/targets", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	res := w.Result()
+	if res.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", res.StatusCode)
+	}
+	var out struct{ Message string }
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	if out.Message != "service unavailable" {
+		t.Fatalf("expected message 'service unavailable', got %q", out.Message)
 	}
 }
 
@@ -1695,5 +1852,311 @@ func TestApp_Groups_TwoGroupsWithTargets(t *testing.T) {
 	}
 	if len(list) != 2 {
 		t.Fatalf("expected 2 groups, got %d", len(list))
+	}
+}
+
+func TestApp_UpdateTarget_Success(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Old", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"name":"Updated","host":"10.0.0.2","port":2222,"protocol":"ssh","path":"","ssh_username":"","ssh_password":""}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/targets/t1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+	var out targetResponse
+	if err := json.NewDecoder(w.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Name != "Updated" || out.Host != "10.0.0.2" || out.Port != 2222 {
+		t.Fatalf("unexpected response: %+v", out)
+	}
+}
+
+func TestApp_UpdateTarget_Forbidden(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g2"), access.TargetID("t2"))
+
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"name":"X","host":"1.1.1.1","port":22,"protocol":"ssh","path":"","ssh_username":"","ssh_password":""}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/targets/t2", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_UpdateTarget_ServiceUnavailableWhenEncryptionKeyMissing(t *testing.T) {
+	oldVal := os.Getenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY")
+	os.Unsetenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY")
+	defer func() {
+		if oldVal != "" {
+			_ = os.Setenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY", oldVal)
+		}
+	}()
+
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"name":"H1","host":"10.0.0.1","port":22,"protocol":"ssh","path":"g1","ssh_username":"root","ssh_password":"secret"}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/targets/t1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	res := w.Result()
+	if res.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", res.StatusCode)
+	}
+	var out struct{ Message string }
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	if out.Message != "service unavailable" {
+		t.Fatalf("expected message 'service unavailable', got %q", out.Message)
+	}
+}
+
+func TestApp_DeleteTarget_Success(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/targets/t1", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Result().StatusCode)
+	}
+	if _, err := app.TargetStore.Get(ctx, access.TargetID("t1")); err != access.ErrTargetNotFound {
+		t.Fatalf("target should be deleted, got %v", err)
+	}
+}
+
+func TestApp_DeleteTarget_Forbidden(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g2"), access.TargetID("t2"))
+
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/targets/t2", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_UserTags_Admin(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/users/admin/tags", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestApp_SetUserTags_Admin(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	body := []byte(`{"tags":["prod","dev"]}`)
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodPut, "/api/users/admin/tags", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestApp_GroupTags_Admin(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/groups/g1/tags", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_SetGroupTags_Admin(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	body := []byte(`{"tags":["a","b"]}`)
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodPut, "/api/groups/g1/tags", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_ListTags_Authenticated(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/tags", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_TargetTags_Admin(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/t1/tags", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_SetTargetTags_Admin(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	body := []byte(`{"tags":["web"]}`)
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodPut, "/api/targets/t1/tags", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_ListRecordings_Authenticated(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_GetRecordingFile_NotFound(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/nonexistent-id/file", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_GetRecordingFile_Unauthorized(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/any/file", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_GetRecordingFile_RecordingsDirUnset(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, err := app.DB.ExecContext(ctx, `INSERT INTO recordings (id, user_id, target_id, session_id, channel_type, started_at, file_path) VALUES ('rec1', 'admin', 't1', 's1', 'ssh', datetime('now'), '/tmp/rec1.cast')`)
+	if err != nil {
+		t.Skipf("recordings table or schema: %v", err)
+	}
+	orig := os.Getenv("VANTYX_RECORDINGS_DIR")
+	os.Unsetenv("VANTYX_RECORDINGS_DIR")
+	defer func() { _ = os.Setenv("VANTYX_RECORDINGS_DIR", orig) }()
+
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/rec1/file", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when RECORDINGS_DIR unset, got %d", w.Result().StatusCode)
 	}
 }

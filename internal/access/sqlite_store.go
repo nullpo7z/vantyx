@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net"
 	"regexp"
+	"sort"
+	"strings"
 	"time"
 	"unicode"
 
@@ -212,6 +214,128 @@ func (s *SQLiteAccessGroupStore) AddUserToGroup(ctx context.Context, userID User
 	return tx.Commit()
 }
 
+// RemoveUserFromGroup removes a user from an access group.
+func (s *SQLiteAccessGroupStore) RemoveUserFromGroup(ctx context.Context, userID UserID, groupID GroupID) error {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM access_groups WHERE id = ?`, string(groupID)).Scan(&exists); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrGroupNotFound
+		}
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM user_groups WHERE user_id = ? AND group_id = ?`, string(userID), string(groupID))
+	return err
+}
+
+// UserIDsForGroup returns user IDs that belong to the group.
+func (s *SQLiteAccessGroupStore) UserIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]UserID, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	limit, offset := listLimit(opts, s.defaultListLimit)
+	var rows *sql.Rows
+	var err error
+	if opts != nil && opts.AfterID != "" {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT user_id
+			FROM user_groups
+			WHERE group_id = ? AND user_id > ?
+			ORDER BY user_id
+			LIMIT ?
+		`, string(groupID), opts.AfterID, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT user_id
+			FROM user_groups
+			WHERE group_id = ?
+			ORDER BY user_id
+			LIMIT ? OFFSET ?
+		`, string(groupID), limit, offset)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []UserID
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			return nil, err
+		}
+		out = append(out, UserID(uid))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+const maxTagLen = 64
+
+// validateTag returns nil if tag is valid (1–64 chars, alphanumeric + hyphen/underscore).
+func validateTag(tag string) error {
+	if tag == "" || len(tag) > maxTagLen {
+		return errors.New("tag must be 1–64 characters")
+	}
+	for _, r := range tag {
+		if r != '-' && r != '_' && !unicode.IsLetter(r) && !unicode.IsNumber(r) {
+			return errors.New("tag may only contain letters, numbers, hyphen, underscore")
+		}
+	}
+	return nil
+}
+
+// TagsForGroup returns tags assigned to the group.
+func (s *SQLiteAccessGroupStore) TagsForGroup(ctx context.Context, groupID GroupID) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `SELECT tag FROM group_tags WHERE group_id = ? ORDER BY tag`, string(groupID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, err
+		}
+		out = append(out, tag)
+	}
+	return out, rows.Err()
+}
+
+// SetGroupTags replaces all tags for the group. Pass nil or empty to clear.
+func (s *SQLiteAccessGroupStore) SetGroupTags(ctx context.Context, groupID GroupID, tags []string) error {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	for _, tag := range tags {
+		if err := validateTag(tag); err != nil {
+			return err
+		}
+	}
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM access_groups WHERE id = ?`, string(groupID)).Scan(&exists); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrGroupNotFound
+		}
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM group_tags WHERE group_id = ?`, string(groupID)); err != nil {
+		return err
+	}
+	for _, tag := range tags {
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO group_tags (group_id, tag) VALUES (?, ?)`, string(groupID), tag); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // AddTargetToGroup grants the group access to the target (within a transaction to avoid TOCTOU).
 func (s *SQLiteAccessGroupStore) AddTargetToGroup(ctx context.Context, groupID GroupID, targetID TargetID) error {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
@@ -241,48 +365,103 @@ func (s *SQLiteAccessGroupStore) AddTargetToGroup(ctx context.Context, groupID G
 	return tx.Commit()
 }
 
-// GroupIDsForUser returns the set of access group IDs the user belongs to.
+// GroupIDsForUser returns the set of access group IDs the user can see: direct membership (user_groups)
+// and tag-based (groups that have a target with matching user tag, or groups with matching tag).
 func (s *SQLiteAccessGroupStore) GroupIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]GroupID, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
-	limit, offset := listLimit(opts, s.defaultListLimit)
-	var rows *sql.Rows
-	var err error
-	if opts != nil && opts.AfterID != "" {
-		rows, err = s.db.QueryContext(ctx, `
-			SELECT group_id
-			FROM user_groups
-			WHERE user_id = ? AND group_id > ?
-			ORDER BY group_id
-			LIMIT ?
-		`, string(userID), opts.AfterID, limit)
-	} else {
-		rows, err = s.db.QueryContext(ctx, `
-			SELECT group_id
-			FROM user_groups
-			WHERE user_id = ?
-			ORDER BY group_id
-			LIMIT ? OFFSET ?
-		`, string(userID), limit, offset)
-	}
+	seen := make(map[GroupID]bool)
+
+	// 1) Via direct group membership
+	rows1, err := s.db.QueryContext(ctx, `
+		SELECT group_id FROM user_groups WHERE user_id = ?
+	`, string(userID))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []GroupID
-	for rows.Next() {
+	for rows1.Next() {
 		var gid string
-		if err := rows.Scan(&gid); err != nil {
+		if err := rows1.Scan(&gid); err != nil {
+			rows1.Close()
 			return nil, err
 		}
-		out = append(out, GroupID(gid))
+		seen[GroupID(gid)] = true
 	}
-	if err := rows.Err(); err != nil {
+	rows1.Close()
+	if err := rows1.Err(); err != nil {
 		return nil, err
 	}
-	return out, nil
+
+	// 2) Via user tag = target tag (groups that contain such targets)
+	rows2, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT gt.group_id
+		FROM group_targets gt
+		INNER JOIN target_tags tt ON gt.target_id = tt.target_id
+		INNER JOIN user_tags ut ON ut.tag = tt.tag AND ut.user_id = ?
+	`, string(userID))
+	if err != nil {
+		return nil, err
+	}
+	for rows2.Next() {
+		var gid string
+		if err := rows2.Scan(&gid); err != nil {
+			rows2.Close()
+			return nil, err
+		}
+		seen[GroupID(gid)] = true
+	}
+	rows2.Close()
+	if err := rows2.Err(); err != nil {
+		return nil, err
+	}
+
+	// 3) Via user tag = group tag
+	rows3, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT gtag.group_id
+		FROM group_tags gtag
+		INNER JOIN user_tags ut ON gtag.tag = ut.tag AND ut.user_id = ?
+	`, string(userID))
+	if err != nil {
+		return nil, err
+	}
+	for rows3.Next() {
+		var gid string
+		if err := rows3.Scan(&gid); err != nil {
+			rows3.Close()
+			return nil, err
+		}
+		seen[GroupID(gid)] = true
+	}
+	rows3.Close()
+	if err := rows3.Err(); err != nil {
+		return nil, err
+	}
+
+	var all []GroupID
+	for id := range seen {
+		all = append(all, id)
+	}
+	sort.Slice(all, func(i, j int) bool { return string(all[i]) < string(all[j]) })
+
+	limit, offset := listLimit(opts, s.defaultListLimit)
+	if opts != nil && opts.AfterID != "" {
+		i := 0
+		for i < len(all) && string(all[i]) <= opts.AfterID {
+			i++
+		}
+		all = all[i:]
+	}
+	if offset > 0 {
+		if offset >= len(all) {
+			return nil, nil
+		}
+		all = all[offset:]
+	}
+	if limit > 0 && len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
 }
 
 // TargetIDsForGroup returns target IDs assigned to the group.
@@ -329,50 +508,113 @@ func (s *SQLiteAccessGroupStore) TargetIDsForGroup(ctx context.Context, groupID 
 	return out, nil
 }
 
-// TargetIDsForUser returns the set of target IDs the user can access via any of their groups.
+// TargetIDsForUser returns the set of target IDs the user can access via group membership or tag match.
+// Tag-based: user has tag T and (target has tag T or target's group has tag T).
 func (s *SQLiteAccessGroupStore) TargetIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]TargetID, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
-	limit, offset := listLimit(opts, s.defaultListLimit)
-	var rows *sql.Rows
-	var err error
-	if opts != nil && opts.AfterID != "" {
-		rows, err = s.db.QueryContext(ctx, `
-			SELECT DISTINCT gt.target_id
-			FROM user_groups ug
-			JOIN group_targets gt ON ug.group_id = gt.group_id
-			WHERE ug.user_id = ? AND gt.target_id > ?
-			ORDER BY gt.target_id
-			LIMIT ?
-		`, string(userID), opts.AfterID, limit)
-	} else {
-		rows, err = s.db.QueryContext(ctx, `
-			SELECT DISTINCT gt.target_id
-			FROM user_groups ug
-			JOIN group_targets gt ON ug.group_id = gt.group_id
-			WHERE ug.user_id = ?
-			ORDER BY gt.target_id
-			LIMIT ? OFFSET ?
-		`, string(userID), limit, offset)
-	}
+	// Collect all accessible target IDs: from groups and from tags (then dedup, sort, paginate in Go).
+	seen := make(map[TargetID]bool)
+
+	// 1) Via group membership
+	rows1, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT gt.target_id
+		FROM user_groups ug
+		JOIN group_targets gt ON ug.group_id = gt.group_id
+		WHERE ug.user_id = ?
+	`, string(userID))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []TargetID
-	for rows.Next() {
+	for rows1.Next() {
 		var tid string
-		if err := rows.Scan(&tid); err != nil {
+		if err := rows1.Scan(&tid); err != nil {
+			rows1.Close()
 			return nil, err
 		}
-		out = append(out, TargetID(tid))
+		seen[TargetID(tid)] = true
 	}
-	if err := rows.Err(); err != nil {
+	rows1.Close()
+	if err := rows1.Err(); err != nil {
 		return nil, err
 	}
-	return out, nil
+
+	// 2) Via user tag = target tag
+	rows2, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT tt.target_id
+		FROM target_tags tt
+		INNER JOIN user_tags ut ON ut.tag = tt.tag AND ut.user_id = ?
+	`, string(userID))
+	if err != nil {
+		return nil, err
+	}
+	for rows2.Next() {
+		var tid string
+		if err := rows2.Scan(&tid); err != nil {
+			rows2.Close()
+			return nil, err
+		}
+		seen[TargetID(tid)] = true
+	}
+	rows2.Close()
+	if err := rows2.Err(); err != nil {
+		return nil, err
+	}
+
+	// 3) Via user tag = group tag (target belongs to that group)
+	rows3, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT gt.target_id
+		FROM user_tags ut
+		INNER JOIN group_tags gtag ON gtag.tag = ut.tag AND ut.user_id = ?
+		INNER JOIN group_targets gt ON gtag.group_id = gt.group_id
+	`, string(userID))
+	if err != nil {
+		return nil, err
+	}
+	for rows3.Next() {
+		var tid string
+		if err := rows3.Scan(&tid); err != nil {
+			rows3.Close()
+			return nil, err
+		}
+		seen[TargetID(tid)] = true
+	}
+	rows3.Close()
+	if err := rows3.Err(); err != nil {
+		return nil, err
+	}
+
+	var all []TargetID
+	for id := range seen {
+		all = append(all, id)
+	}
+	sortSliceTargetID(all)
+
+	limit, offset := listLimit(opts, s.defaultListLimit)
+	if opts != nil && opts.AfterID != "" {
+		// Keyset: skip until after AfterID, then take limit
+		i := 0
+		for i < len(all) && string(all[i]) <= opts.AfterID {
+			i++
+		}
+		all = all[i:]
+	}
+	if offset > 0 {
+		if offset >= len(all) {
+			return nil, nil
+		}
+		all = all[offset:]
+	}
+	if limit > 0 && len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
+}
+
+// sortSliceTargetID sorts in place by string(id).
+func sortSliceTargetID(s []TargetID) {
+	sort.Slice(s, func(i, j int) bool { return string(s[i]) < string(s[j]) })
 }
 
 // SQLiteTargetStore implements TargetStore backed by SQLite.
@@ -456,6 +698,68 @@ func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, nam
 		SSHUsername: sshUsername,
 		SSHPassword: sshPassword,
 	}, nil
+}
+
+// Update updates a target's name, host, port, protocol, path, and optional SSH credentials.
+// Target ID and group_id are not changed. If sshPassword is non-empty, encKey must be set (same as CreateWithPath).
+func (s *SQLiteTargetStore) Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword string) (*Target, error) {
+	if err := validateTargetID(id); err != nil {
+		return nil, err
+	}
+	if err := validateName(name); err != nil {
+		return nil, err
+	}
+	if err := validateHost(host); err != nil {
+		return nil, err
+	}
+	if err := validateProtocol(protocol); err != nil {
+		return nil, err
+	}
+	if sshPassword != "" && (s.encKey == nil || len(s.encKey) != secret.KeySize) {
+		return nil, ErrEncryptionKeyRequired
+	}
+	storedPassword := sshPassword
+	if sshPassword != "" {
+		var errEnc error
+		storedPassword, errEnc = secret.Encrypt(s.encKey, sshPassword)
+		if errEnc != nil {
+			return nil, errEnc
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE targets SET name = ?, host = ?, port = ?, protocol = ?, path = ?, ssh_username = ?, ssh_password = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, name, host, int(port), string(protocol), path, strings.TrimSpace(sshUsername), storedPassword, string(id))
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, ErrTargetNotFound
+	}
+	return s.Get(ctx, id)
+}
+
+// Delete removes a target. Group assignments (group_targets) are removed by FK CASCADE.
+func (s *SQLiteTargetStore) Delete(ctx context.Context, id TargetID) error {
+	if err := validateTargetID(id); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	res, err := s.db.ExecContext(ctx, `DELETE FROM targets WHERE id = ?`, string(id))
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrTargetNotFound
+	}
+	return nil
 }
 
 // Get returns a target by ID.
@@ -600,4 +904,51 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 		}
 	}
 	return out, nil
+}
+
+// TagsForTarget returns tags assigned to the target.
+func (s *SQLiteTargetStore) TagsForTarget(ctx context.Context, targetID TargetID) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `SELECT tag FROM target_tags WHERE target_id = ? ORDER BY tag`, string(targetID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, err
+		}
+		out = append(out, tag)
+	}
+	return out, rows.Err()
+}
+
+// SetTargetTags replaces all tags for the target. Pass nil or empty to clear.
+func (s *SQLiteTargetStore) SetTargetTags(ctx context.Context, targetID TargetID, tags []string) error {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	for _, tag := range tags {
+		if err := validateTag(tag); err != nil {
+			return err
+		}
+	}
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM targets WHERE id = ?`, string(targetID)).Scan(&exists); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrTargetNotFound
+		}
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM target_tags WHERE target_id = ?`, string(targetID)); err != nil {
+		return err
+	}
+	for _, tag := range tags {
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO target_tags (target_id, tag) VALUES (?, ?)`, string(targetID), tag); err != nil {
+			return err
+		}
+	}
+	return nil
 }

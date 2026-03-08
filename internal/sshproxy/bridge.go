@@ -407,8 +407,10 @@ func (s *StreamAttach) Close() error {
 // RunBridgeDetachable runs an SSH bridge that keeps running when the client disconnects.
 // Output is written to output (e.g. session RingBuffer) for replay. AttachCh receives new
 // client connections to attach; initialConn is the first client (may be nil), either *websocket.Conn or *StreamAttach.
-// Touch is called on client activity. The bridge exits when ctx is done or SSH session closes.
-func RunBridgeDetachable(ctx context.Context, host string, port uint16, username, password string, output *session.RingBuffer, attachCh <-chan session.AttachReq, initialConn interface{}, touch func()) error {
+// Touch is called on client activity. If tee is non-nil, a copy of stdout/stderr is written to tee (e.g. asciinema file).
+// If stdinRecorder is non-nil, it is called when data is written to the target stdin. The bridge exits when ctx is done or SSH session closes.
+// initialCols and initialRows are the terminal size for the PTY (e.g. from client); 0 lets the factory use defaults.
+func RunBridgeDetachable(ctx context.Context, host string, port uint16, username, password string, output *session.RingBuffer, attachCh <-chan session.AttachReq, initialConn interface{}, touch func(), tee io.Writer, stdinRecorder StdinRecorder, initialCols, initialRows int) error {
 	config := &ssh.ClientConfig{
 		User: username,
 		Auth: []ssh.AuthMethod{
@@ -419,7 +421,7 @@ func RunBridgeDetachable(ctx context.Context, host string, port uint16, username
 		Timeout:         15 * time.Second,
 	}
 	addr := net.JoinHostPort(host, portString(port))
-	stdin, stdout, stderr, windowChange, cleanup, err := sessionFactory(addr, config, 0, 0)
+	stdin, stdout, stderr, windowChange, cleanup, err := sessionFactory(addr, config, initialCols, initialRows)
 	if err != nil {
 		return err
 	}
@@ -440,13 +442,19 @@ func RunBridgeDetachable(ctx context.Context, host string, port uint16, username
 					return
 				}
 				if len(b) > 0 {
+					if stdinRecorder != nil {
+						stdinRecorder.RecordInput(b)
+					}
 					_, _ = stdin.Write(b)
 				}
 			}
 		}
 	}()
 
-	// SSH stdout/stderr -> output + current client; bridgeDone closed when SSH session ends
+	// SSH stdout/stderr -> output + current client; bridgeDone closed when SSH session ends.
+	// When either pipe gets EOF (e.g. user ran "exit" on server), close stdin once so the session ends cleanly and the other pipe gets EOF.
+	var stdinCloseOnce sync.Once
+	closeStdin := func() { stdinCloseOnce.Do(func() { _ = stdin.Close() }) }
 	bridgeDone := make(chan struct{})
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
@@ -457,6 +465,9 @@ func RunBridgeDetachable(ctx context.Context, host string, port uint16, username
 			n, err := stdout.Read(buf)
 			if n > 0 {
 				_, _ = output.Write(buf[:n])
+				if tee != nil {
+					_, _ = tee.Write(buf[:n])
+				}
 				clientMu.Lock()
 				c := client
 				clientMu.Unlock()
@@ -465,6 +476,7 @@ func RunBridgeDetachable(ctx context.Context, host string, port uint16, username
 				}
 			}
 			if err != nil {
+				closeStdin()
 				return
 			}
 		}
@@ -478,6 +490,9 @@ func RunBridgeDetachable(ctx context.Context, host string, port uint16, username
 			n, err := stderr.Read(buf)
 			if n > 0 {
 				_, _ = output.Write(buf[:n])
+				if tee != nil {
+					_, _ = tee.Write(buf[:n])
+				}
 				clientMu.Lock()
 				c := client
 				clientMu.Unlock()
@@ -486,6 +501,7 @@ func RunBridgeDetachable(ctx context.Context, host string, port uint16, username
 				}
 			}
 			if err != nil {
+				closeStdin()
 				return
 			}
 		}

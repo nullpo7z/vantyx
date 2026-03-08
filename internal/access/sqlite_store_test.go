@@ -37,6 +37,45 @@ func TestSQLiteTargetStore_CreateWithPath_Validation(t *testing.T) {
 	}
 }
 
+func TestSQLiteTargetStore_Update(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, _ = targets.CreateWithPath(ctx, "t1", "old", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "")
+
+	updated, err := targets.Update(ctx, "t1", "new", "10.0.0.2", 2222, ProtocolTelnet, "g1/sub", "user", "")
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if updated.Name != "new" || updated.Host != "10.0.0.2" || updated.Port != 2222 || updated.Protocol != ProtocolTelnet || updated.Path != "g1/sub" || updated.SSHUsername != "user" {
+		t.Fatalf("unexpected updated target: %+v", updated)
+	}
+	got, _ := targets.Get(ctx, "t1")
+	if got.Name != "new" || got.Host != "10.0.0.2" {
+		t.Fatalf("Get after update: %+v", got)
+	}
+	if _, err := targets.Update(ctx, "missing", "n", "h", 22, ProtocolSSH, "", "", ""); err != ErrTargetNotFound {
+		t.Fatalf("expected ErrTargetNotFound, got %v", err)
+	}
+}
+
+func TestSQLiteTargetStore_Delete(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, _ = targets.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "")
+
+	if err := targets.Delete(ctx, "t1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := targets.Get(ctx, "t1"); err != ErrTargetNotFound {
+		t.Fatalf("expected ErrTargetNotFound after delete, got %v", err)
+	}
+	if err := targets.Delete(ctx, "missing"); err != ErrTargetNotFound {
+		t.Fatalf("expected ErrTargetNotFound for delete missing, got %v", err)
+	}
+}
+
 func TestSQLiteTargetStore_Get_NotFoundAndPortBounds(t *testing.T) {
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)
@@ -197,6 +236,69 @@ func TestSQLiteAccessGroupStore_KeysetPagination(t *testing.T) {
 		if seen[id] {
 			t.Fatalf("page2 contained duplicate from page1: %s", id)
 		}
+	}
+}
+
+func TestSQLiteAccessGroupStore_TagBasedAccess(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	// Create user in same DB for user_tags (auth table)
+	db := groups.db
+	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO users (id, username, password_hash) VALUES ('u1', 'u1', 'hash')`); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, _ = targets.CreateWithPath(ctx, "t1", "T1", "h1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "")
+	_ = groups.AddTargetToGroup(ctx, "g1", "t1")
+	// u1 not in any group -> no access yet
+	ids, err := groups.TargetIDsForUser(ctx, "u1", nil)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("expected no access without group, got %v err=%v", ids, err)
+	}
+	// Add tag "prod" to user and to target -> u1 should see t1
+	_, _ = db.ExecContext(ctx, `INSERT INTO user_tags (user_id, tag) VALUES ('u1', 'prod')`)
+	_, _ = db.ExecContext(ctx, `INSERT INTO target_tags (target_id, tag) VALUES ('t1', 'prod')`)
+	ids, err = groups.TargetIDsForUser(ctx, "u1", nil)
+	if err != nil {
+		t.Fatalf("TargetIDsForUser: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "t1" {
+		t.Fatalf("expected [t1] via tag, got %v", ids)
+	}
+	// Add tag to group: user with "ops" tag should see targets in group with "ops" tag
+	_, _ = db.ExecContext(ctx, `DELETE FROM user_tags WHERE user_id = 'u1'`)
+	_, _ = db.ExecContext(ctx, `DELETE FROM target_tags WHERE target_id = 't1'`)
+	_, _ = db.ExecContext(ctx, `INSERT INTO user_tags (user_id, tag) VALUES ('u1', 'ops')`)
+	_, _ = db.ExecContext(ctx, `INSERT INTO group_tags (group_id, tag) VALUES ('g1', 'ops')`)
+	ids, err = groups.TargetIDsForUser(ctx, "u1", nil)
+	if err != nil {
+		t.Fatalf("TargetIDsForUser: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "t1" {
+		t.Fatalf("expected [t1] via group tag, got %v", ids)
+	}
+}
+
+func TestSQLiteAccessGroupStore_GroupIDsForUser_ViaTag(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	db := groups.db
+	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO users (id, username, password_hash) VALUES ('u2', 'u2', 'hash')`); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	_, _ = groups.Create(ctx, "g2", "G2")
+	_, _ = targets.CreateWithPath(ctx, "t2", "T2", "h2", 22, ProtocolSSH, GroupID("g2"), "g2", "", "")
+	_ = groups.AddTargetToGroup(ctx, "g2", "t2")
+	// u2 is not a member of g2; give u2 and t2 the same tag so u2 has tag-based access
+	_, _ = db.ExecContext(ctx, `INSERT INTO user_tags (user_id, tag) VALUES ('u2', 'home')`)
+	_, _ = db.ExecContext(ctx, `INSERT INTO target_tags (target_id, tag) VALUES ('t2', 'home')`)
+	// GroupIDsForUser should return g2 so the UI can show the group and its (filtered) targets
+	gids, err := groups.GroupIDsForUser(ctx, "u2", nil)
+	if err != nil {
+		t.Fatalf("GroupIDsForUser: %v", err)
+	}
+	if len(gids) != 1 || gids[0] != "g2" {
+		t.Fatalf("expected [g2] via tag (user sees group containing tag-matching target), got %v", gids)
 	}
 }
 
@@ -413,5 +515,376 @@ func TestSQLiteTargetStore_GetAndList_InvalidPortRowSkipped(t *testing.T) {
 	list, err := targets.ListByIDs(ctx, []TargetID{"bad"}, nil)
 	if err != nil || len(list) != 0 {
 		t.Fatalf("expected empty slice from ListByIDs for invalid port row, got %v err=%v", list, err)
+	}
+}
+
+func TestSQLiteAccessGroupStore_TagsForGroup_SetGroupTags(t *testing.T) {
+	ctx := context.Background()
+	groups, _ := newTestSQLiteStores(t)
+	_, _ = groups.Create(ctx, "g1", "G1")
+
+	tags, err := groups.TagsForGroup(ctx, "g1")
+	if err != nil || len(tags) != 0 {
+		t.Fatalf("TagsForGroup empty: err=%v tags=%v", err, tags)
+	}
+	tags, _ = groups.TagsForGroup(ctx, "missing")
+	if len(tags) != 0 {
+		t.Fatalf("expected empty for missing group, got %v", tags)
+	}
+
+	if err := groups.SetGroupTags(ctx, "g1", []string{"prod", "env-a"}); err != nil {
+		t.Fatalf("SetGroupTags: %v", err)
+	}
+	tags, err = groups.TagsForGroup(ctx, "g1")
+	if err != nil || len(tags) != 2 || tags[0] != "env-a" || tags[1] != "prod" {
+		t.Fatalf("TagsForGroup after set: err=%v tags=%v", err, tags)
+	}
+
+	if err := groups.SetGroupTags(ctx, "g1", []string{"only"}); err != nil {
+		t.Fatalf("SetGroupTags replace: %v", err)
+	}
+	tags, _ = groups.TagsForGroup(ctx, "g1")
+	if len(tags) != 1 || tags[0] != "only" {
+		t.Fatalf("expected [only], got %v", tags)
+	}
+
+	if err := groups.SetGroupTags(ctx, "g1", nil); err != nil {
+		t.Fatalf("SetGroupTags clear: %v", err)
+	}
+	tags, _ = groups.TagsForGroup(ctx, "g1")
+	if len(tags) != 0 {
+		t.Fatalf("expected empty after clear, got %v", tags)
+	}
+
+	if err := groups.SetGroupTags(ctx, "missing", []string{"x"}); err != ErrGroupNotFound {
+		t.Fatalf("expected ErrGroupNotFound for missing group, got %v", err)
+	}
+	if err := groups.SetGroupTags(ctx, "g1", []string{""}); err == nil {
+		t.Fatal("expected error for empty tag")
+	}
+	if err := groups.SetGroupTags(ctx, "g1", []string{"valid", "bad tag!"}); err == nil {
+		t.Fatal("expected error for invalid tag character")
+	}
+}
+
+func TestSQLiteTargetStore_TagsForTarget_SetTargetTags(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, _ = targets.CreateWithPath(ctx, "t1", "H1", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "")
+
+	tags, err := targets.TagsForTarget(ctx, "t1")
+	if err != nil || len(tags) != 0 {
+		t.Fatalf("TagsForTarget empty: err=%v tags=%v", err, tags)
+	}
+
+	if err := targets.SetTargetTags(ctx, "t1", []string{"prod", "web"}); err != nil {
+		t.Fatalf("SetTargetTags: %v", err)
+	}
+	tags, err = targets.TagsForTarget(ctx, "t1")
+	if err != nil || len(tags) != 2 || tags[0] != "prod" || tags[1] != "web" {
+		t.Fatalf("TagsForTarget after set: err=%v tags=%v", err, tags)
+	}
+
+	if err := targets.SetTargetTags(ctx, "t1", nil); err != nil {
+		t.Fatalf("SetTargetTags clear: %v", err)
+	}
+	tags, _ = targets.TagsForTarget(ctx, "t1")
+	if len(tags) != 0 {
+		t.Fatalf("expected empty after clear, got %v", tags)
+	}
+
+	if err := targets.SetTargetTags(ctx, "missing", []string{"x"}); err != ErrTargetNotFound {
+		t.Fatalf("expected ErrTargetNotFound, got %v", err)
+	}
+	if err := targets.SetTargetTags(ctx, "t1", []string{"a", "bad space"}); err == nil {
+		t.Fatal("expected error for invalid tag")
+	}
+}
+
+// TestSQLiteAccessGroupStore_Get_CanceledContext covers Get returning non-ErrNoRows error.
+func TestSQLiteAccessGroupStore_Get_CanceledContext(t *testing.T) {
+	groups, _ := newTestSQLiteStores(t)
+	_, _ = groups.Create(context.Background(), "g1", "G1")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := groups.Get(ctx, "g1")
+	if err == nil {
+		t.Fatal("expected error with canceled context")
+	}
+}
+
+// TestSQLiteAccessGroupStore_AddUserToGroup_CanceledContext covers tx/commit error path.
+func TestSQLiteAccessGroupStore_AddUserToGroup_CanceledContext(t *testing.T) {
+	groups, _ := newTestSQLiteStores(t)
+	_, _ = groups.Create(context.Background(), "g1", "G1")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := groups.AddUserToGroup(ctx, "u1", "g1")
+	if err == nil {
+		t.Fatal("expected error with canceled context")
+	}
+}
+
+
+// TestSQLiteAccessGroupStore_RemoveUserFromGroup_NotFoundAndCanceled covers ErrGroupNotFound and Exec error.
+func TestSQLiteAccessGroupStore_RemoveUserFromGroup_NotFoundAndCanceled(t *testing.T) {
+	groups, _ := newTestSQLiteStores(t)
+	if err := groups.RemoveUserFromGroup(context.Background(), "u1", "missing"); err != ErrGroupNotFound {
+		t.Fatalf("expected ErrGroupNotFound, got %v", err)
+	}
+	_, _ = groups.Create(context.Background(), "g1", "G1")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := groups.RemoveUserFromGroup(ctx, "u1", "g1")
+	if err == nil {
+		t.Fatal("expected error with canceled context")
+	}
+}
+
+// TestSQLiteAccessGroupStore_UserIDsForGroup_WithAfterID covers keyset pagination branch.
+func TestSQLiteAccessGroupStore_UserIDsForGroup_WithAfterID(t *testing.T) {
+	ctx := context.Background()
+	groups, _ := newTestSQLiteStores(t)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	for _, u := range []string{"u1", "u2", "u3"} {
+		_, _ = groups.db.ExecContext(ctx, `INSERT OR IGNORE INTO users (id, username, password_hash) VALUES (?, ?, 'hash')`, u, u)
+		_ = groups.AddUserToGroup(ctx, UserID(u), "g1")
+	}
+	ids, err := groups.UserIDsForGroup(ctx, "g1", &ListOpts{AfterID: "u1", Limit: 2})
+	if err != nil {
+		t.Fatalf("UserIDsForGroup: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 ids after u1, got %d", len(ids))
+	}
+}
+
+// TestSQLiteAccessGroupStore_SetGroupTags_CanceledContext covers DELETE/INSERT error path.
+func TestSQLiteAccessGroupStore_SetGroupTags_CanceledContext(t *testing.T) {
+	groups, _ := newTestSQLiteStores(t)
+	_, _ = groups.Create(context.Background(), "g1", "G1")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := groups.SetGroupTags(ctx, "g1", []string{"a"})
+	if err == nil {
+		t.Fatal("expected error with canceled context")
+	}
+}
+
+// TestSQLiteAccessGroupStore_AddTargetToGroup_CanceledContext covers BeginTx/Commit error path.
+func TestSQLiteAccessGroupStore_AddTargetToGroup_CanceledContext(t *testing.T) {
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(context.Background(), "g1", "G1")
+	_, _ = targets.CreateWithPath(context.Background(), "t1", "T", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := groups.AddTargetToGroup(ctx, "g1", "t1")
+	if err == nil {
+		t.Fatal("expected error with canceled context")
+	}
+}
+
+// TestSQLiteAccessGroupStore_GroupIDsForUser_OffsetExceedsLength covers offset >= len(all) return nil.
+func TestSQLiteAccessGroupStore_GroupIDsForUser_OffsetExceedsLength(t *testing.T) {
+	ctx := context.Background()
+	groups, _ := newTestSQLiteStores(t)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, _ = groups.db.ExecContext(ctx, `INSERT INTO users (id, username, password_hash) VALUES ('u1','u1','x')`)
+	_ = groups.AddUserToGroup(ctx, "u1", "g1")
+	page, err := groups.GroupIDsForUser(ctx, "u1", &ListOpts{Limit: 10, Offset: 1})
+	if err != nil {
+		t.Fatalf("GroupIDsForUser: %v", err)
+	}
+	if len(page) != 0 {
+		t.Fatalf("expected empty when offset >= len(all), got %d", len(page))
+	}
+}
+
+// TestSQLiteAccessGroupStore_TargetIDsForUser_AfterIDAndOffset covers keyset and offset.
+func TestSQLiteAccessGroupStore_TargetIDsForUser_AfterIDAndOffset(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, _ = targets.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "")
+	_, _ = targets.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 22, ProtocolSSH, GroupID("g1"), "g1", "", "")
+	_ = groups.AddTargetToGroup(ctx, "g1", "t1")
+	_ = groups.AddTargetToGroup(ctx, "g1", "t2")
+	_, _ = groups.db.ExecContext(ctx, `INSERT INTO users (id, username, password_hash) VALUES ('u1','u1','x')`)
+	_ = groups.AddUserToGroup(ctx, "u1", "g1")
+	page, err := groups.TargetIDsForUser(ctx, "u1", &ListOpts{AfterID: "t1", Limit: 5})
+	if err != nil {
+		t.Fatalf("TargetIDsForUser: %v", err)
+	}
+	if len(page) != 1 || page[0] != "t2" {
+		t.Fatalf("expected [t2] after t1, got %v", page)
+	}
+	page2, err := groups.TargetIDsForUser(ctx, "u1", &ListOpts{Limit: 1, Offset: 1})
+	if err != nil {
+		t.Fatalf("TargetIDsForUser offset: %v", err)
+	}
+	if len(page2) != 1 {
+		t.Fatalf("expected 1 target with offset 1, got %d", len(page2))
+	}
+	page3, err := groups.TargetIDsForUser(ctx, "u1", &ListOpts{Limit: 10, Offset: 10})
+	if err != nil || len(page3) != 0 {
+		t.Fatalf("expected empty when offset >= len, got %v err=%v", page3, err)
+	}
+}
+
+// TestSQLiteTargetStore_Update_Validation covers validation and ErrEncryptionKeyRequired.
+func TestSQLiteTargetStore_Update_Validation(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, _ = targets.CreateWithPath(ctx, "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "")
+
+	if _, err := targets.Update(ctx, "", "n", "h", 22, ProtocolSSH, "", "", ""); err == nil {
+		t.Fatal("expected error for empty id")
+	}
+	if _, err := targets.Update(ctx, "t1", "", "h", 22, ProtocolSSH, "", "", ""); err == nil {
+		t.Fatal("expected error for empty name")
+	}
+	if _, err := targets.Update(ctx, "t1", "n", "", 22, ProtocolSSH, "", "", ""); err == nil {
+		t.Fatal("expected error for empty host")
+	}
+	if _, err := targets.Update(ctx, "t1", "n", "h", 22, "invalid", "", "", ""); err == nil {
+		t.Fatal("expected error for invalid protocol")
+	}
+	if _, err := targets.Update(ctx, "t1", "n", "h", 22, ProtocolSSH, "", "", "secret"); err != ErrEncryptionKeyRequired {
+		t.Fatalf("expected ErrEncryptionKeyRequired when updating with password and no key, got %v", err)
+	}
+}
+
+// TestSQLiteTargetStore_Update_CanceledContext covers ExecContext error path.
+func TestSQLiteTargetStore_Update_CanceledContext(t *testing.T) {
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(context.Background(), "g1", "G1")
+	_, _ = targets.CreateWithPath(context.Background(), "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := targets.Update(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, "", "", "")
+	if err == nil {
+		t.Fatal("expected error with canceled context")
+	}
+}
+
+// TestSQLiteTargetStore_Delete_EmptyID covers validateTargetID error.
+func TestSQLiteTargetStore_Delete_EmptyID(t *testing.T) {
+	_, targets := newTestSQLiteStores(t)
+	if err := targets.Delete(context.Background(), ""); err == nil {
+		t.Fatal("expected error for empty id")
+	}
+}
+
+// TestSQLiteTargetStore_Get_DecryptFailure covers Get when stored password exists but Decrypt fails.
+func TestSQLiteTargetStore_Get_DecryptFailure(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	storeWithKey := NewSQLiteTargetStore(targets.db, nil, key)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, err := storeWithKey.CreateWithPath(ctx, "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "u", "pass")
+	if err != nil {
+		t.Fatalf("CreateWithPath: %v", err)
+	}
+	_, err = targets.db.ExecContext(ctx, `UPDATE targets SET ssh_password = 'v1:!!!' WHERE id = 't1'`)
+	if err != nil {
+		t.Fatalf("corrupt password: %v", err)
+	}
+	got, err := storeWithKey.Get(ctx, "t1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.SSHPassword != "v1:!!!" {
+		t.Fatalf("expected stored ciphertext when decrypt fails, got %q", got.SSHPassword)
+	}
+}
+
+// TestSQLiteTargetStore_ListByIDs_DecryptFailure covers ListByIDs when one row has decrypt failure.
+func TestSQLiteTargetStore_ListByIDs_DecryptFailure(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 2)
+	}
+	storeWithKey := NewSQLiteTargetStore(targets.db, nil, key)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, _ = storeWithKey.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "u", "p1")
+	_, _ = storeWithKey.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 22, ProtocolSSH, GroupID("g1"), "g1", "u", "p2")
+	_, _ = targets.db.ExecContext(ctx, `UPDATE targets SET ssh_password = 'v1:invalid' WHERE id = 't2'`)
+	list, err := storeWithKey.ListByIDs(ctx, []TargetID{"t1", "t2"}, nil)
+	if err != nil {
+		t.Fatalf("ListByIDs: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 targets, got %d", len(list))
+	}
+	if list[1].SSHPassword != "v1:invalid" {
+		t.Fatalf("expected ciphertext when decrypt fails for t2, got %q", list[1].SSHPassword)
+	}
+}
+
+// TestSQLiteTargetStore_SetTargetTags_CanceledContext covers error path.
+func TestSQLiteTargetStore_SetTargetTags_CanceledContext(t *testing.T) {
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(context.Background(), "g1", "G1")
+	_, _ = targets.CreateWithPath(context.Background(), "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := targets.SetTargetTags(ctx, "t1", []string{"a"})
+	if err == nil {
+		t.Fatal("expected error with canceled context")
+	}
+}
+
+// TestSQLiteTargetStore_TagsForGroup_QueryError covers TagsForGroup when query fails (e.g. canceled context).
+func TestSQLiteAccessGroupStore_TagsForGroup_QueryError(t *testing.T) {
+	groups, _ := newTestSQLiteStores(t)
+	_, _ = groups.Create(context.Background(), "g1", "G1")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := groups.TagsForGroup(ctx, "g1")
+	if err == nil {
+		t.Fatal("expected error with canceled context")
+	}
+}
+
+// TestSQLiteTargetStore_TagsForTarget_QueryError covers TagsForTarget error path.
+func TestSQLiteTargetStore_TagsForTarget_QueryError(t *testing.T) {
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(context.Background(), "g1", "G1")
+	_, _ = targets.CreateWithPath(context.Background(), "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := targets.TagsForTarget(ctx, "t1")
+	if err == nil {
+		t.Fatal("expected error with canceled context")
+	}
+}
+
+// TestSQLiteAccessGroupStore_SetGroupTags_QueryRowError covers SetGroupTags when SELECT fails (non-ErrNoRows).
+func TestSQLiteAccessGroupStore_SetGroupTags_QueryRowError(t *testing.T) {
+	groups, _ := newTestSQLiteStores(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := groups.SetGroupTags(ctx, "g1", []string{"a"})
+	if err == nil {
+		t.Fatal("expected error with canceled context")
+	}
+}
+
+// TestSQLiteTargetStore_SetTargetTags_QueryRowError covers SetTargetTags when SELECT fails.
+func TestSQLiteTargetStore_SetTargetTags_QueryRowError(t *testing.T) {
+	_, targets := newTestSQLiteStores(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := targets.SetTargetTags(ctx, "t1", []string{"a"})
+	if err == nil {
+		t.Fatal("expected error with canceled context")
 	}
 }

@@ -108,7 +108,7 @@ func TestHandleSSHWebSocket_ForbiddenTarget(t *testing.T) {
 	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
-	_, _ = app.UserStore.CreateUser("other", "other", "Other1!x")
+	_, _ = app.UserStore.CreateUser("other", "other", "Other1!x", "")
 	httpSess, err := app.SessionStore.Create("other")
 	if err != nil {
 		t.Fatalf("Create session: %v", err)

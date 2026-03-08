@@ -802,6 +802,168 @@ func TestRunBridge_ReadMessageFails(t *testing.T) {
 	}
 }
 
+// TestStreamAttach_CloseNilCloseFn covers StreamAttach.Close when CloseFn is nil.
+func TestStreamAttach_CloseNilCloseFn(t *testing.T) {
+	sa := &StreamAttach{Write: func([]byte) error { return nil }}
+	if err := sa.Close(); err != nil {
+		t.Fatalf("Close with nil CloseFn: %v", err)
+	}
+}
+
+// TestRunBridge_ResizeMessage sends a JSON resize message and ensures windowChange is called (no crash).
+func TestRunBridge_ResizeMessage(t *testing.T) {
+	server, err := mock.NewSSHEchoServer("test", "test")
+	if err != nil {
+		t.Fatalf("NewSSHEchoServer: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Close()
+	port := server.Port()
+	if port == 0 {
+		t.Fatal("port is 0")
+	}
+
+	wsURL, bridgeErrCh, _ := runBridgeWithEchoServer(t)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	// Send resize (TextMessage with type resize) — should not write to stdin
+	_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"resize","cols":120,"rows":30}`))
+	// Then send data to confirm bridge still works
+	_ = conn.WriteMessage(websocket.BinaryMessage, []byte("hi"))
+	_, msg, _ := conn.ReadMessage()
+	if string(msg) != "hi" {
+		t.Fatalf("expected echo hi, got %q", string(msg))
+	}
+	_ = conn.Close()
+	select {
+	case <-bridgeErrCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunBridge did not return")
+	}
+}
+
+// TestRunBridge_WithTeeAndStdinRecorder covers tee and stdinRecorder paths.
+func TestRunBridge_WithTeeAndStdinRecorder(t *testing.T) {
+	server, err := mock.NewSSHEchoServer("test", "test")
+	if err != nil {
+		t.Fatalf("NewSSHEchoServer: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Close()
+	port := server.Port()
+	if port == 0 {
+		t.Fatal("port is 0")
+	}
+
+	var teeBuf bytes.Buffer
+	var recorded []byte
+	recorder := &recordInputRecorder{recorded: &recorded}
+	bridgeErrCh := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wsConn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		go func() {
+			defer wsConn.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			bridgeErrCh <- RunBridge(ctx, wsConn, "127.0.0.1", port, "test", "test", nil, &teeBuf, recorder)
+		}()
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	u.Scheme = "ws"
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.WriteMessage(websocket.BinaryMessage, []byte("tee"))
+	_, _, _ = conn.ReadMessage()
+	_ = conn.Close()
+	select {
+	case <-bridgeErrCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunBridge did not return")
+	}
+	if teeBuf.Len() == 0 {
+		t.Error("expected tee to receive output")
+	}
+	if len(recorded) == 0 {
+		t.Error("expected stdinRecorder to receive input")
+	}
+}
+
+type recordInputRecorder struct {
+	recorded *[]byte
+	mu       sync.Mutex
+}
+
+func (r *recordInputRecorder) RecordInput(p []byte) {
+	r.mu.Lock()
+	*r.recorded = append(*r.recorded, p...)
+	r.mu.Unlock()
+}
+
+// TestRunBridgeStream_WithResizeAndTee covers resizeChan, tee, touch, stdinRecorder.
+func TestRunBridgeStream_WithResizeAndTee(t *testing.T) {
+	server, err := mock.NewSSHEchoServer("test", "test")
+	if err != nil {
+		t.Fatalf("NewSSHEchoServer: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Close()
+	port := server.Port()
+	if port == 0 {
+		t.Fatal("port is 0")
+	}
+
+	stdinR, stdinW := io.Pipe()
+	stdoutBuf := &bytes.Buffer{}
+	teeBuf := &bytes.Buffer{}
+	var touchCount atomic.Int32
+	var recBuf []byte
+	recorder := &recordInputRecorder{recorded: &recBuf}
+	resizeCh := make(chan TerminalSize, 1)
+	resizeCh <- TerminalSize{Cols: 80, Rows: 24}
+	close(resizeCh)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go func() {
+		_, _ = stdinW.Write([]byte("data"))
+		_ = stdinW.Close()
+	}()
+
+	err = RunBridgeStream(ctx, stdinR, stdoutBuf, "127.0.0.1", port, "test", "test", 120, 40, resizeCh, func() { touchCount.Add(1) }, teeBuf, recorder)
+	if err != nil {
+		t.Fatalf("RunBridgeStream: %v", err)
+	}
+	if stdoutBuf.String() != "data" {
+		t.Fatalf("expected stdout data, got %q", stdoutBuf.String())
+	}
+	if teeBuf.Len() == 0 {
+		t.Error("expected tee to have output")
+	}
+	if touchCount.Load() < 1 {
+		t.Error("expected touch to be called")
+	}
+	if len(recBuf) == 0 {
+		t.Error("expected stdinRecorder to record")
+	}
+}
+
 // TestRunBridgeStream_DialFails covers RunBridgeStream when SSH dial fails.
 func TestRunBridgeStream_DialFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -882,7 +1044,7 @@ func TestRunBridgeDetachable_WithEchoServer(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			err := RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", output, attachCh, wsConn, nil)
+			err := RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", output, attachCh, wsConn, nil, nil, nil, 0, 0)
 			bridgeErrCh <- err
 		}()
 	}))
@@ -961,7 +1123,7 @@ func TestRunBridgeDetachable_StreamAttach(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		bridgeErrCh <- RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", output, attachCh, nil, nil)
+		bridgeErrCh <- RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", output, attachCh, nil, nil, nil, nil, 0, 0)
 	}()
 
 	// Trigger attach so StreamAttach gets replay via WriteBinary

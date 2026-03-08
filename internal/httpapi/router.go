@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -165,7 +166,7 @@ func NewApp() *App {
 	terminalSessions := session.NewManager()
 
 	// Ensure admin user exists (password meets policy: 8+ chars, upper, lower, digit, special).
-	if _, err := userStore.CreateUser("admin", "admin", defaultAdminPassword); err != nil && !errors.Is(err, auth.ErrUserExists) {
+	if _, err := userStore.CreateUser("admin", "admin", defaultAdminPassword, auth.RoleAdmin); err != nil && !errors.Is(err, auth.ErrUserExists) {
 		panic(err)
 	}
 
@@ -240,10 +241,28 @@ func (a *App) NewRouter() http.Handler {
 	// Access groups (requires auth)
 	r.Get("/api/groups", a.handleGroups)
 	r.Post("/api/groups", a.handleCreateGroup)
+	r.Get("/api/groups/{group_id}/members", a.handleGroupMembers)
+	r.Post("/api/groups/{group_id}/members", a.handleAddGroupMember)
+	r.Delete("/api/groups/{group_id}/members/{user_id}", a.handleRemoveGroupMember)
+	r.Get("/api/groups/{group_id}/tags", a.handleGroupTags)
+	r.Put("/api/groups/{group_id}/tags", a.handleSetGroupTags)
+
+	// Users (admin only)
+	r.Get("/api/users", a.handleListUsers)
+	r.Post("/api/users", a.handleCreateUser)
+	r.Get("/api/users/{user_id}/tags", a.handleUserTags)
+	r.Put("/api/users/{user_id}/tags", a.handleSetUserTags)
+
+	// Tags: list all tags registered in the system (user/target/group) for tag picker (requires auth)
+	r.Get("/api/tags", a.handleListTags)
 
 	// Targets (requires auth)
 	r.Get("/api/targets", a.handleTargets)
 	r.Post("/api/targets", a.handleCreateTarget)
+	r.Put("/api/targets/{target_id}", a.handleUpdateTarget)
+	r.Delete("/api/targets/{target_id}", a.handleDeleteTarget)
+	r.Get("/api/targets/{target_id}/tags", a.handleTargetTags)
+	r.Put("/api/targets/{target_id}/tags", a.handleSetTargetTags)
 
 	// SSH/WebSocket terminal and session list (Phase 2: resume)
 	r.Route("/api/terminal/sessions", func(r chi.Router) {
@@ -251,6 +270,10 @@ func (a *App) NewRouter() http.Handler {
 		r.Delete("/{session_id}", a.handleTerminalSessionDelete)
 	})
 	r.Get("/ws/ssh", a.handleSSHWebSocket)
+
+	// Recordings (asciinema): list and download (owner only)
+	r.Get("/api/recordings", a.handleListRecordings)
+	r.Get("/api/recordings/{recording_id}/file", a.handleGetRecordingFile)
 
 	// Admin-only: API spec and reference (Swagger UI)
 	r.Get("/api/spec", a.handleAPISpec)
@@ -298,6 +321,7 @@ type loginRequest struct {
 type loginResponse struct {
 	UserID                string `json:"user_id"`
 	Username              string `json:"username"`
+	Role                  string `json:"role"`
 	RequirePasswordChange bool   `json:"require_password_change,omitempty"`
 }
 
@@ -309,6 +333,18 @@ func writeJSONError(w http.ResponseWriter, message string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(errorResponse{Message: message})
+}
+
+// writeInternalError logs err and sends a generic message (ASVS V8.1: do not expose internal errors to client).
+func writeInternalError(w http.ResponseWriter, err error) {
+	log.Printf("internal error: %v", err)
+	writeJSONError(w, "internal error", http.StatusInternalServerError)
+}
+
+// writeServiceUnavailableError logs err and sends a generic message for 503.
+func writeServiceUnavailableError(w http.ResponseWriter, err error) {
+	log.Printf("service unavailable: %v", err)
+	writeJSONError(w, "service unavailable", http.StatusServiceUnavailable)
 }
 
 func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -361,11 +397,15 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, cookie)
 
 	requireChange := u.ID == adminUserID && req.Password == defaultAdminPassword
+	if u.Role == "" {
+		u.Role = auth.RoleUser
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(loginResponse{
 		UserID:                u.ID,
 		Username:              u.Username,
+		Role:                  u.Role,
 		RequirePasswordChange: requireChange,
 	})
 }
@@ -420,12 +460,16 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	if u.Role == "" {
+		u.Role = auth.RoleUser
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(loginResponse{
 		UserID:   u.ID,
 		Username: u.Username,
+		Role:     u.Role,
 	})
 }
 
@@ -479,14 +523,19 @@ func (a *App) currentUserID(r *http.Request) string {
 	return sess.UserID
 }
 
-// requireAdmin writes 403 JSON and returns false if the current user is not admin; otherwise returns true.
+// requireAdmin writes 403 JSON and returns false if the current user does not have admin role; otherwise returns true.
 func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	userID := a.currentUserID(r)
 	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return false
 	}
-	if userID != adminUserID {
+	u, err := a.UserStore.GetByID(userID)
+	if err != nil || u == nil {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	if u.Role != auth.RoleAdmin {
 		writeJSONError(w, "forbidden: admin only", http.StatusForbidden)
 		return false
 	}
@@ -552,8 +601,10 @@ type targetResponse struct {
 	Host                 string `json:"host"`
 	Port                 uint16 `json:"port"`
 	Protocol             string `json:"protocol"`
-	Path                 string `json:"path"`
-	HasStoredCredentials bool   `json:"has_stored_credentials,omitempty"`
+	Path                 string   `json:"path"`
+	SSHUsername          string   `json:"ssh_username,omitempty"`
+	HasStoredCredentials bool     `json:"has_stored_credentials,omitempty"`
+	Tags                 []string `json:"tags,omitempty"`
 }
 
 type groupResponse struct {
@@ -562,14 +613,19 @@ type groupResponse struct {
 	Targets []targetResponse `json:"targets"`
 }
 
-func targetToResponse(t *access.Target) targetResponse {
+func targetToResponse(t *access.Target, tags []string) targetResponse {
 	r := targetResponse{
-		ID:       string(t.ID),
-		Name:     t.Name,
-		Host:     t.Host,
-		Port:     t.Port,
-		Protocol: string(t.Protocol),
-		Path:     t.Path,
+		ID:          string(t.ID),
+		Name:        t.Name,
+		Host:        t.Host,
+		Port:        t.Port,
+		Protocol:    string(t.Protocol),
+		Path:        t.Path,
+		SSHUsername: t.SSHUsername,
+		Tags:        tags,
+	}
+	if tags == nil {
+		r.Tags = []string{}
 	}
 	if t.SSHUsername != "" && t.SSHPassword != "" {
 		r.HasStoredCredentials = true
@@ -624,7 +680,7 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	groupIDs, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(sess.UserID), opts)
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 	var nextCursor string
@@ -632,6 +688,17 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 		groupIDs = groupIDs[:pageLimit]
 		nextCursor = string(groupIDs[pageLimit-1])
 	}
+	// Targets this user is allowed to see (membership or tag-based)
+	allowedTargetIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	allowedSet := make(map[access.TargetID]bool)
+	for _, id := range allowedTargetIDs {
+		allowedSet[id] = true
+	}
+
 	out := make([]groupResponse, 0, len(groupIDs))
 	for _, gid := range groupIDs {
 		g, err := a.AccessGroupStore.Get(ctx, gid)
@@ -642,13 +709,21 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		targets, err := a.TargetStore.ListByIDs(ctx, tids, nil)
+		// Only include targets the user is allowed to see (avoids leaking targets when access is tag-based)
+		var filtered []access.TargetID
+		for _, tid := range tids {
+			if allowedSet[tid] {
+				filtered = append(filtered, tid)
+			}
+		}
+		targets, err := a.TargetStore.ListByIDs(ctx, filtered, nil)
 		if err != nil {
 			continue
 		}
 		tout := make([]targetResponse, 0, len(targets))
 		for _, t := range targets {
-			tout = append(tout, targetToResponse(t))
+			tags, _ := a.TargetStore.TagsForTarget(ctx, t.ID)
+			tout = append(tout, targetToResponse(t, tags))
 		}
 		out = append(out, groupResponse{ID: string(g.ID), Name: g.Name, Targets: tout})
 	}
@@ -710,18 +785,443 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if !errors.Is(err, access.ErrGroupExists) {
-			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, err)
 			return
 		}
 	}
 	if err := a.AccessGroupStore.AddUserToGroup(ctx, access.UserID(sess.UserID), access.GroupID(id)); err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(groupResponse{ID: id, Name: req.Name, Targets: []targetResponse{}})
+}
+
+type userResponse struct {
+	ID       string   `json:"id"`
+	Username string   `json:"username"`
+	Role     string   `json:"role"`
+	Tags     []string `json:"tags,omitempty"`
+}
+
+// handleListUsers returns all users (admin only). Does not expose password hashes.
+func (a *App) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	limit := 100
+	offset := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if n, err := strconv.Atoi(o); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	users, err := a.UserStore.ListUsers(limit, offset)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	out := make([]userResponse, 0, len(users))
+	for _, u := range users {
+		role := u.Role
+		if role == "" {
+			role = auth.RoleUser
+		}
+		tags, _ := a.UserStore.TagsForUser(u.ID)
+		if tags == nil {
+			tags = []string{}
+		}
+		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role, Tags: tags})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+type createUserRequest struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Role     string `json:"role"`
+}
+
+// handleCreateUser creates a new user (admin only).
+func (a *App) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	var req createUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	req.Username = strings.TrimSpace(req.Username)
+	req.ID = strings.TrimSpace(req.ID)
+	req.Role = strings.TrimSpace(req.Role)
+	if req.Username == "" {
+		writeJSONError(w, "username is required", http.StatusBadRequest)
+		return
+	}
+	if req.Password == "" {
+		writeJSONError(w, "password is required", http.StatusBadRequest)
+		return
+	}
+	if req.ID == "" {
+		req.ID = slugID(req.Username)
+	}
+	if req.Role != auth.RoleAdmin && req.Role != auth.RoleUser {
+		req.Role = auth.RoleUser
+	}
+	u, err := a.UserStore.CreateUser(req.ID, req.Username, req.Password, req.Role)
+	if err != nil {
+		if errors.Is(err, auth.ErrUserExists) {
+			writeJSONError(w, "user already exists (id or username)", http.StatusConflict)
+			return
+		}
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	role := u.Role
+	if role == "" {
+		role = auth.RoleUser
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(userResponse{ID: u.ID, Username: u.Username, Role: role})
+}
+
+// handleUserTags returns tags for the user (admin only).
+func (a *App) handleUserTags(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	userID := chi.URLParam(r, "user_id")
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		writeJSONError(w, "user_id required", http.StatusBadRequest)
+		return
+	}
+	tags, err := a.UserStore.TagsForUser(userID)
+	if err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			writeJSONError(w, "user not found", http.StatusNotFound)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(tagsResponse{Tags: tags})
+}
+
+// handleSetUserTags sets tags for the user (admin only).
+func (a *App) handleSetUserTags(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	userID := chi.URLParam(r, "user_id")
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		writeJSONError(w, "user_id required", http.StatusBadRequest)
+		return
+	}
+	var req setTagsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Tags == nil {
+		req.Tags = []string{}
+	}
+	if err := a.UserStore.SetUserTags(userID, req.Tags); err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			writeJSONError(w, "user not found", http.StatusNotFound)
+			return
+		}
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(tagsResponse{Tags: req.Tags})
+}
+
+// handleGroupMembers returns users belonging to the group (admin only).
+func (a *App) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	groupID := chi.URLParam(r, "group_id")
+	if groupID == "" {
+		writeJSONError(w, "group_id required", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+	opts := listOptsFromRequest(r)
+	userIDs, err := a.AccessGroupStore.UserIDsForGroup(ctx, access.GroupID(groupID), opts)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	out := make([]userResponse, 0, len(userIDs))
+	for _, uid := range userIDs {
+		u, err := a.UserStore.GetByID(string(uid))
+		if err != nil {
+			continue
+		}
+		role := u.Role
+		if role == "" {
+			role = auth.RoleUser
+		}
+		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+type addGroupMemberRequest struct {
+	UserID string `json:"user_id"`
+}
+
+// handleAddGroupMember adds a user to an access group (admin only).
+func (a *App) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	groupID := chi.URLParam(r, "group_id")
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" {
+		writeJSONError(w, "group_id required", http.StatusBadRequest)
+		return
+	}
+	var req addGroupMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	req.UserID = strings.TrimSpace(req.UserID)
+	if req.UserID == "" {
+		writeJSONError(w, "user_id is required", http.StatusBadRequest)
+		return
+	}
+	if _, err := a.UserStore.GetByID(req.UserID); err != nil {
+		writeJSONError(w, "user not found", http.StatusNotFound)
+		return
+	}
+	ctx := r.Context()
+	if _, err := a.AccessGroupStore.Get(ctx, access.GroupID(groupID)); err != nil {
+		if errors.Is(err, access.ErrGroupNotFound) {
+			writeJSONError(w, "group not found", http.StatusNotFound)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	if err := a.AccessGroupStore.AddUserToGroup(ctx, access.UserID(req.UserID), access.GroupID(groupID)); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRemoveGroupMember removes a user from an access group (admin only).
+func (a *App) handleRemoveGroupMember(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	groupID := chi.URLParam(r, "group_id")
+	userID := chi.URLParam(r, "user_id")
+	groupID = strings.TrimSpace(groupID)
+	userID = strings.TrimSpace(userID)
+	if groupID == "" || userID == "" {
+		writeJSONError(w, "group_id and user_id required", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+	if err := a.AccessGroupStore.RemoveUserFromGroup(ctx, access.UserID(userID), access.GroupID(groupID)); err != nil {
+		if errors.Is(err, access.ErrGroupNotFound) {
+			writeJSONError(w, "group not found", http.StatusNotFound)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type tagsResponse struct {
+	Tags []string `json:"tags"`
+}
+
+// handleGroupTags returns tags for the group. Caller must belong to the group or be admin.
+func (a *App) handleGroupTags(w http.ResponseWriter, r *http.Request) {
+	groupID := chi.URLParam(r, "group_id")
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" {
+		writeJSONError(w, "group_id required", http.StatusBadRequest)
+		return
+	}
+	userID := a.currentUserID(r)
+	if userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	ctx := r.Context()
+	u, err := a.UserStore.GetByID(userID)
+	if err != nil || u == nil {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if u.Role != auth.RoleAdmin {
+		gids, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(userID), nil)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		allowed := false
+		for _, gid := range gids {
+			if string(gid) == groupID {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			writeJSONError(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
+	tags, err := a.AccessGroupStore.TagsForGroup(ctx, access.GroupID(groupID))
+	if err != nil {
+		if errors.Is(err, access.ErrGroupNotFound) {
+			writeJSONError(w, "group not found", http.StatusNotFound)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(tagsResponse{Tags: tags})
+}
+
+type setTagsRequest struct {
+	Tags []string `json:"tags"`
+}
+
+// handleSetGroupTags sets tags for the group. Caller must belong to the group or be admin.
+func (a *App) handleSetGroupTags(w http.ResponseWriter, r *http.Request) {
+	groupID := chi.URLParam(r, "group_id")
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" {
+		writeJSONError(w, "group_id required", http.StatusBadRequest)
+		return
+	}
+	userID := a.currentUserID(r)
+	if userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	ctx := r.Context()
+	u, err := a.UserStore.GetByID(userID)
+	if err != nil || u == nil {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if u.Role != auth.RoleAdmin {
+		gids, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(userID), nil)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		allowed := false
+		for _, gid := range gids {
+			if string(gid) == groupID {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			writeJSONError(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
+	var req setTagsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Tags == nil {
+		req.Tags = []string{}
+	}
+	if err := a.AccessGroupStore.SetGroupTags(ctx, access.GroupID(groupID), req.Tags); err != nil {
+		if errors.Is(err, access.ErrGroupNotFound) {
+			writeJSONError(w, "group not found", http.StatusNotFound)
+			return
+		}
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(tagsResponse{Tags: req.Tags})
+}
+
+// handleListTags returns all distinct tags from user_tags, target_tags, and group_tags (requires auth).
+func (a *App) handleListTags(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie("vantyx_session")
+	if err != nil || c.Value == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if _, err := a.SessionStore.Get(c.Value); err != nil {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	rows, err := a.DB.QueryContext(ctx, `
+		SELECT DISTINCT tag FROM (
+			SELECT tag FROM user_tags
+			UNION
+			SELECT tag FROM target_tags
+			UNION
+			SELECT tag FROM group_tags
+		) ORDER BY tag`)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	defer rows.Close()
+	var tags []string
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		tags = append(tags, tag)
+	}
+	if err := rows.Err(); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if tags == nil {
+		tags = []string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(struct {
+		Tags []string `json:"tags"`
+	}{Tags: tags})
 }
 
 // handleTargets returns the list of targets the current user can access.
@@ -747,7 +1247,7 @@ func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 	}
 	ids, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), opts)
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 	var nextCursor string
@@ -757,12 +1257,13 @@ func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 	}
 	targets, err := a.TargetStore.ListByIDs(ctx, ids, nil)
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 	out := make([]targetResponse, 0, len(targets))
 	for _, t := range targets {
-		out = append(out, targetToResponse(t))
+		tags, _ := a.TargetStore.TagsForTarget(ctx, t.ID)
+		out = append(out, targetToResponse(t, tags))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -830,7 +1331,7 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	allowedGroups, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(sess.UserID), nil)
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 	allowed := false
@@ -870,11 +1371,11 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if errors.Is(err, access.ErrEncryptionKeyRequired) {
-			writeJSONError(w, err.Error(), http.StatusServiceUnavailable)
+			writeServiceUnavailableError(w, err)
 			return
 		}
 		if !errors.Is(err, access.ErrTargetExists) {
-			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, err)
 			return
 		}
 	}
@@ -884,9 +1385,253 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t, _ := a.TargetStore.Get(ctx, access.TargetID(id))
+	tags, _ := a.TargetStore.TagsForTarget(ctx, access.TargetID(id))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(targetToResponse(t))
+	_ = json.NewEncoder(w).Encode(targetToResponse(t, tags))
+}
+
+type updateTargetRequest struct {
+	Name        string  `json:"name"`
+	Host        string  `json:"host"`
+	Port        uint16  `json:"port"`
+	Protocol    string  `json:"protocol"`
+	Path        string  `json:"path"`
+	SSHUsername string  `json:"ssh_username"`
+	SSHPassword *string `json:"ssh_password,omitempty"` // nil = 変更しない、空文字 = 保存済みパスワードをクリア
+}
+
+// handleUpdateTarget updates an existing target. Caller must have access to the target.
+func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	targetID := chi.URLParam(r, "target_id")
+	if targetID == "" {
+		writeJSONError(w, "target_id required", http.StatusBadRequest)
+		return
+	}
+	c, err := r.Cookie("vantyx_session")
+	if err != nil || c.Value == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	sess, err := a.SessionStore.Get(c.Value)
+	if err != nil {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	ctx := r.Context()
+	allowedIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	allowed := false
+	for _, id := range allowedIDs {
+		if id == access.TargetID(targetID) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		writeJSONError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var req updateTargetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Host = strings.TrimSpace(req.Host)
+	req.Path = normalizeTargetPath(req.Path)
+	if req.Name == "" || req.Host == "" {
+		writeJSONError(w, "name and host are required", http.StatusBadRequest)
+		return
+	}
+	if req.Port == 0 {
+		req.Port = 22
+	}
+	protocol := access.ProtocolSSH
+	if req.Protocol == "telnet" {
+		protocol = access.ProtocolTelnet
+	} else if req.Protocol != "" && req.Protocol != "ssh" {
+		writeJSONError(w, "protocol must be ssh or telnet", http.StatusBadRequest)
+		return
+	}
+	sshPassword := ""
+	if req.SSHPassword != nil {
+		sshPassword = *req.SSHPassword
+	} else {
+		// パスワード省略時は現状維持のため取得
+		cur, errCur := a.TargetStore.Get(ctx, access.TargetID(targetID))
+		if errCur == nil {
+			sshPassword = cur.SSHPassword
+		}
+	}
+	t, err := a.TargetStore.Update(ctx, access.TargetID(targetID), req.Name, req.Host, req.Port, protocol, req.Path, strings.TrimSpace(req.SSHUsername), sshPassword)
+	if err != nil {
+		if errors.Is(err, access.ErrTargetNotFound) {
+			writeJSONError(w, "target not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, access.ErrEncryptionKeyRequired) {
+			writeServiceUnavailableError(w, err)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	tags, _ := a.TargetStore.TagsForTarget(ctx, t.ID)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(targetToResponse(t, tags))
+}
+
+// handleDeleteTarget deletes a target. Caller must have access to the target.
+func (a *App) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	targetID := chi.URLParam(r, "target_id")
+	if targetID == "" {
+		writeJSONError(w, "target_id required", http.StatusBadRequest)
+		return
+	}
+	c, err := r.Cookie("vantyx_session")
+	if err != nil || c.Value == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	sess, err := a.SessionStore.Get(c.Value)
+	if err != nil {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	ctx := r.Context()
+	allowedIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	allowed := false
+	for _, id := range allowedIDs {
+		if id == access.TargetID(targetID) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		writeJSONError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := a.TargetStore.Delete(ctx, access.TargetID(targetID)); err != nil {
+		if errors.Is(err, access.ErrTargetNotFound) {
+			writeJSONError(w, "target not found", http.StatusNotFound)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleTargetTags returns tags for the target. Caller must have access to the target.
+func (a *App) handleTargetTags(w http.ResponseWriter, r *http.Request) {
+	targetID := chi.URLParam(r, "target_id")
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		writeJSONError(w, "target_id required", http.StatusBadRequest)
+		return
+	}
+	userID := a.currentUserID(r)
+	if userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	ctx := r.Context()
+	allowedIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	allowed := false
+	for _, id := range allowedIDs {
+		if string(id) == targetID {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		writeJSONError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	tags, err := a.TargetStore.TagsForTarget(ctx, access.TargetID(targetID))
+	if err != nil {
+		if errors.Is(err, access.ErrTargetNotFound) {
+			writeJSONError(w, "target not found", http.StatusNotFound)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(tagsResponse{Tags: tags})
+}
+
+// handleSetTargetTags sets tags for the target. Caller must have access to the target.
+func (a *App) handleSetTargetTags(w http.ResponseWriter, r *http.Request) {
+	targetID := chi.URLParam(r, "target_id")
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		writeJSONError(w, "target_id required", http.StatusBadRequest)
+		return
+	}
+	userID := a.currentUserID(r)
+	if userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	ctx := r.Context()
+	allowedIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	allowed := false
+	for _, id := range allowedIDs {
+		if string(id) == targetID {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		writeJSONError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var req setTagsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Tags == nil {
+		req.Tags = []string{}
+	}
+	if err := a.TargetStore.SetTargetTags(ctx, access.TargetID(targetID), req.Tags); err != nil {
+		if errors.Is(err, access.ErrTargetNotFound) {
+			writeJSONError(w, "target not found", http.StatusNotFound)
+			return
+		}
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(tagsResponse{Tags: req.Tags})
 }
 
 func slugID(s string) string {

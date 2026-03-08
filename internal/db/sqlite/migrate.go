@@ -54,6 +54,24 @@ func Migrate(db *sql.DB) error {
 			FOREIGN KEY (group_id) REFERENCES access_groups(id) ON DELETE CASCADE,
 			FOREIGN KEY (target_id) REFERENCES targets(id) ON DELETE CASCADE
 		);`,
+		`CREATE TABLE IF NOT EXISTS group_tags (
+			group_id TEXT NOT NULL,
+			tag TEXT NOT NULL,
+			PRIMARY KEY (group_id, tag),
+			FOREIGN KEY (group_id) REFERENCES access_groups(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS target_tags (
+			target_id TEXT NOT NULL,
+			tag TEXT NOT NULL,
+			PRIMARY KEY (target_id, tag),
+			FOREIGN KEY (target_id) REFERENCES targets(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS user_tags (
+			user_id TEXT NOT NULL,
+			tag TEXT NOT NULL,
+			PRIMARY KEY (user_id, tag),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
 		`CREATE TABLE IF NOT EXISTS sessions (
 			id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL,
@@ -84,6 +102,22 @@ func Migrate(db *sql.DB) error {
 	for _, alter := range []string{
 		`ALTER TABLE targets ADD COLUMN ssh_username TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE targets ADD COLUMN ssh_password TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.ExecContext(ctx, alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	// User role: admin | user. Default user; existing id='admin' -> admin.
+	if _, err := db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE users SET role = 'admin' WHERE id = 'admin'`); err != nil {
+		return err
+	}
+	// Recordings: optional session name/description (from terminal session StartOptions).
+	for _, alter := range []string{
+		`ALTER TABLE recordings ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE recordings ADD COLUMN session_description TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.ExecContext(ctx, alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return err

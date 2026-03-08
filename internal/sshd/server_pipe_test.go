@@ -147,7 +147,7 @@ func TestServer_Serve_RealTCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StdoutPipe: %v", err)
 	}
-	go io.Copy(io.Discard, stdout)
+	go func() { _, _ = io.Copy(io.Discard, stdout) }()
 	if err := sess.Shell(); err != nil {
 		t.Fatalf("Shell: %v", err)
 	}
@@ -181,7 +181,7 @@ func runSession(t *testing.T, addr string, signer ssh.Signer, commands ...string
 	}
 	stdin, _ := sess.StdinPipe()
 	stdout, _ := sess.StdoutPipe()
-	go io.Copy(io.Discard, stdout)
+	go func() { _, _ = io.Copy(io.Discard, stdout) }()
 	if err := sess.Shell(); err != nil {
 		t.Fatalf("Shell: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestServer_Serve_ClientCloseWithoutExit(t *testing.T) {
 	}
 	stdin, _ := sess.StdinPipe()
 	stdout, _ := sess.StdoutPipe()
-	go io.Copy(io.Discard, stdout)
+	go func() { _, _ = io.Copy(io.Discard, stdout) }()
 	if err := sess.Shell(); err != nil {
 		client.Close()
 		t.Fatalf("Shell: %v", err)
@@ -322,7 +322,7 @@ func TestServer_Serve_ReadLinePartialThenEOF(t *testing.T) {
 	}
 	stdin, _ := sess.StdinPipe()
 	stdout, _ := sess.StdoutPipe()
-	go io.Copy(io.Discard, stdout)
+	go func() { _, _ = io.Copy(io.Discard, stdout) }()
 	if err := sess.Shell(); err != nil {
 		client.Close()
 		t.Fatalf("Shell: %v", err)
@@ -501,7 +501,6 @@ func TestServer_Shutdown_NoListener(t *testing.T) {
 type failAfterFirstAcceptListener struct {
 	net.Listener
 	acceptCount int
-	err         error
 }
 
 func (f *failAfterFirstAcceptListener) Accept() (net.Conn, error) {
@@ -588,7 +587,7 @@ func TestServer_Serve_WindowChange(t *testing.T) {
 	}
 	stdin, _ := sess.StdinPipe()
 	stdout, _ := sess.StdoutPipe()
-	go io.Copy(io.Discard, stdout)
+	go func() { _, _ = io.Copy(io.Discard, stdout) }()
 	if err := sess.Shell(); err != nil {
 		t.Fatalf("Shell: %v", err)
 	}

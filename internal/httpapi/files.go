@@ -206,6 +206,7 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	defer client.Close()
 
 	const maxUploadMB = 64
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadMB<<20)
 	if err := r.ParseMultipartForm(maxUploadMB << 20); err != nil {
 		writeJSONError(w, "invalid multipart form: "+err.Error(), http.StatusBadRequest)
 		return

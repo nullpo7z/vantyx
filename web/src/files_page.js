@@ -26,10 +26,8 @@ export function renderFilesPage(container) {
 
   let currentPath = '/'
   let loading = false
-  let errorMessage = ''
 
   function setError(msg) {
-    errorMessage = msg
     const el = container.querySelector('#files-error')
     if (el) {
       el.textContent = msg

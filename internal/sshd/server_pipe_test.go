@@ -120,8 +120,8 @@ func TestServer_Serve_RealTCP(t *testing.T) {
 	_, addr, signer := setupServerWithTCP(t)
 
 	config := &ssh.ClientConfig{
-		User: "admin",
-		Auth: []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		User:            "admin",
+		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
 		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
 		Timeout:         5 * time.Second,
 	}

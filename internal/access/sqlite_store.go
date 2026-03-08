@@ -705,15 +705,15 @@ func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, nam
 		return nil, ErrTargetExists
 	}
 	return &Target{
-		ID:                    id,
-		Name:                  name,
-		Host:                  host,
-		Port:                  port,
-		Protocol:              protocol,
-		Path:                  path,
-		SSHUsername:           sshUsername,
-		SSHPassword:           sshPassword,
-		SSHPrivateKey:         sshPrivateKey,
+		ID:                      id,
+		Name:                    name,
+		Host:                    host,
+		Port:                    port,
+		Protocol:                protocol,
+		Path:                    path,
+		SSHUsername:             sshUsername,
+		SSHPassword:             sshPassword,
+		SSHPrivateKey:           sshPrivateKey,
 		SSHPrivateKeyPassphrase: sshPrivateKeyPassphrase,
 	}, nil
 }

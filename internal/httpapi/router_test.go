@@ -1262,9 +1262,9 @@ func TestApp_Files_ListWithMock(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
 	}
 	var list []struct {
-		Name   string `json:"name"`
-		Size   int64  `json:"size"`
-		IsDir  bool   `json:"is_dir"`
+		Name    string `json:"name"`
+		Size    int64  `json:"size"`
+		IsDir   bool   `json:"is_dir"`
 		ModTime string `json:"mod_time"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&list); err != nil {

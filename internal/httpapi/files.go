@@ -18,9 +18,9 @@ import (
 
 // fileEntry is a single entry in a directory listing.
 type fileEntry struct {
-	Name   string `json:"name"`
-	Size   int64  `json:"size"`
-	IsDir  bool   `json:"is_dir"`
+	Name    string `json:"name"`
+	Size    int64  `json:"size"`
+	IsDir   bool   `json:"is_dir"`
 	ModTime string `json:"mod_time,omitempty"`
 }
 

@@ -27,7 +27,7 @@ type Target struct {
 	SSHUsername string
 	SSHPassword string
 	// SSH public key auth: PEM-encoded private key and optional passphrase. Encrypted at rest like SSHPassword.
-	SSHPrivateKey          string
+	SSHPrivateKey           string
 	SSHPrivateKeyPassphrase string
 }
 

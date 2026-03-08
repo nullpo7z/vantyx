@@ -1389,15 +1389,15 @@ func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 }
 
 type createTargetRequest struct {
-	Name                 string `json:"name"`
-	Host                 string `json:"host"`
-	Port                 uint16 `json:"port"`
-	Protocol             string `json:"protocol"`
-	Path                 string `json:"path"`
-	GroupID              string `json:"group_id"`
-	SSHUsername          string `json:"ssh_username"`
-	SSHPassword          string `json:"ssh_password"`
-	SSHPrivateKey        string `json:"ssh_private_key"`
+	Name                    string `json:"name"`
+	Host                    string `json:"host"`
+	Port                    uint16 `json:"port"`
+	Protocol                string `json:"protocol"`
+	Path                    string `json:"path"`
+	GroupID                 string `json:"group_id"`
+	SSHUsername             string `json:"ssh_username"`
+	SSHPassword             string `json:"ssh_password"`
+	SSHPrivateKey           string `json:"ssh_private_key"`
 	SSHPrivateKeyPassphrase string `json:"ssh_private_key_passphrase"`
 }
 
@@ -1504,14 +1504,14 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateTargetRequest struct {
-	Name                   string  `json:"name"`
-	Host                   string  `json:"host"`
-	Port                   uint16  `json:"port"`
-	Protocol               string  `json:"protocol"`
-	Path                   string  `json:"path"`
-	SSHUsername            string  `json:"ssh_username"`
-	SSHPassword            *string `json:"ssh_password,omitempty"`             // nil = 変更しない、空文字 = クリア
-	SSHPrivateKey          *string `json:"ssh_private_key,omitempty"`          // nil = 変更しない、空文字 = クリア
+	Name                    string  `json:"name"`
+	Host                    string  `json:"host"`
+	Port                    uint16  `json:"port"`
+	Protocol                string  `json:"protocol"`
+	Path                    string  `json:"path"`
+	SSHUsername             string  `json:"ssh_username"`
+	SSHPassword             *string `json:"ssh_password,omitempty"`               // nil = 変更しない、空文字 = クリア
+	SSHPrivateKey           *string `json:"ssh_private_key,omitempty"`            // nil = 変更しない、空文字 = クリア
 	SSHPrivateKeyPassphrase *string `json:"ssh_private_key_passphrase,omitempty"` // nil = 変更しない、空文字 = クリア
 }
 

@@ -667,12 +667,12 @@ func portString(port uint16) string {
 // Credentials is the JSON shape of the first WebSocket message for SSH auth.
 // When using stored credentials (server-side), PrivateKey and PrivateKeyPassphrase may be set from the target.
 type Credentials struct {
-	Username              string `json:"username"`
-	Password              string `json:"password"`
-	PrivateKey            string `json:"-"` // PEM; set server-side when using stored key
-	PrivateKeyPassphrase  string `json:"-"` // passphrase for encrypted PEM
-	Name                  string `json:"name"`        // セッション名（識別用・任意）
-	Description           string `json:"description"` // 説明（任意）
+	Username             string `json:"username"`
+	Password             string `json:"password"`
+	PrivateKey           string `json:"-"`           // PEM; set server-side when using stored key
+	PrivateKeyPassphrase string `json:"-"`           // passphrase for encrypted PEM
+	Name                 string `json:"name"`        // セッション名（識別用・任意）
+	Description          string `json:"description"` // 説明（任意）
 }
 
 // ReadCredentials reads the first WebSocket text message and parses it as Credentials.

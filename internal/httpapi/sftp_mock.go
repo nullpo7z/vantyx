@@ -17,7 +17,7 @@ type MockSFTPFile struct {
 	info MockFileInfo
 }
 
-func (f *MockSFTPFile) Close() error   { return nil }
+func (f *MockSFTPFile) Close() error               { return nil }
 func (f *MockSFTPFile) Stat() (os.FileInfo, error) { return &f.info, nil }
 
 // MockFileInfo implements os.FileInfo for the mock.
@@ -29,11 +29,11 @@ type MockFileInfo struct {
 }
 
 func (m *MockFileInfo) Name() string       { return m.Name_ }
-func (m *MockFileInfo) Size() int64       { return m.Size_ }
-func (m *MockFileInfo) Mode() os.FileMode { return 0 }
+func (m *MockFileInfo) Size() int64        { return m.Size_ }
+func (m *MockFileInfo) Mode() os.FileMode  { return 0 }
 func (m *MockFileInfo) ModTime() time.Time { return m.Mod_ }
-func (m *MockFileInfo) IsDir() bool       { return m.IsDir_ }
-func (m *MockFileInfo) Sys() interface{}  { return nil }
+func (m *MockFileInfo) IsDir() bool        { return m.IsDir_ }
+func (m *MockFileInfo) Sys() interface{}   { return nil }
 
 // MockSFTPClient is an in-memory SFTP client for testing file transfer handlers.
 // Keys are cleaned paths like "/" or "/dir/file.txt". Values are either:

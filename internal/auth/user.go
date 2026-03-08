@@ -25,7 +25,7 @@ type User struct {
 type UserSSHKey struct {
 	ID        int64
 	UserID    string
-	KeyLine   string   // one line in authorized_keys format (e.g. "ssh-ed25519 AAAA... comment")
+	KeyLine   string // one line in authorized_keys format (e.g. "ssh-ed25519 AAAA... comment")
 	CreatedAt time.Time
 }
 

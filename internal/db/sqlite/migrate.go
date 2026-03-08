@@ -116,7 +116,7 @@ func Migrate(db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `UPDATE users SET role = 'admin' WHERE id = 'admin'`); err != nil {
 		return err
 	}
-		// Recordings: optional session name/description (from terminal session StartOptions).
+	// Recordings: optional session name/description (from terminal session StartOptions).
 	for _, alter := range []string{
 		`ALTER TABLE recordings ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE recordings ADD COLUMN session_description TEXT NOT NULL DEFAULT ''`,

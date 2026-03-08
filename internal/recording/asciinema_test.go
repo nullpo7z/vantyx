@@ -163,7 +163,7 @@ func TestAsciinemaWriter_RecordInputWriteError(t *testing.T) {
 	var buf bytes.Buffer
 	lw := &limitWriter{w: &buf, limit: 200, errAfter: wantErr}
 	w := NewAsciinemaWriter(lw, 80, 24)
-	w.Write([]byte("out"))
+	_, _ = w.Write([]byte("out"))
 	w.RecordInput([]byte("in"))
 	// RecordInput ignores errors; we just ensure the code path runs (coverage).
 	if buf.Len() == 0 {

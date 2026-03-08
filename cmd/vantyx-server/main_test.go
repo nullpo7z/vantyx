@@ -232,7 +232,7 @@ func TestLoadOrGenerateCert_InvalidExisting(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "tls.crt")
 	keyFile := filepath.Join(dir, "tls.key")
-	if err := os.WriteFile(certFile, []byte("not pem"), 0644); err != nil {
+	if err := os.WriteFile(certFile, []byte("not pem"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(keyFile, []byte("not pem"), 0600); err != nil {
@@ -268,7 +268,7 @@ func TestLoadOrGenerateCert_OneExists(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "tls.crt")
 	keyFile := filepath.Join(dir, "tls.key")
-	if err := os.WriteFile(certFile, []byte("x"), 0644); err != nil {
+	if err := os.WriteFile(certFile, []byte("x"), 0600); err != nil {
 		t.Fatal(err)
 	}
 

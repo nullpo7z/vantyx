@@ -951,7 +951,7 @@ func (a *App) handleSetUserTags(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(tagsResponse{Tags: req.Tags})
+	_ = json.NewEncoder(w).Encode(tagsResponse(req))
 }
 
 // handleGroupMembers returns users belonging to the group (admin only).
@@ -1172,7 +1172,7 @@ func (a *App) handleSetGroupTags(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(tagsResponse{Tags: req.Tags})
+	_ = json.NewEncoder(w).Encode(tagsResponse(req))
 }
 
 // handleListTags returns all distinct tags from user_tags, target_tags, and group_tags (requires auth).
@@ -1631,7 +1631,7 @@ func (a *App) handleSetTargetTags(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(tagsResponse{Tags: req.Tags})
+	_ = json.NewEncoder(w).Encode(tagsResponse(req))
 }
 
 func slugID(s string) string {

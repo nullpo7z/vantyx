@@ -352,6 +352,7 @@ func (s *Server) loadGroupsWithSSHTargets(ctx context.Context, userID string) ([
 	return out, nil
 }
 
+//nolint:gocyclo // menu has many commands and branches by design
 func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string, ptyCols, ptyRows int, resizeChan <-chan sshproxy.TerminalSize) {
 	defer sendExitStatus(channel, 0)
 	rd := bufio.NewReader(channel)

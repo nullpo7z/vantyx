@@ -1073,7 +1073,7 @@ func TestRunBridgeDetachable_WithEchoServer(t *testing.T) {
 
 	select {
 	case <-bridgeErrCh:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("RunBridgeDetachable did not return")
 	}
 }

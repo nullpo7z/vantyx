@@ -129,12 +129,12 @@ func main() {
 		}
 		var err error
 		sshServer, err = sshd.NewServer(sshd.Config{
-			UserStore:       app.UserStore,
-			TargetStore:     app.TargetStore,
-			GroupStore:      app.AccessGroupStore,
-			SessionManager:  app.TerminalSessionManager,
-			RecordingsDir:   recordingDir,
-			RecordingStore:  recordingStore,
+			UserStore:      app.UserStore,
+			TargetStore:    app.TargetStore,
+			GroupStore:     app.AccessGroupStore,
+			SessionManager: app.TerminalSessionManager,
+			RecordingsDir:  recordingDir,
+			RecordingStore: recordingStore,
 		})
 		if err != nil {
 			slog.Error("sshd setup failed", "error", err)

@@ -49,16 +49,16 @@ type RecordingStore interface {
 
 // Server is the CLI SSH gateway: users log in with Vantyx credentials, then choose a target to proxy to.
 type Server struct {
-	userStore       auth.UserStore
-	targetStore     access.TargetStore
-	groupStore      access.AccessGroupStore
-	sessionManager  SessionStarter
-	config          *ssh.ServerConfig
-	listener        net.Listener
-	mu              sync.Mutex
-	shutdown        bool
-	recordingDir    string
-	recordingStore  RecordingStore
+	userStore      auth.UserStore
+	targetStore    access.TargetStore
+	groupStore     access.AccessGroupStore
+	sessionManager SessionStarter
+	config         *ssh.ServerConfig
+	listener       net.Listener
+	mu             sync.Mutex
+	shutdown       bool
+	recordingDir   string
+	recordingStore RecordingStore
 }
 
 // Config holds dependencies for the SSH server.
@@ -71,7 +71,7 @@ type Config struct {
 	HostKey ssh.Signer
 	// RecordingsDir enables asciinema recording for CLI connect sessions when set (e.g. VANTYX_RECORDINGS_DIR).
 	// RecordingStore must also be set to persist metadata.
-	RecordingsDir   string
+	RecordingsDir  string
 	RecordingStore RecordingStore
 }
 

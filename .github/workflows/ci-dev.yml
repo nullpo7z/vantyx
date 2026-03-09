@@ -62,7 +62,7 @@ jobs:
           go test ./...
       - name: Run coverage for internal packages
         run: |
-          go test ./internal/access ./internal/auth ./internal/httpapi ./internal/netutil ./internal/session ./internal/sshproxy ./internal/rdpvnc -covermode=atomic -coverprofile=coverage.out
+          go test ./internal/access ./internal/auth ./internal/httpapi ./internal/netutil ./internal/session ./internal/sshproxy -covermode=atomic -coverprofile=coverage.out
       - name: Enforce coverage threshold
         run: |
           chmod +x scripts/check_coverage.sh

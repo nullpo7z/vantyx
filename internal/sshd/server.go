@@ -769,9 +769,11 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			termSess := activeSessions[n-1]
 			resumeStopCh := make(chan struct{})
 			resumeDone := make(chan struct{})
+			var resumeReadStarted bool
 			streamAttach := &sshproxy.StreamAttach{
 				Write: func(p []byte) error { _, err := wr.Write(p); return err },
 				StartRead: func(stdinCh chan<- []byte, onClose func()) {
+					resumeReadStarted = true
 					go func() {
 						defer func() { onClose(); close(resumeDone) }()
 						for {
@@ -815,7 +817,9 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				case <-resumeDone:
 				case <-termSess.Done():
 					close(resumeStopCh)
-					<-resumeDone
+					if resumeReadStarted {
+						<-resumeDone
+					}
 				}
 			default:
 				prompt("Session attach slot busy. Try again.\r\n")
@@ -905,6 +909,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			bridgeDone := make(chan struct{})
 			connectStopCh := make(chan struct{})
 			readDone := make(chan struct{})
+			var readStarted bool
 			var bridgeErr error
 			opts := session.StartOptions{
 				UserID:      userID,
@@ -919,6 +924,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				streamAttach := &sshproxy.StreamAttach{
 					Write: func(p []byte) error { _, e := wr.Write(p); return e },
 					StartRead: func(stdinCh chan<- []byte, onClose func()) {
+						readStarted = true
 						go func() {
 							defer func() { onClose(); close(readDone) }()
 							for {
@@ -995,7 +1001,9 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			}
 			<-bridgeDone
 			close(connectStopCh)
-			<-readDone
+			if readStarted {
+				<-readDone
+			}
 			if bridgeErr != nil {
 				prompt("\r\nDisconnected: %v\r\n", bridgeErr)
 			} else {

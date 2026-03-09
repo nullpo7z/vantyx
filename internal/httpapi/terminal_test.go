@@ -696,7 +696,7 @@ func TestHandleGetRecordingFile_CastFormat(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	castFile := filepath.Join(dir, "rec-cast-1.cast")
-	if err := os.WriteFile(castFile, []byte(`{"version": 2, "width": 80, "height": 24}`), 0o644); err != nil {
+	if err := os.WriteFile(castFile, []byte(`{"version": 2, "width": 80, "height": 24}`), 0o600); err != nil {
 		t.Fatalf("write cast: %v", err)
 	}
 	_ = os.Setenv("VANTYX_RECORDINGS_DIR", dir)
@@ -720,7 +720,7 @@ func TestHandleGetRecordingFile_DefaultFormat(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	castFile := filepath.Join(dir, "rec-default-1.cast")
-	if err := os.WriteFile(castFile, []byte(`{"version": 2, "width": 80, "height": 24}`), 0o644); err != nil {
+	if err := os.WriteFile(castFile, []byte(`{"version": 2, "width": 80, "height": 24}`), 0o600); err != nil {
 		t.Fatalf("write cast: %v", err)
 	}
 	_ = os.Setenv("VANTYX_RECORDINGS_DIR", dir)
@@ -775,7 +775,7 @@ func TestHandleGetRecordingFile_InvalidFormat(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	castFile := filepath.Join(dir, "rec-fmt-1.cast")
-	_ = os.WriteFile(castFile, []byte(`{}`), 0o644)
+	_ = os.WriteFile(castFile, []byte(`{}`), 0o600)
 	_ = os.Setenv("VANTYX_RECORDINGS_DIR", dir)
 	defer os.Unsetenv("VANTYX_RECORDINGS_DIR")
 	_ = app.InsertRecording(ctx, "rec-fmt-1", "admin", "t1", "s1", "ssh", castFile, time.Now().UTC().Format(time.RFC3339), "", "")

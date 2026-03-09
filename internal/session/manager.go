@@ -111,6 +111,9 @@ func (m *Manager) Get(id ID) (*Session, bool) {
 // ID returns the session identifier.
 func (s *Session) ID() ID { return s.id }
 
+// Done returns a channel that is closed when the session goroutine has finished.
+func (s *Session) Done() <-chan struct{} { return s.done }
+
 // CreatedAt returns when the session was created.
 func (s *Session) CreatedAt() time.Time { return s.createdAt }
 

@@ -403,6 +403,21 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 	prompt := func(format string, args ...interface{}) {
 		_, _ = fmt.Fprintf(wr, format, args...)
 	}
+
+	// Single reader goroutine owns rd; all consumers read from inputCh.
+	// This prevents races when StartRead and readLine would both call rd.Read.
+	inputCh := make(chan byte, 4096)
+	go func() {
+		for {
+			b, err := rd.ReadByte()
+			if err != nil {
+				close(inputCh)
+				return
+			}
+			inputCh <- b
+		}
+	}()
+
 	// CLI commands for Tab completion
 	cliCommands := []string{"list", "ls", "cd", "pwd", "connect", "resume", "sessions", "help", "exit", "quit"}
 
@@ -412,12 +427,12 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			_, _ = wr.Write([]byte{0x08, ' ', 0x08}) // backspace, space, backspace
 		}
 		for {
-			b, err := rd.ReadByte()
-			if err != nil {
+			b, ok := <-inputCh
+			if !ok {
 				if len(line) > 0 {
 					return strings.TrimSpace(string(line)), nil
 				}
-				return "", err
+				return "", io.EOF
 			}
 			if b == '\n' || b == '\r' {
 				if echo {
@@ -443,7 +458,6 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 					}
 				}
 				word := string(line[start:])
-				// Normalize: trim spaces and control chars so "sess\r" still matches "sessions"
 				word = strings.TrimSpace(word)
 				word = strings.TrimFunc(word, func(r rune) bool { return r < 32 || r == 127 })
 				var matches []string
@@ -475,14 +489,12 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				continue
 			}
 			if b == '\t' {
-				// Tab in username/password field: ignore
 				continue
 			}
-			// Swallow ANSI/escape sequences so they don't end up in the line (fixes "need to type twice" with some clients)
 			if b == 0x1b {
 				for i := 0; i < 24; i++ {
-					next, err := rd.ReadByte()
-					if err != nil {
+					next, ok := <-inputCh
+					if !ok {
 						break
 					}
 					if next >= 0x40 && next <= 0x7e {
@@ -755,23 +767,40 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				continue
 			}
 			termSess := activeSessions[n-1]
-			done := make(chan struct{})
+			resumeStopCh := make(chan struct{})
+			resumeDone := make(chan struct{})
 			streamAttach := &sshproxy.StreamAttach{
 				Write: func(p []byte) error { _, err := wr.Write(p); return err },
 				StartRead: func(stdinCh chan<- []byte, onClose func()) {
 					go func() {
-						defer func() { onClose(); close(done) }()
-						buf := make([]byte, 4096)
+						defer func() { onClose(); close(resumeDone) }()
 						for {
-							n, err := rd.Read(buf)
-							if n > 0 {
-								select {
-								case stdinCh <- buf[:n]:
-								case <-ctx.Done():
+							select {
+							case b, ok := <-inputCh:
+								if !ok {
 									return
 								}
-							}
-							if err != nil {
+								buf := []byte{b}
+							drain:
+								for {
+									select {
+									case b, ok = <-inputCh:
+										if !ok {
+											break drain
+										}
+										buf = append(buf, b)
+									default:
+										break drain
+									}
+								}
+								cp := make([]byte, len(buf))
+								copy(cp, buf)
+								select {
+								case stdinCh <- cp:
+								case <-resumeStopCh:
+									return
+								}
+							case <-resumeStopCh:
 								return
 							}
 						}
@@ -782,7 +811,12 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			select {
 			case termSess.AttachCh <- session.AttachReq{Conn: streamAttach}:
 				prompt("\r\nAttached. Disconnect with Ctrl+C or close the connection.\r\n\r\n")
-				<-done
+				select {
+				case <-resumeDone:
+				case <-termSess.Done():
+					close(resumeStopCh)
+					<-resumeDone
+				}
 			default:
 				prompt("Session attach slot busy. Try again.\r\n")
 			}
@@ -869,6 +903,8 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 
 			sessionID := session.ID(time.Now().UTC().Format(time.RFC3339Nano))
 			bridgeDone := make(chan struct{})
+			connectStopCh := make(chan struct{})
+			readDone := make(chan struct{})
 			var bridgeErr error
 			opts := session.StartOptions{
 				UserID:      userID,
@@ -884,18 +920,34 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 					Write: func(p []byte) error { _, e := wr.Write(p); return e },
 					StartRead: func(stdinCh chan<- []byte, onClose func()) {
 						go func() {
-							defer onClose()
-							buf := make([]byte, 4096)
+							defer func() { onClose(); close(readDone) }()
 							for {
-								n, err := rd.Read(buf)
-								if n > 0 {
-									select {
-									case stdinCh <- buf[:n]:
-									case <-bridgeCtx.Done():
+								select {
+								case b, ok := <-inputCh:
+									if !ok {
 										return
 									}
-								}
-								if err != nil {
+									buf := []byte{b}
+								drain:
+									for {
+										select {
+										case b, ok = <-inputCh:
+											if !ok {
+												break drain
+											}
+											buf = append(buf, b)
+										default:
+											break drain
+										}
+									}
+									cp := make([]byte, len(buf))
+									copy(cp, buf)
+									select {
+									case stdinCh <- cp:
+									case <-connectStopCh:
+										return
+									}
+								case <-connectStopCh:
 									return
 								}
 							}
@@ -942,6 +994,8 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				continue
 			}
 			<-bridgeDone
+			close(connectStopCh)
+			<-readDone
 			if bridgeErr != nil {
 				prompt("\r\nDisconnected: %v\r\n", bridgeErr)
 			} else {

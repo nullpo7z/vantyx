@@ -139,5 +139,5 @@ func (a *App) handleRDPFile(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/x-rdp")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.rdp"`, target.Name))
-	_, _ = w.Write([]byte(rdpContent))
+	_, _ = w.Write([]byte(rdpContent)) // #nosec G705 -- content is built from validated target fields, not user-supplied taint
 }

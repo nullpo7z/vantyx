@@ -17,6 +17,7 @@ import (
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/session"
+	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
 
 func newTestAppForTerminal(t *testing.T) *App {
@@ -571,5 +572,390 @@ func TestHandleTerminalSessionDelete_Success(t *testing.T) {
 	}
 	if len(mgr.ActiveIDs()) != 0 {
 		t.Fatalf("expected session to be stopped")
+	}
+}
+
+// --- credentialsDecrypted ---
+
+func TestCredentialsDecrypted_OK(t *testing.T) {
+	creds := sshproxy.Credentials{Username: "u", Password: "p"}
+	if err := credentialsDecrypted(creds); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestCredentialsDecrypted_PrivateKeyIsCiphertext(t *testing.T) {
+	creds := sshproxy.Credentials{PrivateKey: "v1:abc123def"}
+	if err := credentialsDecrypted(creds); !errors.Is(err, errCredentialsNotDecrypted) {
+		t.Fatalf("expected errCredentialsNotDecrypted, got %v", err)
+	}
+}
+
+func TestCredentialsDecrypted_PassphraseIsCiphertext(t *testing.T) {
+	creds := sshproxy.Credentials{PrivateKeyPassphrase: "v1:xyz789"}
+	if err := credentialsDecrypted(creds); !errors.Is(err, errCredentialsNotDecrypted) {
+		t.Fatalf("expected errCredentialsNotDecrypted, got %v", err)
+	}
+}
+
+func TestCredentialsDecrypted_BothEmpty(t *testing.T) {
+	creds := sshproxy.Credentials{}
+	if err := credentialsDecrypted(creds); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestCredentialsDecrypted_NonCiphertextValues(t *testing.T) {
+	creds := sshproxy.Credentials{PrivateKey: "-----BEGIN RSA PRIVATE KEY-----\n...", PrivateKeyPassphrase: "mypass"}
+	if err := credentialsDecrypted(creds); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+// --- InsertRecording / UpdateRecordingEnded ---
+
+func TestInsertRecording_Success(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	ctx := context.Background()
+	err := app.InsertRecording(ctx, "rec-test-1", "admin", "t1", "s1", "ssh", "/tmp/test.cast", time.Now().UTC().Format(time.RFC3339), "mysess", "desc")
+	if err != nil {
+		t.Fatalf("InsertRecording: %v", err)
+	}
+}
+
+func TestInsertRecording_NilDB(t *testing.T) {
+	app := &App{}
+	ctx := context.Background()
+	err := app.InsertRecording(ctx, "rec-test-1", "admin", "t1", "s1", "ssh", "/tmp/test.cast", time.Now().UTC().Format(time.RFC3339), "", "")
+	if err != nil {
+		t.Fatalf("expected nil error for nil DB, got %v", err)
+	}
+}
+
+func TestUpdateRecordingEnded_Success(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	ctx := context.Background()
+	_ = app.InsertRecording(ctx, "rec-update-1", "admin", "t1", "s1", "ssh", "/tmp/test.cast", time.Now().UTC().Format(time.RFC3339), "", "")
+	err := app.UpdateRecordingEnded(ctx, "rec-update-1", time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("UpdateRecordingEnded: %v", err)
+	}
+}
+
+func TestUpdateRecordingEnded_NilDB(t *testing.T) {
+	app := &App{}
+	ctx := context.Background()
+	err := app.UpdateRecordingEnded(ctx, "rec-update-1", time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("expected nil error for nil DB, got %v", err)
+	}
+}
+
+// --- handleListRecordings ---
+
+func TestHandleListRecordings_WithTargetFilter(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_ = app.InsertRecording(ctx, "rec-filter-1", "admin", "t1", "s1", "ssh", "/tmp/test.cast", time.Now().UTC().Format(time.RFC3339), "", "")
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings?target_id=t1", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&result)
+	items, _ := result["items"].([]interface{})
+	if len(items) == 0 {
+		t.Fatal("expected at least 1 recording")
+	}
+}
+
+func TestHandleListRecordings_NoRecordings(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings?target_id=nonexistent", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+// --- handleGetRecordingFile ---
+
+func TestHandleGetRecordingFile_CastFormat(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	dir := t.TempDir()
+	castFile := filepath.Join(dir, "rec-cast-1.cast")
+	if err := os.WriteFile(castFile, []byte(`{"version": 2, "width": 80, "height": 24}`), 0o644); err != nil {
+		t.Fatalf("write cast: %v", err)
+	}
+	_ = os.Setenv("VANTYX_RECORDINGS_DIR", dir)
+	defer os.Unsetenv("VANTYX_RECORDINGS_DIR")
+
+	_ = app.InsertRecording(ctx, "rec-cast-1", "admin", "t1", "s1", "ssh", castFile, time.Now().UTC().Format(time.RFC3339), "", "")
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/rec-cast-1/file?format=cast", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestHandleGetRecordingFile_DefaultFormat(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	dir := t.TempDir()
+	castFile := filepath.Join(dir, "rec-default-1.cast")
+	if err := os.WriteFile(castFile, []byte(`{"version": 2, "width": 80, "height": 24}`), 0o644); err != nil {
+		t.Fatalf("write cast: %v", err)
+	}
+	_ = os.Setenv("VANTYX_RECORDINGS_DIR", dir)
+	defer os.Unsetenv("VANTYX_RECORDINGS_DIR")
+
+	_ = app.InsertRecording(ctx, "rec-default-1", "admin", "t1", "s1", "ssh", castFile, time.Now().UTC().Format(time.RFC3339), "", "")
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/rec-default-1/file", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestHandleGetRecordingFile_Unauthorized(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/rec1/file", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestHandleGetRecordingFile_FileNotOnDisk(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	dir := t.TempDir()
+	_ = os.Setenv("VANTYX_RECORDINGS_DIR", dir)
+	defer os.Unsetenv("VANTYX_RECORDINGS_DIR")
+
+	_ = app.InsertRecording(ctx, "rec-missing-1", "admin", "t1", "s1", "ssh", "/nonexistent/file.cast", time.Now().UTC().Format(time.RFC3339), "", "")
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/rec-missing-1/file?format=cast", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest && w.Code != http.StatusNotFound {
+		t.Fatalf("expected 400 or 404, got %d", w.Code)
+	}
+}
+
+func TestHandleGetRecordingFile_InvalidFormat(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	dir := t.TempDir()
+	castFile := filepath.Join(dir, "rec-fmt-1.cast")
+	_ = os.WriteFile(castFile, []byte(`{}`), 0o644)
+	_ = os.Setenv("VANTYX_RECORDINGS_DIR", dir)
+	defer os.Unsetenv("VANTYX_RECORDINGS_DIR")
+	_ = app.InsertRecording(ctx, "rec-fmt-1", "admin", "t1", "s1", "ssh", castFile, time.Now().UTC().Format(time.RFC3339), "", "")
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/rec-fmt-1/file?format=mp4", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid format, got %d", w.Code)
+	}
+}
+
+func TestHandleGetRecordingFile_PathTraversal(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	dir := t.TempDir()
+	_ = os.Setenv("VANTYX_RECORDINGS_DIR", dir)
+	defer os.Unsetenv("VANTYX_RECORDINGS_DIR")
+	_ = app.InsertRecording(ctx, "rec-trav-1", "admin", "t1", "s1", "ssh", "/etc/passwd", time.Now().UTC().Format(time.RFC3339), "", "")
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/rec-trav-1/file?format=cast", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for path traversal, got %d", w.Code)
+	}
+}
+
+// --- handleChangePassword additional branches ---
+
+func TestHandleChangePassword_WrongPassword(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	httpSess, _ := app.SessionStore.Create("admin")
+	body := strings.NewReader(`{"current_password":"WrongPass1!","new_password":"NewPass123!"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/me/password", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestHandleChangePassword_SamePassword(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	httpSess, _ := app.SessionStore.Create("admin")
+	body := strings.NewReader(`{"current_password":"Admin123!","new_password":"Admin123!"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/me/password", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for same password, got %d", w.Code)
+	}
+}
+
+func TestHandleChangePassword_InvalidBody(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodPost, "/api/me/password", strings.NewReader("bad"))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleChangePassword_Unauthorized(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	body := strings.NewReader(`{"current_password":"Admin123!","new_password":"NewPass123!"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/me/password", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestHandleChangePassword_Success(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	httpSess, _ := app.SessionStore.Create("admin")
+	body := strings.NewReader(`{"current_password":"Admin123!","new_password":"NewPass123!"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/me/password", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Code)
+	}
+}
+
+// --- RDP WebSocket (non-upgrade will be rejected) ---
+
+func TestHandleRDPWebSocket_Unauthorized(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	req := httptest.NewRequest(http.MethodGet, "/ws/rdp?target_id=t1", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestHandleRDPWebSocket_MissingTargetID(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/ws/rdp", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleRDPWebSocket_TargetNotFound(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/ws/rdp?target_id=nonexistent", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestHandleRDPWebSocket_Forbidden(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
+
+	_, _ = app.UserStore.CreateUser("u2", "user2", "User123!", "user")
+	sess2, _ := app.SessionStore.Create("u2")
+	req := httptest.NewRequest(http.MethodGet, "/ws/rdp?target_id=rdp1", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess2.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleRDPWebSocket_WrongProtocol(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("ssh1"), "SSH", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("ssh1"))
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/ws/rdp?target_id=ssh1", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }

@@ -503,7 +503,7 @@ export function renderTerminalPage(container) {
           usedPendingCreds = true
         }
       }
-    } catch (_) { /* ignore */ }
+    } catch { /* ignore */ }
   }
 
   // 保存済み認証: 上で即接続していない場合、パスワード/パスフレーズが必要な場合はフォーム表示。不要かつ URL でセッション名・説明があれば即接続

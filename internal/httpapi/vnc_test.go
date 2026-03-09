@@ -173,7 +173,7 @@ func TestHandleVNCWebSocket_SuccessBridgesToTarget(t *testing.T) {
 	go func() {
 		conn, _ := ln.Accept()
 		if conn != nil {
-			io.Copy(conn, conn)
+			_, _ = io.Copy(conn, conn)
 			conn.Close()
 		}
 	}()
@@ -183,7 +183,7 @@ func TestHandleVNCWebSocket_SuccessBridgesToTarget(t *testing.T) {
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
 	_, portStr, _ := net.SplitHostPort(ln.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("vnc1"), "VNC Host", "127.0.0.1", uint16(port), access.ProtocolVNC, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("vnc1"), "VNC Host", "127.0.0.1", uint16(port&0xffff), access.ProtocolVNC, access.GroupID("g1"), "g1", "", "", "", "") // #nosec G115
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("vnc1"))
 
 	httpSess, err := app.SessionStore.Create("admin")

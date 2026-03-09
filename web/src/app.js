@@ -1040,7 +1040,7 @@ export function renderApp(container) {
             `vantyx_terminal_pending_${targetId}`,
             JSON.stringify({ password: password || '', private_key_passphrase: passphrase || '' })
           )
-        } catch (_) { /* ignore */ }
+        } catch { /* ignore */ }
       }
       window.open(`/terminal?${params.toString()}`, '_blank', 'noreferrer')
       close()

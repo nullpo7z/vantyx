@@ -134,8 +134,8 @@ func credentialsDecrypted(creds sshproxy.Credentials) error {
 }
 
 var (
-	errInvalidCredentials     = errors.New("invalid or missing credentials (send JSON: {\"username\":\"...\",\"password\":\"...\"} or {\"use_stored_credentials\":true})")
-	errNoStoredCredentials    = errors.New("stored credentials not configured for this target")
+	errInvalidCredentials      = errors.New("invalid or missing credentials (send JSON: {\"username\":\"...\",\"password\":\"...\"} or {\"use_stored_credentials\":true})")
+	errNoStoredCredentials     = errors.New("stored credentials not configured for this target")
 	errCredentialsNotDecrypted = errors.New("保存された認証情報の復号に失敗しています。VANTYX_ENCRYPTION_KEY を確認してください")
 )
 

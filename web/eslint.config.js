@@ -7,7 +7,7 @@ export default [
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
-      globals: { window: 'readonly', document: 'readonly', fetch: 'readonly', WebSocket: 'readonly', ResizeObserver: 'readonly', TextEncoder: 'readonly', Blob: 'readonly', ArrayBuffer: 'readonly', alert: 'readonly', confirm: 'readonly', crypto: 'readonly', BroadcastChannel: 'readonly', URLSearchParams: 'readonly', URL: 'readonly', FormData: 'readonly' },
+      globals: { window: 'readonly', document: 'readonly', fetch: 'readonly', WebSocket: 'readonly', ResizeObserver: 'readonly', TextEncoder: 'readonly', Blob: 'readonly', ArrayBuffer: 'readonly', alert: 'readonly', confirm: 'readonly', crypto: 'readonly', BroadcastChannel: 'readonly', URLSearchParams: 'readonly', URL: 'readonly', FormData: 'readonly', localStorage: 'readonly', navigator: 'readonly', setTimeout: 'readonly' },
     },
   },
   { ignores: ['dist', 'node_modules'] },

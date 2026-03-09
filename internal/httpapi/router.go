@@ -22,6 +22,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
+	"github.com/nullpo7z/vantyx/internal/rdpvnc"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
 )
@@ -101,6 +102,9 @@ type App struct {
 
 	// SFTPClientFactory is optional. When set (e.g. in tests), file transfer handlers use it instead of connecting to a real SSH server.
 	SFTPClientFactory SFTPClientFactoryFunc
+
+	// RDPVNCManager tracks active RDP-to-VNC bridges (xfreerdp→Xvfb→x11vnc).
+	RDPVNCManager *rdpvnc.Manager
 }
 
 // newAppDBOpen, newAppMigrate, and newAppUserStore are set in tests to inject failures for coverage.
@@ -181,6 +185,7 @@ func NewApp() *App {
 		TerminalSessionManager: terminalSessions,
 		LoginRateLimiter:       newLoginRateLimiter(),
 		DB:                     db,
+		RDPVNCManager:          rdpvnc.NewManager(),
 	}
 }
 
@@ -281,6 +286,7 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/ws/ssh", a.handleSSHWebSocket)
 	r.Get("/ws/vnc", a.handleVNCWebSocket)
 	r.Get("/ws/rdp", a.handleRDPWebSocket)
+	r.Get("/ws/rdp/browser", a.handleRDPBrowserWebSocket)
 	r.Get("/api/rdp/file", a.handleRDPFile)
 
 	// Recordings (asciinema): list and download (owner only)

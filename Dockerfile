@@ -31,8 +31,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /out/vant
 FROM alpine:3.21
 
 # su-exec, nonroot user, asciinema-agg (GIF 用), ffmpeg (WebM 用), フォント (agg の描画用)
+# freerdp + Xvfb + x11vnc: browser-based RDP via FreeRDP→Xvfb→x11vnc→noVNC
 ARG AGG_VERSION=v1.7.0
 RUN apk add --no-cache su-exec wget ffmpeg fontconfig font-dejavu \
+	freerdp xvfb x11vnc xdpyinfo \
 	&& adduser -D -u 65532 nonroot \
 	&& wget -q "https://github.com/asciinema/agg/releases/download/${AGG_VERSION}/agg-x86_64-unknown-linux-musl" -O /usr/local/bin/agg \
 	&& chmod +x /usr/local/bin/agg \

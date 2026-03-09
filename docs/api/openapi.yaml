@@ -1,21 +1,26 @@
 openapi: 3.1.0
 info:
   title: Vantyx API
-  version: 0.3.0
+  version: 0.6.0
   description: |
     Vantyx バックエンドの公開 HTTP / WebSocket API 仕様。
 
     現時点でカバーしている機能:
     - ヘルスチェック (GET /healthz)
     - ローカルユーザー認証 (POST /api/login) と Cookie セッション
-    - 自己情報取得 (GET /api/me)
+    - 自己情報取得 (GET /api/me)。応答に user_id, username, role を含む。
+    - パスワード変更 (POST /api/me/password)。認証済みユーザーが自分のパスワードを変更。
+    - SSH 公開鍵（管理者のみ）: ユーザー管理でユーザーに紐づけて登録。GET/POST/DELETE /api/users/{user_id}/ssh-keys（一覧・追加・削除）。従来の /api/me/ssh-keys は自分用（管理者のみ）。Vantyx CLI（ssh user@vantyx）の公開鍵認証用。
     - アクセスグループの一覧・作成 (GET/POST /api/groups)。一覧は limit / after_id でキーセットページネーション対応。
     - グループメンバー管理（管理者のみ）: GET/POST /api/groups/{group_id}/members、DELETE /api/groups/{group_id}/members/{user_id}。
     - タグ（グループ・ターゲット・ユーザー）: GET/PUT /api/groups/{group_id}/tags、/api/targets/{target_id}/tags、/api/users/{user_id}/tags。同じタグを持つユーザーはそのタグが付いたターゲット（またはそのタグが付いたグループに属するターゲット）にアクセス可能。
     - ユーザー登録・一覧（管理者のみ）: GET /api/users、POST /api/users。
-    - ターゲットの一覧・作成 (GET/POST /api/targets)。一覧は limit / after_id でキーセットページネーション対応。
-    - SSH WebSocket ターミナル (GET /ws/ssh)。認証後、ターゲットへの SSH をブリッジ。Phase 2 でセッション永続化・レジューム対応（切断後もブリッジ継続、GET /api/terminal/sessions で一覧、session_id で再接続）。
-    - CLI SSH ゲートウェイ (Phase 2): VANTYX_SSH_LISTEN で有効化。ssh user@vantyx でログイン後、メニューからターゲット選択してプロキシ接続。
+    - ターゲットの一覧・作成・更新・削除 (GET/POST/PUT/DELETE /api/targets, /api/targets/{target_id})。プロトコルは ssh / telnet / vnc / tftp。一覧は limit / after_id でキーセットページネーション対応。
+    - SSH WebSocket ターミナル (GET /ws/ssh)。認証後、ターゲットへの SSH をブリッジ。セッション永続化・レジューム対応（GET /api/terminal/sessions で一覧、session_id で再接続）。
+    - VNC WebSocket (GET /ws/vnc)。認証後、protocol=vnc のターゲットへ noVNC 用に RFB をブリッジ。クエリ target_id 必須。
+    - ファイル転送: GET /api/targets/{target_id}/files（一覧・クエリ path）、GET /api/targets/{target_id}/files/download（ダウンロード・クエリ path）、POST /api/targets/{target_id}/files/upload（multipart: path, file）、DELETE /api/targets/{target_id}/files（削除・クエリ path）。SSH ターゲットは SFTP（保存済み認証必須）、TFTP ターゲットは TFTP（認証不要）。TFTP はディレクトリ一覧なし・削除未対応。
+    - 録画: GET /api/recordings（メタデータ一覧。クエリ target_id でフィルタ可）。GET /api/recordings/{recording_id}/file でファイル取得。クエリ format=cast|gif|webm（省略時 cast）。cast=Asciinema 形式。gif/webm は agg（および WebM は ffmpeg）必要、未導入時 503。ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象。
+    - CLI SSH ゲートウェイ: VANTYX_SSH_LISTEN で有効化。ssh user@vantyx でログイン後、メニューからターゲット選択してプロキシ接続。VANTYX_RECORDINGS_DIR 設定時は CLI 接続も録画対象。
     - OpenAPI 仕様 (GET /api/spec) と Swagger UI (GET /docs) は admin のみアクセス可。
     エラー応答はすべて application/json の ErrorResponse (message) で統一しています。
 servers:
@@ -54,22 +59,93 @@ components:
         - password
     LoginResponse:
       type: object
+      description: ログイン成功時および GET /api/me の応答。
       properties:
         user_id:
           type: string
         username:
           type: string
+        role:
+          type: string
+          enum: [admin, user]
+          description: GET /api/me で返る。ログイン応答では省略される場合あり。
       required:
         - user_id
         - username
+    SSHKeyItem:
+      type: object
+      description: Vantyx ログイン用に登録した SSH 公開鍵 1 件。管理者のみ登録・一覧・削除可能。
+      properties:
+        id:
+          type: integer
+          format: int64
+        key_line:
+          type: string
+          description: authorized_keys 形式の 1 行（ssh-ed25519 / ssh-rsa 等）
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - key_line
+        - created_at
+    AddSSHKeyRequest:
+      type: object
+      properties:
+        authorized_key:
+          type: string
+          description: authorized_keys 形式の 1 行
+      required:
+        - authorized_key
+    RecordingItem:
+      type: object
+      description: 録画メタデータ 1 件（ファイルパスは含めない）。
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        target_id:
+          type: string
+        session_id:
+          type: string
+        channel_type:
+          type: string
+          description: "browser=ブラウザターミナル, cli=CLI（ssh）接続"
+        started_at:
+          type: string
+        ended_at:
+          type: string
+        session_name:
+          type: string
+        session_description:
+          type: string
+    RecordingListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecordingItem'
+      required:
+        - items
     User:
       type: object
-      description: ユーザー（一覧・作成応答）。パスワードは含めない。
+      description: ユーザー（一覧・作成応答）。パスワードは含めない。一覧では role, tags も返る。
       properties:
         id:
           type: string
         username:
           type: string
+        role:
+          type: string
+          enum: [admin, user]
+          description: 一覧で返る。作成応答では省略される場合あり。
+        tags:
+          type: array
+          items:
+            type: string
+          description: 一覧で返る。ユーザーに付与されたタグ。
       required:
         - id
         - username
@@ -103,13 +179,38 @@ components:
           maximum: 65535
         protocol:
           type: string
-          enum: ["ssh", "telnet"]
+          enum: ["ssh", "telnet", "vnc", "tftp"]
+          description: "ssh=SSH ターミナル/SFTP, telnet=Telnet ターミナル, vnc=VNC リモートデスクトップ, tftp=TFTP ファイル転送"
+        has_stored_credentials:
+          type: boolean
+          description: SSH ユーザー名・パスワードが保存されている場合 true（一覧で返す。値は含めない）
+        has_ssh_key:
+          type: boolean
+          description: SSH 秘密鍵が保存されている場合 true（一覧で返す。値は含めない）
       required:
         - id
         - name
         - host
         - port
         - protocol
+    FileEntry:
+      type: object
+      description: ディレクトリ一覧の 1 エントリ（GET /api/targets/{target_id}/files の要素）。
+      properties:
+        name:
+          type: string
+        size:
+          type: integer
+          format: int64
+        is_dir:
+          type: boolean
+        mod_time:
+          type: string
+          format: date-time
+      required:
+        - name
+        - size
+        - is_dir
     AccessGroup:
       type: object
       description: アクセスグループ。ユーザーが所属し、ターゲットを紐づける単位。
@@ -241,7 +342,7 @@ paths:
   /api/me:
     get:
       summary: 自分自身のユーザー情報取得
-      description: 現在のセッションに紐づくユーザー情報を返します。
+      description: 現在のセッションに紐づくユーザー情報（user_id, username, role）を返します。
       security:
         - cookieAuth: []
       responses:
@@ -253,6 +354,145 @@ paths:
                 $ref: '#/components/schemas/LoginResponse'
         '401':
           description: 未認証またはセッション無効
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/me/password:
+    post:
+      summary: パスワード変更
+      description: 認証済みユーザーが自分のパスワードを変更します。現在のパスワードの一致確認と、新パスワードのポリシー検証を行います。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password:
+                  type: string
+                new_password:
+                  type: string
+      responses:
+        '200':
+          description: 変更完了
+        '400':
+          description: リクエスト不正または新パスワードがポリシー未達
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証または現在のパスワードが誤り
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/me/ssh-keys:
+    get:
+      summary: SSH 公開鍵一覧（管理者のみ）
+      description: 現在のユーザーに登録された Vantyx ログイン用 SSH 公開鍵一覧を返します。**管理者（admin）のみ**利用可能。CLI（ssh user@vantyx）の公開鍵認証に使用します。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: 公開鍵一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SSHKeyItem'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: SSH 公開鍵の追加（管理者のみ）
+      description: 現在のユーザーに Vantyx ログイン用 SSH 公開鍵を 1 本追加します。**管理者（admin）のみ**利用可能。authorized_keys 形式の 1 行（ssh-ed25519 / ssh-rsa 等）を送信します。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddSSHKeyRequest'
+      responses:
+        '201':
+          description: 追加された公開鍵（id, key_line, created_at）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeyItem'
+        '400':
+          description: リクエスト不正または無効な公開鍵
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/me/ssh-keys/{key_id}:
+    delete:
+      summary: SSH 公開鍵の削除（管理者のみ）
+      description: 指定した ID の SSH 公開鍵を削除します。**管理者（admin）のみ**利用可能。自分の鍵のみ削除可能です。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: 削除完了
+        '400':
+          description: key_id が無効
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 指定した鍵が存在しない
           content:
             application/json:
               schema:
@@ -330,7 +570,7 @@ paths:
                   default: 22
                 protocol:
                   type: string
-                  enum: ["ssh", "telnet"]
+                  enum: ["ssh", "telnet", "vnc", "tftp"]
                   default: ssh
                 ssh_username:
                   type: string
@@ -417,7 +657,7 @@ paths:
                   default: 22
                 protocol:
                   type: string
-                  enum: ["ssh", "telnet"]
+                  enum: ["ssh", "telnet", "vnc", "tftp"]
                   default: ssh
                 path:
                   type: string
@@ -569,6 +809,147 @@ paths:
         '401':
         '403':
         '404':
+
+  /api/targets/{target_id}/files:
+    get:
+      summary: ファイル一覧（ディレクトリ）
+      description: |
+        ターゲット上のディレクトリ一覧を返します。SSH ターゲットは SFTP、TFTP ターゲットは TFTP。SFTP は保存済み認証必須。TFTP はディレクトリ一覧非対応のため空またはエラーになる場合があります。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+            default: /
+          description: リモートのディレクトリパス
+      responses:
+        '200':
+          description: エントリ一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileEntry'
+        '400':
+        '401':
+        '403':
+        '404':
+        '502':
+          description: ターゲット接続または list 失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: ファイル・ディレクトリの削除
+      description: ターゲット上の指定パスを削除します。SFTP のみ対応（TFTP は未対応）。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: 削除するリモートパス
+      responses:
+        '204':
+          description: 削除完了
+        '400':
+        '401':
+        '403':
+        '404':
+        '501':
+          description: TFTP は削除未対応
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: ターゲット接続または削除失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/targets/{target_id}/files/download:
+    get:
+      summary: ファイルダウンロード
+      description: ターゲット上のファイルをストリームで返します。SFTP または TFTP。Content-Disposition でファイル名を返します。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: ダウンロードするリモートファイルパス
+      responses:
+        '200':
+          description: ファイル本体（application/octet-stream）
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+        '400':
+        '401':
+        '403':
+        '404':
+        '502':
+
+  /api/targets/{target_id}/files/upload:
+    post:
+      summary: ファイルアップロード
+      description: ターゲットへファイルをアップロードします。multipart/form-data で path と file を送信。最大 64MB。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [path, file]
+              properties:
+                path:
+                  type: string
+                  description: 保存先リモートパス
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: アップロード完了
+        '400':
+        '401':
+        '403':
+        '404':
+        '502':
 
   /api/groups:
     get:
@@ -1052,6 +1433,197 @@ paths:
         '403':
         '404':
 
+  /api/users/{user_id}/ssh-keys:
+    get:
+      summary: ユーザーの SSH 公開鍵一覧（管理者のみ）
+      description: 指定ユーザーに登録された Vantyx ログイン用 SSH 公開鍵一覧を返します。ユーザー管理画面でユーザーに紐づけて登録・削除する際に利用します。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 公開鍵一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SSHKeyItem'
+        '400':
+        '401':
+        '403':
+        '404':
+    post:
+      summary: ユーザーに SSH 公開鍵を追加（管理者のみ）
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddSSHKeyRequest'
+      responses:
+        '201':
+          description: 追加された公開鍵
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeyItem'
+        '400':
+        '401':
+        '403':
+        '404':
+          description: ユーザーが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/users/{user_id}/ssh-keys/{key_id}:
+    delete:
+      summary: ユーザーの SSH 公開鍵を削除（管理者のみ）
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: 削除完了
+        '400':
+        '401':
+        '403':
+        '404':
+
+  /api/tags:
+    get:
+      summary: 登録済みタグ一覧
+      description: グループ・ターゲット・ユーザーで使用されているタグの重複なし一覧を返します。認証済みユーザーが利用可能。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: タグ名の配列
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/recordings:
+    get:
+      summary: 録画メタデータ一覧
+      description: |
+        ログイン中のユーザーに属する録画のメタデータ一覧を返します。ファイルパスは含まれません。
+        クエリ target_id を指定すると、そのターゲット（サーバー）に紐づく録画のみに絞り込みます。
+        ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象です（VANTYX_RECORDINGS_DIR 設定時）。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: このターゲットに紐づく録画のみ返す（省略時は全件、最大 200 件）
+      responses:
+        '200':
+          description: 録画一覧（items 配列）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingListResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/recordings/{recording_id}/file:
+    get:
+      summary: 録画ファイルの取得
+      description: |
+        指定した録画のファイルを返します。クエリ format で形式を指定します。
+        - **cast**（省略時）: Asciinema v2 形式（.cast）。asciinema-player で再生可能。
+        - **gif**: GIF アニメーション。agg がサーバーにインストールされている必要があります。未導入時 503。
+        - **webm**: WebM 動画。agg と ffmpeg が必要。未導入時 503。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: recording_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [cast, gif, webm]
+            default: cast
+      responses:
+        '200':
+          description: 録画ファイル（Content-Type は形式に応じて application/json / image/gif / video/webm 等）
+          headers:
+            Content-Disposition:
+              description: ダウンロード時のファイル名
+              schema:
+                type: string
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 録画が存在しない、または自分の録画でない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 録画未設定（VANTYX_RECORDINGS_DIR）または gif/webm 用の agg/ffmpeg 未導入
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/terminal/sessions:
     get:
       summary: アクティブなターミナルセッション一覧
@@ -1069,6 +1641,34 @@ paths:
                 $ref: '#/components/schemas/TerminalSessionListResponse'
         '401':
           description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/terminal/sessions/{session_id}:
+    delete:
+      summary: ターミナルセッションの終了
+      description: 指定した session_id のターミナルセッションを終了します。自分のセッションのみ削除可能です。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 終了完了
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: セッションが存在しない、または自分のセッションでない
           content:
             application/json:
               schema:
@@ -1133,6 +1733,50 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '501':
           description: ターゲットのプロトコルが SSH 以外（現時点では SSH のみ対応）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /ws/vnc:
+    get:
+      summary: VNC WebSocket（noVNC 用）
+      description: |
+        WebSocket にアップグレードし、protocol=vnc のターゲットの VNC サーバー（RFB）へバイト列をブリッジします。
+        クライアント（noVNC 等）はバイナリフレームで RFB プロトコルを送受信します。認証情報の送信は不要（VNC サーバー側でパスワード要求時は noVNC のプロンプトで対応）。
+        ユーザーはターゲットへのアクセス権が必要です。ターゲットの protocol は vnc である必要があります。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: 接続先 VNC ターゲットの ID
+      responses:
+        '101':
+          description: WebSocket プロトコルへの切り替え。以降はバイナリ/テキストフレームで RFB を送受信。
+        '400':
+          description: target_id 未指定、ターゲットが VNC 以外、または WebSocket アップグレード失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証またはセッション無効
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 指定ターゲットへのアクセス権なし
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 指定された target_id のターゲットが存在しない
           content:
             application/json:
               schema:

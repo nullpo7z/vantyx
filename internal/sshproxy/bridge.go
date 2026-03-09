@@ -2,7 +2,9 @@ package sshproxy
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -18,6 +20,12 @@ import (
 // sessionFactory opens an SSH connection and returns stdin/stdout/stderr pipes, a window-change hook, and a cleanup function.
 // Used so tests can inject a fake that fails at specific steps for coverage.
 var sessionFactory = defaultSessionFactory
+
+// ClientCiphers returns cipher names for SSH client connections, restricted to algorithms
+// supported by older or restricted servers (e.g. that do not support aes256-gcm@openssh.com).
+func ClientCiphers() []string {
+	return []string{"aes256-ctr", "aes256-cbc", "aes128-ctr", "aes128-cbc", "3des-cbc"}
+}
 
 // Test hooks for defaultSessionFactory error paths (set from bridge_test.go).
 var (
@@ -141,6 +149,13 @@ func AuthMethods(password, privateKeyPEM, keyPassphrase string) ([]ssh.AuthMetho
 			signer, err = ssh.ParsePrivateKey([]byte(privateKeyPEM))
 		}
 		if err != nil {
+			var passMissing *ssh.PassphraseMissingError
+			if errors.As(err, &passMissing) {
+				return nil, errors.New("この秘密鍵はパスフレーズで保護されています。ターゲットにパスフレーズを保存するか、接続時に入力してください")
+			}
+			if errors.Is(err, x509.IncorrectPasswordError) {
+				return nil, errors.New("秘密鍵のパスフレーズが正しくありません。保存したパスフレーズを確認するか、接続時に再入力してください")
+			}
 			return nil, err
 		}
 		out = append(out, ssh.PublicKeys(signer))
@@ -171,6 +186,7 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         15 * time.Second,
 	}
+	config.Ciphers = ClientCiphers()
 
 	addr := net.JoinHostPort(host, portString(port))
 	stdin, stdout, stderr, windowChange, cleanup, err := sessionFactory(addr, config, 0, 0)
@@ -297,6 +313,7 @@ func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.W
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         15 * time.Second,
 	}
+	config.Ciphers = ClientCiphers()
 	addr := net.JoinHostPort(host, portString(port))
 	stdin, stdout, stderr, windowChange, cleanup, err := sessionFactory(addr, config, ptyCols, ptyRows)
 	if err != nil {
@@ -449,6 +466,7 @@ func RunBridgeDetachable(ctx context.Context, host string, port uint16, username
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         15 * time.Second,
 	}
+	config.Ciphers = ClientCiphers()
 	addr := net.JoinHostPort(host, portString(port))
 	stdin, stdout, stderr, windowChange, cleanup, err := sessionFactory(addr, config, initialCols, initialRows)
 	if err != nil {

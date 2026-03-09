@@ -45,6 +45,7 @@ func NewClient(ctx context.Context, host string, port uint16, username, password
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         15 * time.Second,
 	}
+	config.Ciphers = sshproxy.ClientCiphers()
 	addr := net.JoinHostPort(host, portString(port))
 	sshClient, err := ssh.Dial("tcp", addr, config)
 	if err != nil {

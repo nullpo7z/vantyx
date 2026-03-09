@@ -11,6 +11,9 @@ type Protocol string
 const (
 	ProtocolSSH    Protocol = "ssh"
 	ProtocolTelnet Protocol = "telnet"
+	ProtocolVNC    Protocol = "vnc"
+	ProtocolTFTP   Protocol = "tftp"
+	ProtocolRDP    Protocol = "rdp"
 )
 
 // Target represents a device that users can connect to via SSH or Telnet.

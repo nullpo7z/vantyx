@@ -16,6 +16,8 @@ export function renderTerminalPage(container) {
   const channelToken = params.get('channel') || ''
   const resumeSessionId = params.get('session_id') || ''
   const useStoredCredentials = params.get('use_stored_credentials') === '1'
+  const needsPassword = params.get('needs_password') === '1'
+  const needsPassphrase = params.get('needs_passphrase') === '1'
   const urlSessionName = params.get('session_name') ?? ''
   const urlSessionDesc = params.get('session_description') ?? ''
   const hasSessionParamsFromUrl = params.has('session_name') || params.has('session_description')
@@ -47,14 +49,24 @@ export function renderTerminalPage(container) {
           <div class="px-5 py-5 space-y-5">
             <p id="term-auth-prompt" class="text-sm text-slate-600">ターゲットの SSH 認証情報を入力してください。</p>
             <p id="term-stored-cred-hint" class="text-sm text-slate-600 hidden">セッション名と説明を入力してください（任意）。接続で保存済み認証を使って接続します。</p>
+            <p id="term-needs-password-hint" class="text-sm text-slate-600 hidden">ユーザー名は保存済みです。パスワードを入力してください。</p>
+            <p id="term-needs-passphrase-hint" class="text-sm text-slate-600 hidden">秘密鍵は保存済みです。パスフレーズを入力してください。</p>
             <div id="term-auth-fields" class="space-y-5">
-              <div>
+              <div id="term-username-wrap">
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名</label>
                 <input type="text" id="ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
               </div>
-              <div>
+              <div id="term-password-wrap">
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード</label>
                 <input type="password" id="ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
+              </div>
+              <div id="term-passphrase-wrap" class="hidden">
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ</label>
+                <input type="password" id="ssh-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="暗号化された秘密鍵のパスフレーズ" />
+              </div>
+              <div id="term-passphrase-optional-wrap">
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
+                <input type="password" id="ssh-passphrase-optional" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="保存済み鍵が暗号化されている場合のみ入力" />
               </div>
             </div>
             <div>
@@ -90,6 +102,8 @@ export function renderTerminalPage(container) {
   const xtermEl = container.querySelector('#xterm')
   const usernameInput = container.querySelector('#ssh-username')
   const passwordInput = container.querySelector('#ssh-password')
+  const passphraseInput = container.querySelector('#ssh-passphrase')
+  const passphraseOptionalInput = container.querySelector('#ssh-passphrase-optional')
   const sessionNameInput = container.querySelector('#ssh-session-name')
   const sessionDescInput = container.querySelector('#ssh-session-desc')
 
@@ -207,7 +221,7 @@ export function renderTerminalPage(container) {
     connectResume(currentSessionId)
   })
 
-  function connectWithCredentials(username, password, sessionName, sessionDescription) {
+  function connectWithCredentials(username, password, sessionName, sessionDescription, privateKeyPassphrase) {
     if (!targetId) {
       errorEl.textContent = 'target_id が指定されていません。ホーム画面から開き直してください。'
       errorEl.classList.remove('hidden')
@@ -242,7 +256,9 @@ export function renderTerminalPage(container) {
     }, 20000)
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ username: user, password: password || '', name, description }))
+      const payload = { username: user, password: password || '', name, description }
+      if (privateKeyPassphrase != null && privateKeyPassphrase !== '') payload.private_key_passphrase = privateKeyPassphrase
+      ws.send(JSON.stringify(payload))
     }
 
     ws.onmessage = (ev) => {
@@ -324,13 +340,16 @@ export function renderTerminalPage(container) {
     }
   }
 
-  function connectWithStoredCredentials(sessionName, sessionDescription) {
+  function connectWithStoredCredentials(sessionName, sessionDescription, password, privateKeyPassphrase) {
     if (!targetId) return
     errorEl.classList.add('hidden')
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
     const name = typeof sessionName === 'string' ? sessionName.trim() : ''
     const description = typeof sessionDescription === 'string' ? sessionDescription.trim() : ''
+    const payload = { use_stored_credentials: true, name, description }
+    if (password != null && password !== '') payload.password = password
+    if (privateKeyPassphrase != null && privateKeyPassphrase !== '') payload.private_key_passphrase = privateKeyPassphrase
 
     const ws = new WebSocket(getWsUrlNew())
     ws.binaryType = 'arraybuffer'
@@ -347,7 +366,7 @@ export function renderTerminalPage(container) {
     }, 20000)
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ use_stored_credentials: true, name, description }))
+      ws.send(JSON.stringify(payload))
     }
 
     ws.onmessage = (ev) => {
@@ -433,14 +452,27 @@ export function renderTerminalPage(container) {
     const sessionName = sessionNameInput?.value?.trim() ?? ''
     const sessionDesc = sessionDescInput?.value?.trim() ?? ''
     if (useStoredCredentials && targetId) {
+      const password = needsPassword ? (passwordInput?.value ?? '') : ''
+      const passphrase = needsPassphrase ? (passphraseInput?.value ?? '') : ''
+      if (needsPassword && !password) {
+        errorEl.textContent = 'パスワードを入力してください。'
+        errorEl.classList.remove('hidden')
+        return
+      }
+      if (needsPassphrase && !passphrase) {
+        errorEl.textContent = '秘密鍵のパスフレーズを入力してください。'
+        errorEl.classList.remove('hidden')
+        return
+      }
       credsWrap.classList.add('hidden')
       shellWrap.classList.remove('hidden')
-      connectWithStoredCredentials(sessionName, sessionDesc)
+      connectWithStoredCredentials(sessionName, sessionDesc, password, passphrase)
       return
     }
     const username = usernameInput.value.trim()
     const password = passwordInput.value
-    connectWithCredentials(username, password, sessionName, sessionDesc)
+    const passphraseOptional = passphraseOptionalInput?.value ?? ''
+    connectWithCredentials(username, password, sessionName, sessionDesc, passphraseOptional)
   })
 
   // session_id のみで開いた場合（レジューム用リンク）は認証なしで再接続
@@ -450,11 +482,55 @@ export function renderTerminalPage(container) {
     connectResume(resumeSessionId)
   }
 
-  // 保存済み認証: URL でセッション名・説明が渡されていれば即接続、なければフォーム表示
-  if (useStoredCredentials && targetId && hasSessionParamsFromUrl) {
+  // 保存済み認証: モーダルから渡されたパスワード/パスフレーズがあれば即接続
+  let usedPendingCreds = false
+  if (useStoredCredentials && targetId) {
+    try {
+      const key = `vantyx_terminal_pending_${targetId}`
+      const raw = localStorage.getItem(key)
+      if (raw) {
+        localStorage.removeItem(key)
+        const pending = JSON.parse(raw)
+        if (pending && (pending.password !== undefined || pending.private_key_passphrase !== undefined)) {
+          credsWrap.classList.add('hidden')
+          shellWrap.classList.remove('hidden')
+          connectWithStoredCredentials(
+            urlSessionName,
+            urlSessionDesc,
+            pending.password || '',
+            pending.private_key_passphrase || ''
+          )
+          usedPendingCreds = true
+        }
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  // 保存済み認証: 上で即接続していない場合、パスワード/パスフレーズが必要な場合はフォーム表示。不要かつ URL でセッション名・説明があれば即接続
+  const needsExtraCreds = useStoredCredentials && targetId && (needsPassword || needsPassphrase)
+  if (usedPendingCreds) {
+    // すでに connectWithStoredCredentials を呼んだ
+  } else if (useStoredCredentials && targetId && hasSessionParamsFromUrl && !needsPassword && !needsPassphrase) {
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
     connectWithStoredCredentials(urlSessionName, urlSessionDesc)
+  } else if (needsExtraCreds) {
+    const authPrompt = container.querySelector('#term-auth-prompt')
+    const storedCredHint = container.querySelector('#term-stored-cred-hint')
+    const needsPasswordHint = container.querySelector('#term-needs-password-hint')
+    const needsPassphraseHint = container.querySelector('#term-needs-passphrase-hint')
+    const usernameWrap = container.querySelector('#term-username-wrap')
+    const passwordWrap = container.querySelector('#term-password-wrap')
+    const passphraseWrap = container.querySelector('#term-passphrase-wrap')
+    const passphraseOptionalWrap = container.querySelector('#term-passphrase-optional-wrap')
+    if (authPrompt) authPrompt.classList.add('hidden')
+    if (storedCredHint) storedCredHint.classList.remove('hidden')
+    if (needsPassword && needsPasswordHint) needsPasswordHint.classList.remove('hidden')
+    if (needsPassphrase && needsPassphraseHint) needsPassphraseHint.classList.remove('hidden')
+    if (usernameWrap) usernameWrap.classList.add('hidden')
+    if (passwordWrap) passwordWrap.classList.toggle('hidden', !needsPassword)
+    if (passphraseWrap) passphraseWrap.classList.toggle('hidden', !needsPassphrase)
+    if (passphraseOptionalWrap) passphraseOptionalWrap.classList.add('hidden')
   } else if (useStoredCredentials && targetId) {
     const authPrompt = container.querySelector('#term-auth-prompt')
     const authFields = container.querySelector('#term-auth-fields')
@@ -501,6 +577,8 @@ export function renderTerminalPage(container) {
 
       usernameInput.value = typeof u === 'string' ? u : ''
       passwordInput.value = typeof p === 'string' ? p : ''
+      const passphrase = typeof ev.data.private_key_passphrase === 'string' ? ev.data.private_key_passphrase : ''
+      if (passphraseOptionalInput) passphraseOptionalInput.value = passphrase
       const name = typeof ev.data.name === 'string' ? ev.data.name : ''
       const desc = typeof ev.data.description === 'string' ? ev.data.description : ''
       if (sessionNameInput) sessionNameInput.value = name
@@ -517,8 +595,8 @@ export function renderTerminalPage(container) {
         return
       }
 
-      infoEl.textContent = `親タブからユーザー名「${usernameInput.value.trim()}」を受信しました。接続中…`
-      connectWithCredentials(usernameInput.value, passwordInput.value, name, desc)
+      infoEl.textContent = `親タブから認証情報を受信しました。接続中…`
+      connectWithCredentials(usernameInput.value, passwordInput.value, name, desc, passphrase)
     }
 
     try {

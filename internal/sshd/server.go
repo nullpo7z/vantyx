@@ -11,6 +11,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +22,8 @@ import (
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
+	"github.com/nullpo7z/vantyx/internal/recording"
+	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
@@ -37,16 +41,24 @@ type SessionLister interface {
 	ActiveIDs() []session.ID
 }
 
+// RecordingStore is used to persist recording metadata when CLI sessions are recorded (optional).
+type RecordingStore interface {
+	InsertRecording(ctx context.Context, id, userID, targetID, sessionID, channelType, filePath, startedAt, sessionName, sessionDesc string) error
+	UpdateRecordingEnded(ctx context.Context, id, endedAt string) error
+}
+
 // Server is the CLI SSH gateway: users log in with Vantyx credentials, then choose a target to proxy to.
 type Server struct {
-	userStore      auth.UserStore
-	targetStore    access.TargetStore
-	groupStore     access.AccessGroupStore
-	sessionManager SessionStarter
-	config         *ssh.ServerConfig
-	listener       net.Listener
-	mu             sync.Mutex
-	shutdown       bool
+	userStore       auth.UserStore
+	targetStore     access.TargetStore
+	groupStore      access.AccessGroupStore
+	sessionManager  SessionStarter
+	config          *ssh.ServerConfig
+	listener        net.Listener
+	mu              sync.Mutex
+	shutdown        bool
+	recordingDir    string
+	recordingStore  RecordingStore
 }
 
 // Config holds dependencies for the SSH server.
@@ -57,6 +69,10 @@ type Config struct {
 	SessionManager SessionStarter
 	// HostKey is the SSH host private key. If nil, a new 2048-bit RSA key is generated (not persisted).
 	HostKey ssh.Signer
+	// RecordingsDir enables asciinema recording for CLI connect sessions when set (e.g. VANTYX_RECORDINGS_DIR).
+	// RecordingStore must also be set to persist metadata.
+	RecordingsDir   string
+	RecordingStore RecordingStore
 }
 
 // NewServer builds an SSH server that authenticates with UserStore and proxies to targets via GroupStore/TargetStore.
@@ -103,6 +119,8 @@ func NewServer(cfg Config) (*Server, error) {
 		groupStore:     cfg.GroupStore,
 		sessionManager: cfg.SessionManager,
 		config:         config,
+		recordingDir:   cfg.RecordingsDir,
+		recordingStore: cfg.RecordingStore,
 	}, nil
 }
 
@@ -822,6 +840,10 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			sessionDesc, _ := readLine(true, "")
 			sessionDesc = strings.TrimSpace(sessionDesc)
 
+			if target.SSHPrivateKey != "" && strings.HasPrefix(target.SSHPrivateKey, secret.CiphertextVersionPrefix) {
+				prompt("\r\n保存された認証情報の復号に失敗しています。VANTYX_ENCRYPTION_KEY を確認してください。\r\n")
+				continue
+			}
 			var targetUser, targetPass string
 			if target.SSHUsername != "" {
 				targetUser = target.SSHUsername
@@ -881,7 +903,39 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 					},
 					CloseFn: func() error { return channel.Close() },
 				}
-				bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, nil, nil, 0, 0)
+				var tee io.Writer
+				var stdinRecorder sshproxy.StdinRecorder
+				if s.recordingDir != "" && s.recordingStore != nil {
+					_ = os.MkdirAll(s.recordingDir, 0750)
+					safeName := strings.ReplaceAll(string(sessionID), ":", "-")
+					safeName = strings.ReplaceAll(safeName, ".", "-")
+					castPath := filepath.Join(s.recordingDir, safeName+".cast")
+					f, createErr := os.Create(castPath)
+					if createErr != nil {
+						slog.Warn("CLI recording create failed", "session_id", sessionID, "path", castPath, "error", createErr)
+					} else {
+						w, h := ptyCols, ptyRows
+						if w <= 0 {
+							w = 80
+						}
+						if h <= 0 {
+							h = 24
+						}
+						asc := recording.NewAsciinemaWriter(f, w, h)
+						tee = asc
+						stdinRecorder = asc
+						startedAt := time.Now().UTC().Format("2006-01-02 15:04:05")
+						if insertErr := s.recordingStore.InsertRecording(bridgeCtx, string(sessionID), userID, string(target.ID), string(sessionID), "cli", castPath, startedAt, sessionName, sessionDesc); insertErr != nil {
+							slog.Warn("CLI recording insert failed", "session_id", sessionID, "error", insertErr)
+						}
+						defer func() {
+							_ = f.Sync()
+							_ = f.Close()
+							_ = s.recordingStore.UpdateRecordingEnded(context.Background(), string(sessionID), time.Now().UTC().Format("2006-01-02 15:04:05"))
+						}()
+					}
+				}
+				bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, ptyCols, ptyRows)
 			})
 			if err != nil {
 				prompt("Session start failed: %v\r\n", err)

@@ -36,6 +36,7 @@ export function renderApp(container) {
       <div id="active-sessions-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
       <div id="recording-player-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
       <div id="change-password-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
+      <div id="add-ssh-key-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
     </div>
   `
 
@@ -66,6 +67,11 @@ export function renderApp(container) {
 
   function showUserInfo() {
     if (!meData) return
+    const navHidden = meData?.role !== 'admin' ? ' hidden' : ''
+    navTargets.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
+    navGroups.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
+    navUsers.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
+    navRecordings.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
     mainContent.innerHTML = `
       <h2 class="text-lg font-medium text-slate-800 mb-4">ユーザー情報</h2>
       <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
@@ -85,12 +91,6 @@ export function renderApp(container) {
       </div>
     `
     mainContent.querySelector('#btn-change-password').addEventListener('click', showChangePasswordModal)
-    // ユーザー情報表示中はどのタブもアクティブ表示にしない
-    const navHidden = meData?.role !== 'admin' ? ' hidden' : ''
-    navTargets.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
-    navGroups.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
-    navUsers.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
-    navRecordings.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
   }
 
   async function showUsersPage() {
@@ -109,7 +109,7 @@ export function renderApp(container) {
           <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(u.id)}</td>
           <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(u.username)}</td>
           <td class="px-4 py-2 text-sm text-slate-600">${escapeHtml(u.role || 'user')}</td>
-          <td class="px-4 py-2"><div class="flex flex-wrap items-center gap-2">${userTags.length ? renderTagPills(userTags) : '<span class="text-xs text-slate-400">—</span>'} <button type="button" class="edit-user-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 ml-1" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-user-role="${escapeHtml(u.role || 'user')}" data-user-tags="${escapeHtml((userTags || []).join(','))}">編集</button></div></td>
+          <td class="px-4 py-2"><div class="flex flex-wrap items-center gap-2">${userTags.length ? renderTagPills(userTags) : '<span class="text-xs text-slate-400">—</span>'} <button type="button" class="edit-user-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-user-role="${escapeHtml(u.role || 'user')}" data-user-tags="${escapeHtml((userTags || []).join(','))}">編集</button> <button type="button" class="user-ssh-keys-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}">公開鍵</button></div></td>
         </tr>
       `
       }).join('')
@@ -148,15 +148,23 @@ export function renderApp(container) {
           if (user.id) showEditUserModal(user)
         })
       })
+      mainContent.querySelectorAll('.user-ssh-keys-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          showUserSSHKeysModal(btn.dataset.userId || '', btn.dataset.username || '')
+        })
+      })
     } catch (e) {
       mainContent.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(e.message || '取得に失敗しました')}</p>`
     }
   }
 
-  function showRecordingPlayerModal(recordingId, label) {
+  function showRecordingPlayerModal(recordingId, label, userId, sessionId) {
     const modal = document.getElementById('recording-player-modal')
     modal.classList.remove('hidden')
     const fileUrl = `/api/recordings/${encodeURIComponent(recordingId)}/file`
+    const watermarkText = [userId, sessionId].filter(Boolean).length
+      ? [userId && `User: ${userId}`, sessionId && `Session: ${sessionId}`].filter(Boolean).join(' · ')
+      : ''
     modal.innerHTML = `
       <div id="recording-player-backdrop" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-slate-900 rounded-lg shadow-xl w-full max-w-4xl mx-4 overflow-hidden border border-slate-700 flex flex-col max-h-[90vh]">
@@ -164,7 +172,10 @@ export function renderApp(container) {
             <h3 class="font-semibold text-slate-200">録画再生 — ${escapeHtml(label || recordingId)}</h3>
             <button id="recording-player-close" class="text-slate-400 hover:text-white text-2xl leading-none transition-colors">&times;</button>
           </div>
-          <div id="recording-player-container" class="p-4 overflow-auto flex-1 min-h-0"></div>
+          <div id="recording-player-wrapper" class="p-4 overflow-auto flex-1 min-h-0 relative">
+            <div id="recording-player-container"></div>
+            ${watermarkText ? `<div id="recording-watermark" class="absolute inset-0 pointer-events-none flex items-end justify-center pb-2 text-slate-500/70 text-xs font-mono select-none" aria-hidden="true">${escapeHtml(watermarkText)}</div>` : ''}
+          </div>
         </div>
       </div>
     `
@@ -220,9 +231,11 @@ export function renderApp(container) {
             <td class="px-4 py-2 text-sm text-slate-600 max-w-[12rem] truncate" title="${escapeHtml(r.session_description || '')}">${escapeHtml(r.session_description || '—')}</td>
             <td class="px-4 py-2 text-sm text-slate-600">${escapeHtml(r.channel_type || '')}</td>
             <td class="px-4 py-2">
-              <div class="flex items-center gap-2">
-                <button type="button" class="recording-play-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-id="${escapeHtml(r.id)}" data-label="${escapeHtml(label)}">再生</button>
-                <a href="/api/recordings/${encodeURIComponent(r.id)}/file" download="${escapeHtml(r.id)}.cast" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">ダウンロード</a>
+              <div class="flex items-center gap-2 flex-wrap">
+                <button type="button" class="recording-play-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-id="${escapeHtml(r.id)}" data-label="${escapeHtml(label)}" data-user-id="${escapeHtml(r.user_id || '')}" data-session-id="${escapeHtml(r.session_id || '')}">再生</button>
+                <a href="/api/recordings/${encodeURIComponent(r.id)}/file?format=cast" download="${escapeHtml(r.id)}.cast" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">.cast</a>
+                <a href="/api/recordings/${encodeURIComponent(r.id)}/file?format=gif" download="${escapeHtml(r.id)}.gif" class="recording-download-video rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-format="gif">GIF</a>
+                <a href="/api/recordings/${encodeURIComponent(r.id)}/file?format=webm" download="${escapeHtml(r.id)}.webm" class="recording-download-video rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-format="webm">WebM</a>
               </div>
             </td>
           </tr>
@@ -319,7 +332,31 @@ export function renderApp(container) {
       })
       mainContent.querySelectorAll('.recording-play-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
-          showRecordingPlayerModal(btn.dataset.id || '', btn.dataset.label || '')
+          showRecordingPlayerModal(btn.dataset.id || '', btn.dataset.label || '', btn.dataset.userId || '', btn.dataset.sessionId || '')
+        })
+      })
+      mainContent.querySelectorAll('.recording-download-video').forEach((a) => {
+        a.addEventListener('click', async (e) => {
+          e.preventDefault()
+          const url = a.getAttribute('href')
+          const format = a.dataset.format || 'gif'
+          const filename = a.getAttribute('download') || `recording.${format}`
+          try {
+            const res = await fetch(url, { credentials: 'include' })
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({ message: res.statusText }))
+              alert(err.message || '動画のダウンロードに失敗しました。サーバーに agg（および WebM の場合は ffmpeg）がインストールされている必要があります。')
+              return
+            }
+            const blob = await res.blob()
+            const x = document.createElement('a')
+            x.href = URL.createObjectURL(blob)
+            x.download = filename
+            x.click()
+            URL.revokeObjectURL(x.href)
+          } catch (err) {
+            alert(err.message || 'ダウンロードに失敗しました')
+          }
         })
       })
 
@@ -488,6 +525,95 @@ export function renderApp(container) {
         submitBtn.disabled = false
       }
     })
+  }
+
+  async function showUserSSHKeysModal(userId, username) {
+    if (!userId) return
+    const modal = document.getElementById('add-ssh-key-modal')
+    modal.classList.remove('hidden')
+    const safeName = escapeHtml(username || userId)
+    modal.innerHTML = `
+      <div class="fixed inset-0 bg-black/40 flex items-center justify-center p-4" id="user-ssh-keys-backdrop">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl border border-slate-200 max-h-[90vh] flex flex-col">
+          <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between shrink-0">
+            <h3 class="font-semibold text-slate-800">SSH 公開鍵 — ${safeName}</h3>
+            <button id="user-ssh-keys-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <div class="px-5 py-4 overflow-auto flex-1 min-h-0">
+            <p class="text-xs text-slate-600 mb-3">Vantyx に SSH でログインする際に使う公開鍵を、このユーザーに紐づけて登録します。</p>
+            <div id="user-ssh-keys-list" class="mb-4">読み込み中…</div>
+            <div class="border-t border-slate-200 pt-4">
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">公開鍵を追加（authorized_keys 形式の1行）</label>
+              <textarea id="user-ssh-key-input" rows="2" class="w-full rounded border border-slate-300 px-3 py-2 text-sm font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="ssh-ed25519 AAAAC3... user@host"></textarea>
+              <p id="user-ssh-key-error" class="mt-1 text-sm text-red-600 hidden"></p>
+              <button type="button" id="user-ssh-key-add-btn" class="mt-2 rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700">追加</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `
+    const close = () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    const renderList = (keys) => {
+      const listEl = modal.querySelector('#user-ssh-keys-list')
+      if (!listEl) return
+      if (!Array.isArray(keys)) keys = []
+      const keyRows = keys.map((k) => {
+        const keyDisplay = (k.key_line || '').length > 56 ? (k.key_line || '').slice(0, 53) + '...' : (k.key_line || '')
+        return `
+          <div class="flex items-center justify-between gap-2 py-2 border-b border-slate-100 text-sm">
+            <span class="font-mono text-slate-700 truncate flex-1" title="${escapeHtml(k.key_line || '')}">${escapeHtml(keyDisplay)}</span>
+            <span class="text-xs text-slate-400 shrink-0">${escapeHtml(k.created_at || '')}</span>
+            <button type="button" class="user-ssh-key-del-btn rounded border border-red-200 px-2 py-0.5 text-xs text-red-700 hover:bg-red-50 shrink-0" data-key-id="${escapeHtml(String(k.id))}">削除</button>
+          </div>
+        `
+      }).join('')
+      listEl.innerHTML = keyRows
+        ? `<div class="space-y-0">${keyRows}</div>`
+        : '<p class="text-slate-500 text-sm">登録された公開鍵はありません。</p>'
+      modal.querySelectorAll('.user-ssh-key-del-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('この公開鍵を削除しますか？')) return
+          try {
+            await API.deleteUserSSHKey(userId, btn.dataset.keyId)
+            const keys = await API.userSSHKeys(userId)
+            renderList(keys)
+          } catch (e) {
+            alert(e.message || '削除に失敗しました')
+          }
+        })
+      })
+    }
+    modal.querySelector('#user-ssh-keys-close').addEventListener('click', close)
+    modal.querySelector('#user-ssh-keys-backdrop').addEventListener('click', (e) => { if (e.target.id === 'user-ssh-keys-backdrop') close() })
+    modal.querySelector('#user-ssh-key-add-btn').addEventListener('click', async () => {
+      const errorEl = modal.querySelector('#user-ssh-key-error')
+      const raw = (modal.querySelector('#user-ssh-key-input').value || '').trim()
+      const line = raw.split(/\r?\n/)[0]?.trim() || raw
+      errorEl.classList.add('hidden')
+      if (!line) {
+        errorEl.textContent = '公開鍵を1行で入力してください。'
+        errorEl.classList.remove('hidden')
+        return
+      }
+      try {
+        await API.addUserSSHKey(userId, line)
+        modal.querySelector('#user-ssh-key-input').value = ''
+        const keys = await API.userSSHKeys(userId)
+        renderList(keys)
+      } catch (err) {
+        errorEl.textContent = err.message || '登録に失敗しました。'
+        errorEl.classList.remove('hidden')
+      }
+    })
+    try {
+      const keys = await API.userSSHKeys(userId)
+      renderList(keys)
+    } catch (e) {
+      modal.querySelector('#user-ssh-keys-list').innerHTML = `<p class="text-sm text-red-600">${escapeHtml(e.message || '取得に失敗しました')}</p>`
+    }
   }
 
   function showChangePasswordModal() {
@@ -828,10 +954,25 @@ export function renderApp(container) {
     }
   }
 
-  /** 保存済み認証のターゲット用: セッション名・説明だけ入力してからタブを開く */
-  function showStoredCredentialModal(targetId, targetName) {
+  /** 保存済み認証のターゲット用: 接続前にモーダルで不足情報（セッション名・説明・パスワード・パスフレーズ）を入力させる */
+  function showStoredCredentialModal(targetId, targetName, needsPassword, needsPassphrase) {
     const modal = document.getElementById('ssh-credential-modal')
     modal.classList.remove('hidden')
+    const passwordBlock = needsPassword
+      ? `
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード <span class="text-amber-600">（未登録のため入力してください）</span></label>
+        <input type="password" id="ssh-cred-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
+      </div>`
+      : ''
+    const passphraseLabel = needsPassphrase
+      ? '秘密鍵のパスフレーズ <span class="text-amber-600">（未登録のため入力してください）</span>'
+      : '秘密鍵のパスフレーズ（任意・暗号化鍵の場合のみ）'
+    const passphraseBlock = `
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1.5">${passphraseLabel}</label>
+        <input type="password" id="ssh-cred-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="暗号化された秘密鍵のパスフレーズ" />
+      </div>`
     modal.innerHTML = `
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
@@ -841,7 +982,9 @@ export function renderApp(container) {
           </div>
           <form id="ssh-cred-form">
             <div class="px-6 py-5 space-y-5">
-              <p class="text-sm text-slate-600">セッション名と説明を入力してください（任意）。接続でコンソールを開きます。</p>
+              <p class="text-sm text-slate-600">不足している情報を入力してください。接続でコンソールを開きます。</p>
+              ${passwordBlock}
+              ${passphraseBlock}
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">セッション名（任意）</label>
                 <input type="text" id="ssh-cred-session-name" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: 本番デプロイ用" />
@@ -850,6 +993,7 @@ export function renderApp(container) {
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">説明（任意）</label>
                 <input type="text" id="ssh-cred-session-desc" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: リリース作業用" />
               </div>
+              <p id="ssh-cred-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
               <button type="button" id="ssh-cred-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
@@ -867,14 +1011,37 @@ export function renderApp(container) {
     modal.querySelector('#ssh-cred-cancel').addEventListener('click', close)
     modal.querySelector('#ssh-cred-form').addEventListener('submit', (e) => {
       e.preventDefault()
+      const errEl = modal.querySelector('#ssh-cred-error')
       const sessionName = (modal.querySelector('#ssh-cred-session-name').value || '').trim()
       const sessionDesc = (modal.querySelector('#ssh-cred-session-desc').value || '').trim()
+      const password = modal.querySelector('#ssh-cred-password')?.value ?? ''
+      const passphrase = modal.querySelector('#ssh-cred-passphrase')?.value ?? ''
+      if (needsPassword && !password) {
+        errEl.textContent = 'パスワードを入力してください。'
+        errEl.classList.remove('hidden')
+        return
+      }
+      if (needsPassphrase && !passphrase) {
+        errEl.textContent = '秘密鍵のパスフレーズを入力してください。'
+        errEl.classList.remove('hidden')
+        return
+      }
+      errEl.classList.add('hidden')
       const params = new URLSearchParams()
       params.set('target_id', targetId)
       params.set('target_name', targetName || '')
       params.set('use_stored_credentials', '1')
       params.set('session_name', sessionName)
       params.set('session_description', sessionDesc)
+      if (password || passphrase) {
+        try {
+          // localStorage は同一オリジンでタブ間共有のため、window.open で開いたタブから読める（sessionStorage はタブごとで読めない）
+          localStorage.setItem(
+            `vantyx_terminal_pending_${targetId}`,
+            JSON.stringify({ password: password || '', private_key_passphrase: passphrase || '' })
+          )
+        } catch (_) { /* ignore */ }
+      }
       window.open(`/terminal?${params.toString()}`, '_blank', 'noreferrer')
       close()
     })
@@ -887,12 +1054,12 @@ export function renderApp(container) {
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">SSH 認証情報</h3>
+            <h3 class="font-semibold text-slate-800">接続: ${escapeHtml(targetName || targetId)}</h3>
             <button id="ssh-cred-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="ssh-cred-form">
             <div class="px-6 py-5 space-y-5">
-              <p class="text-sm text-slate-600">${escapeHtml(targetName || targetId)} に接続するための認証情報を入力してください。</p>
+              <p class="text-sm text-slate-600">接続に必要な情報を入力してください。入力後にコンソールを開きます。</p>
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名</label>
                 <input type="text" id="ssh-cred-username" autocomplete="username" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
@@ -900,6 +1067,10 @@ export function renderApp(container) {
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード</label>
                 <input type="password" id="ssh-cred-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
+                <input type="password" id="ssh-cred-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="保存済み鍵が暗号化されている場合のみ" />
               </div>
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">セッション名（任意）</label>
@@ -930,6 +1101,7 @@ export function renderApp(container) {
       const errorEl = modal.querySelector('#ssh-cred-error')
       const username = modal.querySelector('#ssh-cred-username').value.trim()
       const password = modal.querySelector('#ssh-cred-password').value
+      const passphrase = (modal.querySelector('#ssh-cred-passphrase')?.value ?? '').trim()
       const sessionName = modal.querySelector('#ssh-cred-session-name').value.trim()
       const sessionDesc = modal.querySelector('#ssh-cred-session-desc').value.trim()
       if (!username) {
@@ -938,7 +1110,7 @@ export function renderApp(container) {
         return
       }
       const token = randomToken()
-      pendingTerminalCreds[token] = { targetId, targetName, username, password, sessionName, sessionDesc }
+      pendingTerminalCreds[token] = { targetId, targetName, username, password, passphrase, sessionName, sessionDesc }
       const url = `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&channel=${encodeURIComponent(token)}`
       window.open(url, '_blank', 'noreferrer')
 
@@ -958,6 +1130,7 @@ export function renderApp(container) {
             type: 'credentials',
             username: creds.username,
             password: creds.password,
+            private_key_passphrase: creds.passphrase || '',
             name: creds.sessionName || '',
             description: creds.sessionDesc || '',
           })
@@ -1172,7 +1345,7 @@ export function renderApp(container) {
             const name = btn.dataset.terminalTargetName || ''
             if (!id) return
             if (btn.dataset.hasStoredCredentials) {
-              showStoredCredentialModal(id, name)
+              showStoredCredentialModal(id, name, btn.dataset.needsPassword === '1', btn.dataset.needsPassphrase === '1')
             } else {
               showSSHCredentialModal(id, name)
             }
@@ -1269,24 +1442,31 @@ export function renderApp(container) {
                   <select id="add-target-protocol" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
                     <option value="ssh">SSH</option>
                     <option value="telnet">Telnet</option>
+                    <option value="vnc">VNC</option>
+                    <option value="rdp">RDP</option>
+                    <option value="tftp">TFTP</option>
                   </select>
                 </div>
               </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名（任意）</label>
-                <input type="text" id="add-target-ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード（任意）</label>
-                <input type="password" id="add-target-ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="保存すると接続時に利用できます" />
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH 秘密鍵（PEM・任意）</label>
-                <textarea id="add-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" placeholder="-----BEGIN ... 形式の秘密鍵を貼り付け。パスワードとどちらかまたは両方設定可"></textarea>
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
-                <input type="password" id="add-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="暗号化された秘密鍵の場合" />
+              <div id="add-target-ssh-fields">
+                <div class="space-y-5">
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名（任意）</label>
+                    <input type="text" id="add-target-ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード（任意）</label>
+                    <input type="password" id="add-target-ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="保存すると接続時に利用できます" />
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH 秘密鍵（PEM・任意）</label>
+                    <textarea id="add-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" placeholder="-----BEGIN ... 形式の秘密鍵を貼り付け。パスワードとどちらかまたは両方設定可"></textarea>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
+                    <input type="password" id="add-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="暗号化された秘密鍵の場合" />
+                  </div>
+                </div>
               </div>
               <p id="add-target-error" class="text-sm text-red-600 hidden"></p>
             </div>
@@ -1298,6 +1478,20 @@ export function renderApp(container) {
         </div>
       </div>
     `
+    const defaultPorts = { ssh: 22, telnet: 23, vnc: 5900, rdp: 3389, tftp: 69 }
+    const addProtoSelect = modal.querySelector('#add-target-protocol')
+    const addSshFields = modal.querySelector('#add-target-ssh-fields')
+    const addPortInput = modal.querySelector('#add-target-port')
+    function syncAddProtocol() {
+      const proto = addProtoSelect.value
+      addSshFields.style.display = proto === 'ssh' ? '' : 'none'
+      if (defaultPorts[proto] !== undefined) {
+        addPortInput.value = defaultPorts[proto]
+      }
+    }
+    addProtoSelect.addEventListener('change', syncAddProtocol)
+    syncAddProtocol()
+
     modal.querySelector('#add-target-close').addEventListener('click', () => {
       modal.classList.add('hidden')
       modal.innerHTML = ''
@@ -1376,25 +1570,32 @@ export function renderApp(container) {
                   <select id="edit-target-protocol" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
                     <option value="ssh" ${(target.protocol || 'ssh') === 'ssh' ? 'selected' : ''}>SSH</option>
                     <option value="telnet" ${target.protocol === 'telnet' ? 'selected' : ''}>Telnet</option>
+                    <option value="vnc" ${target.protocol === 'vnc' ? 'selected' : ''}>VNC</option>
+                    <option value="rdp" ${target.protocol === 'rdp' ? 'selected' : ''}>RDP</option>
+                    <option value="tftp" ${target.protocol === 'tftp' ? 'selected' : ''}>TFTP</option>
                   </select>
                 </div>
               </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名（任意）</label>
-                <input type="text" id="edit-target-ssh-username" value="${escapeHtml(target.ssh_username || '')}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード（任意）</label>
-                <input type="password" id="edit-target-ssh-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="変更する場合のみ入力（空のままなら変更しません）" />
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH 秘密鍵（PEM・任意）</label>
-                <textarea id="edit-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" placeholder="${target.has_ssh_key ? '設定済み。上書きする場合は新しい鍵を貼り付け' : '-----BEGIN ... 形式の秘密鍵を貼り付け'}" autocomplete="off"></textarea>
-                ${target.has_ssh_key ? '<label class="mt-1.5 flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" id="edit-target-clear-ssh-key" class="rounded border-slate-300" /> 保存済み秘密鍵をクリア</label>' : ''}
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
-                <input type="password" id="edit-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="変更する場合のみ入力" />
+              <div id="edit-target-ssh-fields">
+                <div class="space-y-5">
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名（任意）</label>
+                    <input type="text" id="edit-target-ssh-username" value="${escapeHtml(target.ssh_username || '')}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード（任意）</label>
+                    <input type="password" id="edit-target-ssh-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="変更する場合のみ入力（空のままなら変更しません）" />
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH 秘密鍵（PEM・任意）</label>
+                    <textarea id="edit-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" placeholder="${target.has_ssh_key ? '設定済み。上書きする場合は新しい鍵を貼り付け' : '-----BEGIN ... 形式の秘密鍵を貼り付け'}" autocomplete="off"></textarea>
+                    ${target.has_ssh_key ? '<label class="mt-1.5 flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" id="edit-target-clear-ssh-key" class="rounded border-slate-300" /> 保存済み秘密鍵をクリア</label>' : ''}
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
+                    <input type="password" id="edit-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="変更する場合のみ入力" />
+                  </div>
+                </div>
               </div>
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">タグ（カンマ区切り）</label>
@@ -1412,6 +1613,23 @@ export function renderApp(container) {
       </div>
     `
     fillExistingTagsPicker(modal, 'edit-target-tags')
+    const editDefaultPorts = { ssh: 22, telnet: 23, vnc: 5900, rdp: 3389, tftp: 69 }
+    const editProtoSelect = modal.querySelector('#edit-target-protocol')
+    const editSshFields = modal.querySelector('#edit-target-ssh-fields')
+    const editPortInput = modal.querySelector('#edit-target-port')
+    function syncEditProtocol() {
+      const proto = editProtoSelect.value
+      editSshFields.style.display = proto === 'ssh' ? '' : 'none'
+    }
+    editProtoSelect.addEventListener('change', () => {
+      syncEditProtocol()
+      const proto = editProtoSelect.value
+      if (editDefaultPorts[proto] !== undefined) {
+        editPortInput.value = editDefaultPorts[proto]
+      }
+    })
+    syncEditProtocol()
+
     modal.querySelector('#edit-target-close').addEventListener('click', () => {
       modal.classList.add('hidden')
       modal.innerHTML = ''
@@ -1435,7 +1653,7 @@ export function renderApp(container) {
       const ssh_username = modal.querySelector('#edit-target-ssh-username').value.trim()
       const pwVal = modal.querySelector('#edit-target-ssh-password').value
       const ssh_password = pwVal === '' ? undefined : pwVal
-      const keyVal = modal.querySelector('#edit-target-ssh-private-key').value.trim()
+      const keyVal = modal.querySelector('#edit-target-ssh-private-key').value
       const clearKeyChecked = modal.querySelector('#edit-target-clear-ssh-key') && modal.querySelector('#edit-target-clear-ssh-key').checked
       const ssh_private_key = clearKeyChecked ? '' : (keyVal === '' ? undefined : keyVal)
       const keyPassVal = modal.querySelector('#edit-target-ssh-key-passphrase').value
@@ -1497,15 +1715,25 @@ export function renderApp(container) {
             ` : `
             <div class="flex items-center justify-end gap-2">
               ${t.protocol === 'ssh'
-            ? `<button type="button" data-terminal-target-id="${escapeHtml(t.id)}" data-terminal-target-name="${escapeHtml(t.name || '')}" data-has-stored-credentials="${t.has_stored_credentials ? '1' : ''}"
+            ? `<button type="button" data-terminal-target-id="${escapeHtml(t.id)}" data-terminal-target-name="${escapeHtml(t.name || '')}" data-has-stored-credentials="${t.has_stored_credentials ? '1' : ''}" data-needs-password="${t.needs_password ? '1' : ''}" data-needs-passphrase="${t.needs_passphrase ? '1' : ''}"
               class="connect-btn-in-group terminal-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50">
               接続
             </button>`
+            : t.protocol === 'vnc'
+            ? `<a href="/vnc?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(t.name || '')}" target="_blank" rel="noreferrer" class="connect-btn-in-group vnc-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block">
+              VNC
+            </a>`
+            : t.protocol === 'rdp'
+            ? `<a href="/rdp?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(t.name || '')}" target="_blank" rel="noreferrer" class="connect-btn-in-group rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block">
+              RDP
+            </a>`
+            : t.protocol === 'tftp'
+            ? `<a href="/files?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(t.name || '')}&protocol=tftp" class="connect-btn-in-group rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block">ファイル</a>`
             : `<button data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-protocol="${escapeHtml(t.protocol)}"
               class="connect-btn-in-group rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50">
               接続
             </button>`}
-              ${t.protocol === 'ssh' && (t.has_stored_credentials || t.has_ssh_key) ? `<a href="/files?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(t.name || '')}" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">ファイル</a>` : ''}
+              ${(t.protocol === 'ssh' && (t.has_stored_credentials || t.has_ssh_key)) || t.protocol === 'tftp' ? (t.protocol === 'ssh' ? `<a href="/files?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(t.name || '')}" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">ファイル</a>` : '') : ''}
               <button type="button" class="active-sessions-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name || '')}">アクティブなセッション</button>
             </div>
             `}

@@ -122,12 +122,19 @@ func main() {
 
 	var sshServer *sshd.Server
 	if sshListen := strings.TrimSpace(os.Getenv("VANTYX_SSH_LISTEN")); sshListen != "" {
+		recordingDir := strings.TrimSpace(os.Getenv("VANTYX_RECORDINGS_DIR"))
+		var recordingStore sshd.RecordingStore
+		if recordingDir != "" && app.DB != nil {
+			recordingStore = app
+		}
 		var err error
 		sshServer, err = sshd.NewServer(sshd.Config{
-			UserStore:      app.UserStore,
-			TargetStore:    app.TargetStore,
-			GroupStore:     app.AccessGroupStore,
-			SessionManager: app.TerminalSessionManager,
+			UserStore:       app.UserStore,
+			TargetStore:     app.TargetStore,
+			GroupStore:      app.AccessGroupStore,
+			SessionManager:  app.TerminalSessionManager,
+			RecordingsDir:   recordingDir,
+			RecordingStore:  recordingStore,
 		})
 		if err != nil {
 			slog.Error("sshd setup failed", "error", err)

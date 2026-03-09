@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/recording"
+	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
@@ -52,12 +54,13 @@ type wsAuthMessage struct {
 	UseStoredCredentials bool   `json:"use_stored_credentials"`
 	Username             string `json:"username"`
 	Password             string `json:"password"`
+	PrivateKeyPassphrase string `json:"private_key_passphrase"` // 保存済み秘密鍵が暗号化されている場合に接続時に入力
 	Name                 string `json:"name"`
 	Description          string `json:"description"`
 }
 
 // readTerminalCredentials reads the first text message and returns credentials.
-// If use_stored_credentials is true, uses target's stored SSH username/password (no client secret).
+// If use_stored_credentials is true, uses target's stored SSH username/password/key; client may send password or private_key_passphrase when not stored.
 func readTerminalCredentials(conn *websocket.Conn, target *access.Target) (sshproxy.Credentials, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
@@ -76,32 +79,64 @@ func readTerminalCredentials(conn *websocket.Conn, target *access.Target) (sshpr
 		if target.SSHUsername == "" {
 			return sshproxy.Credentials{}, errNoStoredCredentials
 		}
-		if target.SSHPassword == "" && target.SSHPrivateKey == "" {
-			return sshproxy.Credentials{}, errNoStoredCredentials
+		// パスワードや秘密鍵は未保存でも可。接続時にクライアントが password または private_key_passphrase を送る。
+		// 接続時に入力された値は保存済みを上書きする（誤保存の修正や、その場で正しい値を入力できるようにする）。
+		password := target.SSHPassword
+		if m.Password != "" {
+			password = m.Password
 		}
-		return sshproxy.Credentials{
+		keyPassphrase := target.SSHPrivateKeyPassphrase
+		if m.PrivateKeyPassphrase != "" {
+			keyPassphrase = m.PrivateKeyPassphrase
+		}
+		creds := sshproxy.Credentials{
 			Username:             target.SSHUsername,
-			Password:             target.SSHPassword,
+			Password:             password,
 			PrivateKey:           target.SSHPrivateKey,
-			PrivateKeyPassphrase: target.SSHPrivateKeyPassphrase,
+			PrivateKeyPassphrase: keyPassphrase,
 			Name:                 m.Name,
 			Description:          m.Description,
-		}, nil
+		}
+		if err := credentialsDecrypted(creds); err != nil {
+			return sshproxy.Credentials{}, err
+		}
+		return creds, nil
 	}
 	if m.Username == "" {
 		return sshproxy.Credentials{}, errInvalidCredentials
 	}
-	return sshproxy.Credentials{
+	creds := sshproxy.Credentials{
 		Username:    m.Username,
 		Password:    m.Password,
 		Name:        m.Name,
 		Description: m.Description,
-	}, nil
+	}
+	// ターゲットに保存済みの秘密鍵があり、クライアントがパスフレーズを送った場合はその鍵を使う（暗号化鍵の接続時入力に対応）
+	if target.SSHPrivateKey != "" && m.PrivateKeyPassphrase != "" {
+		creds.PrivateKey = target.SSHPrivateKey
+		creds.PrivateKeyPassphrase = m.PrivateKeyPassphrase
+	}
+	if err := credentialsDecrypted(creds); err != nil {
+		return sshproxy.Credentials{}, err
+	}
+	return creds, nil
+}
+
+// credentialsDecrypted returns an error if PrivateKey or PrivateKeyPassphrase is still ciphertext (decryption failed at rest).
+func credentialsDecrypted(creds sshproxy.Credentials) error {
+	if creds.PrivateKey != "" && strings.HasPrefix(creds.PrivateKey, secret.CiphertextVersionPrefix) {
+		return errCredentialsNotDecrypted
+	}
+	if creds.PrivateKeyPassphrase != "" && strings.HasPrefix(creds.PrivateKeyPassphrase, secret.CiphertextVersionPrefix) {
+		return errCredentialsNotDecrypted
+	}
+	return nil
 }
 
 var (
-	errInvalidCredentials  = errors.New("invalid or missing credentials (send JSON: {\"username\":\"...\",\"password\":\"...\"} or {\"use_stored_credentials\":true})")
-	errNoStoredCredentials = errors.New("stored credentials not configured for this target")
+	errInvalidCredentials     = errors.New("invalid or missing credentials (send JSON: {\"username\":\"...\",\"password\":\"...\"} or {\"use_stored_credentials\":true})")
+	errNoStoredCredentials    = errors.New("stored credentials not configured for this target")
+	errCredentialsNotDecrypted = errors.New("保存された認証情報の復号に失敗しています。VANTYX_ENCRYPTION_KEY を確認してください")
 )
 
 // handleSSHWebSocket upgrades the connection and starts a goroutine-backed terminal session.
@@ -379,7 +414,8 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"items": items})
 }
 
-// handleGetRecordingFile serves the asciinema .cast file; caller must own the recording.
+// handleGetRecordingFile serves the recording file. Query format=cast|gif|webm (default cast).
+// cast = asciinema .cast; gif/webm require agg (and ffmpeg for webm) to be installed, else 503.
 func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("vantyx_session")
 	if err != nil || cookie.Value == "" {
@@ -399,6 +435,16 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 	recordingID := rawID
 	if decoded, e := url.PathUnescape(rawID); e == nil {
 		recordingID = decoded
+	}
+	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	if format == "" {
+		format = "cast"
+	}
+	switch format {
+	case "cast", "gif", "webm":
+	default:
+		writeJSONError(w, "format must be cast, gif, or webm", http.StatusBadRequest)
+		return
 	}
 	if a.DB == nil {
 		writeJSONError(w, "recordings not available", http.StatusServiceUnavailable)
@@ -448,22 +494,95 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 		safe = strings.ReplaceAll(safe, ".", "-")
 		return safe + ext
 	}
+	castPath := filePath
 	f, err := tryOpen(filePath)
 	if err != nil {
 		dir, base := filepath.Dir(filePath), filepath.Base(filePath)
 		safeBase := sanitizeBasename(base)
 		if safeBase != base {
-			f, err = tryOpen(filepath.Join(dir, safeBase))
+			castPath = filepath.Join(dir, safeBase)
+			f, err = tryOpen(castPath)
 		}
 	}
 	if err != nil {
 		writeJSONError(w, "recording file not found", http.StatusNotFound)
 		return
 	}
-	defer f.Close()
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(filePath))
-	_, _ = io.Copy(w, f)
+	if format == "cast" {
+		defer f.Close()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(castPath))
+		_, _ = io.Copy(w, f)
+		return
+	}
+	f.Close()
+	// GIF or WebM: convert with agg (and ffmpeg for webm)
+	outPath, contentType, disposition, err := convertCastToVideo(castPath, format)
+	if err != nil {
+		log.Printf("recording convert failed id=%s format=%s err=%v", recordingID, format, err)
+		writeJSONError(w, "video export unavailable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer os.Remove(outPath)
+	out, err := os.Open(outPath) // #nosec G304 -- path from convertCastToVideo (temp file we created)
+	if err != nil {
+		writeJSONError(w, "failed to read converted file", http.StatusInternalServerError)
+		return
+	}
+	defer out.Close()
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", disposition)
+	_, _ = io.Copy(w, out)
+}
+
+// convertCastToVideo converts a .cast file to gif or webm using agg (and ffmpeg for webm).
+// Returns (outPath, contentType, contentDisposition, error). Caller must os.Remove(outPath).
+func convertCastToVideo(castPath, format string) (string, string, string, error) {
+	aggPath, err := exec.LookPath("agg")
+	if err != nil {
+		return "", "", "", errors.New("agg not found in PATH (install asciinema-agg for GIF/WebM export)")
+	}
+	dir := filepath.Dir(castPath)
+	gifFile, err := os.CreateTemp(dir, "rec-*.gif")
+	if err != nil {
+		return "", "", "", err
+	}
+	gifPath := gifFile.Name()
+	gifFile.Close()
+	defer func() {
+		if format == "webm" {
+			_ = os.Remove(gifPath)
+		}
+	}()
+	cmd := exec.Command(aggPath, castPath, gifPath) // #nosec G204 -- paths from validated castPath and temp file
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		_ = os.Remove(gifPath)
+		return "", "", "", errors.New(strings.TrimSpace(string(out)) + ": " + runErr.Error())
+	}
+	if format == "gif" {
+		return gifPath, "image/gif", `attachment; filename="recording.gif"`, nil
+	}
+	// WebM: ffmpeg -i gifPath -c:v libvpx-vp9 -pix_fmt yuv420p -an -b:v 0 -crf 30 out.webm
+	// Use yuv420p (not yuva420p); terminal GIFs from agg are opaque. -vf scale ensures even dimensions.
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return "", "", "", errors.New("ffmpeg not found in PATH (required for WebM export)")
+	}
+	webmFile, err := os.CreateTemp(dir, "rec-*.webm")
+	if err != nil {
+		return "", "", "", err
+	}
+	webmPath := webmFile.Name()
+	webmFile.Close()
+	cmd = exec.Command(ffmpegPath, "-y", "-i", gifPath,
+		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+		"-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p", "-an", "-b:v", "0", "-crf", "30",
+		webmPath) // #nosec G204
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		_ = os.Remove(webmPath)
+		return "", "", "", errors.New("ffmpeg: " + strings.TrimSpace(string(out)))
+	}
+	return webmPath, "video/webm", `attachment; filename="recording.webm"`, nil
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
@@ -541,4 +660,24 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 	// コールバックから return すると Manager の goroutine が sess.done を close し delete(m.sessions, id) するため、
 	// ここで manager.Stop(id) を呼ぶとデッドロックになる（Stop は <-sess.done で待つが、return するまで done は close されない）。
 	// セッション一覧からの削除はコールバック return 時に自動で行われる。
+}
+
+// InsertRecording inserts a recording row (for CLI or other non-browser channels).
+// Used by sshd when RecordingsDir and RecordingStore are set. No-op if a.DB is nil.
+func (a *App) InsertRecording(ctx context.Context, id, userID, targetID, sessionID, channelType, filePath, startedAt, sessionName, sessionDesc string) error {
+	if a.DB == nil {
+		return nil
+	}
+	_, err := a.DB.ExecContext(ctx, `INSERT INTO recordings (id, user_id, target_id, session_id, channel_type, file_path, started_at, session_name, session_description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, userID, targetID, sessionID, channelType, filePath, startedAt, sessionName, sessionDesc)
+	return err
+}
+
+// UpdateRecordingEnded sets ended_at for a recording. No-op if a.DB is nil.
+func (a *App) UpdateRecordingEnded(ctx context.Context, id, endedAt string) error {
+	if a.DB == nil {
+		return nil
+	}
+	_, err := a.DB.ExecContext(ctx, `UPDATE recordings SET ended_at = ? WHERE id = ?`, endedAt, id)
+	return err
 }

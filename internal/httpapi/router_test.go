@@ -1068,6 +1068,33 @@ func TestApp_SSHKeys_List_Unauthorized(t *testing.T) {
 	}
 }
 
+func TestApp_SSHKeys_List_Forbidden_NonAdmin(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	// Create non-admin user via API (as admin)
+	adminSess, _ := app.SessionStore.Create("admin")
+	adminCookie := &http.Cookie{Name: "vantyx_session", Value: adminSess.ID, Path: "/"}
+	createBody := []byte(`{"username":"u2","password":"Passw0rd!","role":"user"}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/users", bytes.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq.AddCookie(adminCookie)
+	createW := httptest.NewRecorder()
+	router.ServeHTTP(createW, createReq)
+	if createW.Result().StatusCode != http.StatusOK && createW.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("create user expected 200/201, got %d body=%s", createW.Result().StatusCode, createW.Body.String())
+	}
+	// Request ssh-keys as non-admin
+	u2Sess, _ := app.SessionStore.Create("u2")
+	u2Cookie := &http.Cookie{Name: "vantyx_session", Value: u2Sess.ID, Path: "/"}
+	req := httptest.NewRequest(http.MethodGet, "/api/me/ssh-keys", nil)
+	req.AddCookie(u2Cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
 func TestApp_SSHKeys_ListAddDelete(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()

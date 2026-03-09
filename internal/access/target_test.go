@@ -79,3 +79,43 @@ func TestSQLiteTargetStore_ListByIDs(t *testing.T) {
 		t.Fatalf("expected 2 targets, got %d", len(list))
 	}
 }
+
+func TestSQLiteTargetStore_CreateWithPath_ProtocolVNC(t *testing.T) {
+	ctx := context.Background()
+	store := newTestSQLiteTargetStore(t)
+
+	target, err := store.CreateWithPath(ctx, "vnc1", "VNC Server", "192.168.1.10", 5900, ProtocolVNC, GroupID("g1"), "g1", "", "", "", "")
+	if err != nil {
+		t.Fatalf("CreateWithPath: %v", err)
+	}
+	if target.Protocol != ProtocolVNC || target.Port != 5900 {
+		t.Fatalf("unexpected target: %+v", target)
+	}
+	got, err := store.Get(ctx, "vnc1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Protocol != ProtocolVNC {
+		t.Fatalf("Get returned protocol %q, want vnc", got.Protocol)
+	}
+}
+
+func TestSQLiteTargetStore_CreateWithPath_ProtocolTFTP(t *testing.T) {
+	ctx := context.Background()
+	store := newTestSQLiteTargetStore(t)
+
+	target, err := store.CreateWithPath(ctx, "tftp1", "TFTP Server", "192.168.1.20", 69, ProtocolTFTP, GroupID("g1"), "g1", "", "", "", "")
+	if err != nil {
+		t.Fatalf("CreateWithPath: %v", err)
+	}
+	if target.Protocol != ProtocolTFTP || target.Port != 69 {
+		t.Fatalf("unexpected target: %+v", target)
+	}
+	got, err := store.Get(ctx, "tftp1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Protocol != ProtocolTFTP {
+		t.Fatalf("Get returned protocol %q, want tftp", got.Protocol)
+	}
+}

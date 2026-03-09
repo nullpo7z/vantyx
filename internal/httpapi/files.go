@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -13,7 +14,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/sftp"
+	"github.com/nullpo7z/vantyx/internal/tftp"
 )
 
 // fileEntry is a single entry in a directory listing.
@@ -24,9 +27,9 @@ type fileEntry struct {
 	ModTime string `json:"mod_time,omitempty"`
 }
 
-// getTargetAndSFTPClient checks auth, loads target, verifies user has access, and opens an SFTP client using stored credentials or SFTPClientFactory.
+// getTargetAndFileClient checks auth, loads target, verifies user has access, and returns an SFTP or TFTP client.
 // The caller must call client.Close(). Returns (nil, nil) if the response was already written (error case).
-func (a *App) getTargetAndSFTPClient(w http.ResponseWriter, r *http.Request) (*access.Target, FileTransferClient) {
+func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*access.Target, FileTransferClient) {
 	c, err := r.Cookie("vantyx_session")
 	if err != nil || c.Value == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
@@ -63,30 +66,44 @@ func (a *App) getTargetAndSFTPClient(w http.ResponseWriter, r *http.Request) (*a
 		writeJSONError(w, "forbidden", http.StatusForbidden)
 		return nil, nil
 	}
-	if target.Protocol != access.ProtocolSSH {
-		writeJSONError(w, "only SSH targets support file transfer", http.StatusBadRequest)
-		return nil, nil
-	}
-	if target.SSHUsername == "" || (target.SSHPassword == "" && target.SSHPrivateKey == "") {
-		writeJSONError(w, "stored credentials (password or SSH key) required for file transfer", http.StatusBadRequest)
-		return nil, nil
-	}
-	if a.SFTPClientFactory != nil {
-		client, err := a.SFTPClientFactory(ctx, target)
+	switch target.Protocol {
+	case access.ProtocolTFTP:
+		tftpClient, err := tftp.NewClient(ctx, target.Host, target.Port)
+		if err != nil {
+			log.Printf("files tftp connect failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+			writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
+			return nil, nil
+		}
+		return target, &tftpClientAdapter{Client: tftpClient}
+	case access.ProtocolSSH:
+		if target.SSHUsername == "" || (target.SSHPassword == "" && target.SSHPrivateKey == "") {
+			writeJSONError(w, "stored credentials (password or SSH key) required for file transfer", http.StatusBadRequest)
+			return nil, nil
+		}
+		if target.SSHPrivateKey != "" && strings.HasPrefix(target.SSHPrivateKey, secret.CiphertextVersionPrefix) {
+			writeJSONError(w, "保存された認証情報の復号に失敗しています。VANTYX_ENCRYPTION_KEY を確認してください", http.StatusInternalServerError)
+			return nil, nil
+		}
+		if a.SFTPClientFactory != nil {
+			client, err := a.SFTPClientFactory(ctx, target)
+			if err != nil {
+				log.Printf("files sftp connect failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+				writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
+				return nil, nil
+			}
+			return target, client
+		}
+		client, err := sftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase)
 		if err != nil {
 			log.Printf("files sftp connect failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
 			writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
 			return nil, nil
 		}
-		return target, client
-	}
-	client, err := sftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase)
-	if err != nil {
-		log.Printf("files sftp connect failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
-		writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
+		return target, &sftpClientAdapter{Client: client}
+	default:
+		writeJSONError(w, "file transfer only for SSH or TFTP targets", http.StatusBadRequest)
 		return nil, nil
 	}
-	return target, &sftpClientAdapter{Client: client}
 }
 
 // sftpClientAdapter adapts *sftp.Client to FileTransferClient (Open and Create return interface types).
@@ -120,7 +137,7 @@ func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	target, client := a.getTargetAndSFTPClient(w, r)
+	target, client := a.getTargetAndFileClient(w, r)
 	if client == nil {
 		return
 	}
@@ -157,7 +174,7 @@ func (a *App) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	target, client := a.getTargetAndSFTPClient(w, r)
+	target, client := a.getTargetAndFileClient(w, r)
 	if client == nil {
 		return
 	}
@@ -199,7 +216,7 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	target, client := a.getTargetAndSFTPClient(w, r)
+	target, client := a.getTargetAndFileClient(w, r)
 	if client == nil {
 		return
 	}
@@ -250,7 +267,7 @@ func (a *App) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	target, client := a.getTargetAndSFTPClient(w, r)
+	target, client := a.getTargetAndFileClient(w, r)
 	if client == nil {
 		return
 	}
@@ -262,6 +279,10 @@ func (a *App) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := client.RemoveAll(filePath); err != nil {
+		if errors.Is(err, errTFTPNoDelete) {
+			writeJSONError(w, "TFTP does not support delete", http.StatusNotImplemented)
+			return
+		}
 		log.Printf("files remove failed target_id=%s path=%s err=%v", target.ID, filePath, err)
 		writeJSONError(w, "remove failed: "+err.Error(), http.StatusBadGateway)
 		return

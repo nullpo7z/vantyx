@@ -46,6 +46,43 @@ const API = {
     return res.json()
   },
 
+  /** 指定ユーザーの Vantyx ログイン用 SSH 公開鍵一覧（管理者のみ） */
+  async userSSHKeys(userId) {
+    const res = await fetch(`/api/users/${encodeURIComponent(userId)}/ssh-keys`, { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load SSH keys')
+    }
+    return res.json()
+  },
+
+  /** 指定ユーザーに Vantyx ログイン用 SSH 公開鍵を追加（管理者のみ） */
+  async addUserSSHKey(userId, authorizedKey) {
+    const res = await fetch(`/api/users/${encodeURIComponent(userId)}/ssh-keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ authorized_key: authorizedKey }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to add SSH key')
+    }
+    return res.json()
+  },
+
+  /** 指定ユーザーの Vantyx ログイン用 SSH 公開鍵を削除（管理者のみ） */
+  async deleteUserSSHKey(userId, keyId) {
+    const res = await fetch(`/api/users/${encodeURIComponent(userId)}/ssh-keys/${encodeURIComponent(keyId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete SSH key')
+    }
+  },
+
   async targets() {
     const res = await fetch('/api/targets', { credentials: 'include' })
     if (!res.ok) {

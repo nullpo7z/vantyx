@@ -19,6 +19,7 @@ FROM golang:1.26-alpine AS builder
 WORKDIR /src
 
 COPY go.mod go.sum ./
+COPY patched_deps ./patched_deps
 RUN go mod download
 
 COPY . .
@@ -29,8 +30,14 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /out/vant
 # -----------------------------------------------------------------------------
 FROM alpine:3.21
 
-RUN apk add --no-cache su-exec \
-	&& adduser -D -u 65532 nonroot
+# su-exec, nonroot user, asciinema-agg (GIF 用), ffmpeg (WebM 用), フォント (agg の描画用)
+ARG AGG_VERSION=v1.7.0
+RUN apk add --no-cache su-exec wget ffmpeg fontconfig font-dejavu \
+	&& adduser -D -u 65532 nonroot \
+	&& wget -q "https://github.com/asciinema/agg/releases/download/${AGG_VERSION}/agg-x86_64-unknown-linux-musl" -O /usr/local/bin/agg \
+	&& chmod +x /usr/local/bin/agg \
+	&& fc-cache -f \
+	&& apk del wget
 
 WORKDIR /app
 

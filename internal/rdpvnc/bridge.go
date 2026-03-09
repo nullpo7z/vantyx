@@ -60,7 +60,7 @@ func Start(ctx context.Context, host string, port int, username, password string
 	}
 
 	screenSpec := fmt.Sprintf("%dx%dx24", width, height)
-	b.xvfb = exec.CommandContext(bridgeCtx, "Xvfb", displayStr, "-screen", "0", screenSpec, "-ac", "-nolisten", "tcp")
+	b.xvfb = exec.CommandContext(bridgeCtx, "Xvfb", displayStr, "-screen", "0", screenSpec, "-ac", "-nolisten", "tcp") // #nosec G204 -- args are constructed from validated internal values
 	if err := b.xvfb.Start(); err != nil {
 		cancel()
 		return nil, fmt.Errorf("start Xvfb: %w", err)
@@ -88,7 +88,7 @@ func Start(ctx context.Context, host string, port int, username, password string
 		args = append(args, "/p:"+password)
 	}
 
-	b.freerdp = exec.CommandContext(bridgeCtx, "xfreerdp", args...)
+	b.freerdp = exec.CommandContext(bridgeCtx, "xfreerdp", args...) // #nosec G204 -- args are constructed from validated target fields
 	b.freerdp.Env = append(b.freerdp.Environ(), "DISPLAY="+displayStr)
 	if err := b.freerdp.Start(); err != nil {
 		cancel()
@@ -98,7 +98,7 @@ func Start(ctx context.Context, host string, port int, username, password string
 
 	time.Sleep(2 * time.Second)
 
-	b.x11vnc = exec.CommandContext(bridgeCtx, "x11vnc",
+	b.x11vnc = exec.CommandContext(bridgeCtx, "x11vnc", // #nosec G204 -- args are constructed from validated internal values
 		"-display", displayStr,
 		"-rfbport", fmt.Sprintf("%d", vncPort),
 		"-nopw",
@@ -172,7 +172,7 @@ func waitForDisplay(ctx context.Context, display string, timeout time.Duration) 
 			return fmt.Errorf("timeout waiting for display %s", display)
 		default:
 		}
-		cmd := exec.CommandContext(ctx, "xdpyinfo", "-display", display)
+		cmd := exec.CommandContext(ctx, "xdpyinfo", "-display", display) // #nosec G204 -- display is an internally generated value
 		if err := cmd.Run(); err == nil {
 			return nil
 		}

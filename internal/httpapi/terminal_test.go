@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/rdpvnc"
 	"github.com/nullpo7z/vantyx/internal/session"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
@@ -1057,5 +1058,88 @@ func TestHandleRDPBrowserWebSocket_BridgeStartFails(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500 (no Xvfb available), got %d", w.Code)
+	}
+}
+
+// --- handleRDPSessions tests ---
+
+func TestHandleRDPSessions_Unauthorized(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/rdp/sessions", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestHandleRDPSessions_NoManager(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	// Simulate configuration where RDPVNCManager is disabled.
+	app.RDPVNCManager = nil
+	router := app.NewRouter()
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/rdp/sessions", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		Items []map[string]string `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if len(resp.Items) != 0 {
+		t.Fatalf("expected 0 items, got %d", len(resp.Items))
+	}
+}
+
+func TestHandleRDPSessions_WithActiveSession(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	if app.RDPVNCManager == nil {
+		app.RDPVNCManager = rdpvnc.NewManager()
+	}
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
+
+	// Register a dummy active bridge for admin:rdp1 so that handleRDPSessions can discover it.
+	app.RDPVNCManager.Register("admin:rdp1", &rdpvnc.Bridge{})
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/rdp/sessions", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		Items []struct {
+			TargetID   string `json:"target_id"`
+			TargetName string `json:"target_name"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(resp.Items))
+	}
+	if resp.Items[0].TargetID != "rdp1" {
+		t.Fatalf("expected target_id rdp1, got %s", resp.Items[0].TargetID)
+	}
+	if resp.Items[0].TargetName != "RDP1" {
+		t.Fatalf("expected target_name RDP1, got %s", resp.Items[0].TargetName)
 	}
 }

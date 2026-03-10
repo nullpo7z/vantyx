@@ -2,11 +2,14 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,10 +37,62 @@ type listTerminalSessions interface {
 // terminalSessionIDGen is set in tests to force duplicate session ID and cover Start error path.
 var terminalSessionIDGen func() session.ID
 
+func newTerminalSessionID() (session.ID, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return session.ID(hex.EncodeToString(b)), nil
+}
+
+func allowedWebSocketOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		// Some non-browser clients may omit Origin. Disallow by default (CSWSH protection).
+		// Can be enabled explicitly for local development/testing.
+		if strings.TrimSpace(os.Getenv("VANTYX_ALLOW_WS_NO_ORIGIN")) != "1" {
+			return false
+		}
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			return false
+		}
+		return true
+	}
+
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+
+	// Allow explicit allowlist (comma-separated full origins like https://example.com).
+	if v := strings.TrimSpace(os.Getenv("VANTYX_WS_ALLOWED_ORIGINS")); v != "" {
+		for _, s := range strings.Split(v, ",") {
+			if strings.TrimSpace(s) == origin {
+				return true
+			}
+		}
+	}
+
+	// Default: same-origin (scheme + host) only.
+	wantScheme := "https"
+	if r.TLS == nil {
+		wantScheme = "http"
+	}
+	wantHost := r.Host
+	if strings.EqualFold(u.Scheme, wantScheme) && strings.EqualFold(u.Host, wantHost) {
+		return true
+	}
+	return false
+}
+
 var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		// Origin checks will be refined when frontend is introduced.
-		return true
+		return allowedWebSocketOrigin(r)
 	},
 }
 
@@ -246,7 +301,14 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	if terminalSessionIDGen != nil {
 		id = terminalSessionIDGen()
 	} else {
-		id = session.ID(time.Now().UTC().Format(time.RFC3339Nano))
+		var err error
+		id, err = newTerminalSessionID()
+		if err != nil {
+			log.Printf("terminal session idgen_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+			_ = conn.Close()
+			http.Error(w, "failed to start terminal session", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	userID := sess.UserID

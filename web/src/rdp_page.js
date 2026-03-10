@@ -1,10 +1,9 @@
 /**
  * RDP connection page.
- * Provides:
- *  1. Browser-based RDP via noVNC (FreeRDP→Xvfb→x11vnc on server side)
- *  2. .rdp file download for native client (mstsc, Remmina, etc.)
- *  3. WebSocket proxy endpoint (/ws/rdp) for external RDP clients.
+ * Browser-based RDP via noVNC (FreeRDP→Xvfb→x11vnc on server side).
+ * Connects immediately on page load using stored target credentials.
  */
+import RFB from '@novnc/novnc/lib/rfb.js'
 function escapeHtml(s) {
   if (s == null) return ''
   const div = document.createElement('div')
@@ -19,10 +18,10 @@ export function renderRdpPage(container) {
 
   if (!targetId) {
     container.innerHTML = `
-      <div class="min-h-screen flex items-center justify-center p-6 bg-slate-950">
-        <div class="text-center text-slate-300">
+      <div class="min-h-screen flex flex-col bg-slate-100 font-sans text-slate-900 items-center justify-center p-6">
+        <div class="text-center text-slate-600">
           <p class="mb-4">target_id が指定されていません。</p>
-          <a href="/" class="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700">ホームに戻る</a>
+          <a href="/" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm">ホームに戻る</a>
         </div>
       </div>
     `
@@ -30,95 +29,66 @@ export function renderRdpPage(container) {
   }
 
   const wsScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const rdpFileUrl = `/api/rdp/file?target_id=${encodeURIComponent(targetId)}`
 
   container.innerHTML = `
-    <div class="min-h-screen w-screen flex flex-col bg-slate-950">
-      <header class="shrink-0 px-4 sm:px-6 py-3 bg-slate-900 border-b border-slate-800 flex items-center justify-between">
-        <div class="min-w-0">
-          <div class="text-xs text-slate-400">Vantyx RDP</div>
-          <div class="text-sm sm:text-base font-semibold text-slate-100 truncate">${escapeHtml(targetName)}</div>
+    <div class="h-screen w-screen flex flex-col bg-slate-100 font-sans text-slate-900 overflow-hidden">
+      <header class="bg-sky-800 text-white px-6 py-3 flex items-center justify-between shadow z-10 shrink-0">
+        <div class="flex items-center gap-8 min-w-0">
+          <h1 class="text-xl font-semibold tracking-wide">Vantyx</h1>
+          <div class="min-w-0 text-[11px] leading-tight">
+            <div class="opacity-70">RDP（ブラウザ）</div>
+            <div class="text-xs sm:text-[13px] font-semibold truncate">${escapeHtml(targetName)}</div>
+          </div>
         </div>
         <div class="flex items-center gap-2">
-          <button id="rdp-back" type="button" class="rounded border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800">戻る</button>
-          <button id="rdp-disconnect" type="button" class="rounded bg-red-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 hidden">切断</button>
+          <button id="rdp-back" type="button" class="rounded border border-white/30 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 shadow-sm">戻る</button>
+          <button id="rdp-disconnect" type="button" class="rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 hover:border-red-300 shadow-sm hidden">切断</button>
         </div>
       </header>
-
-      <!-- Landing: connection options -->
-      <div id="rdp-landing" class="flex-1 flex flex-col items-center justify-center p-6 gap-8">
-        <div class="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
-          <div class="px-6 py-4 border-b border-slate-800">
-            <h2 class="text-base font-semibold text-slate-100">ブラウザで接続</h2>
-            <p class="text-xs text-slate-400 mt-1">ブラウザ内でリモートデスクトップを表示します（サーバー側で FreeRDP→VNC 変換）。</p>
-          </div>
-          <div class="px-6 py-5">
-            <button id="rdp-browser-connect" type="button"
-              class="w-full inline-flex items-center justify-center gap-2 rounded bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-              ブラウザで接続
-            </button>
-          </div>
-        </div>
-
-        <div class="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
-          <div class="px-6 py-4 border-b border-slate-800">
-            <h2 class="text-base font-semibold text-slate-100">ネイティブ RDP クライアントで接続</h2>
-            <p class="text-xs text-slate-400 mt-1">Windows リモートデスクトップ (mstsc)、Remmina、FreeRDP 等のクライアントで接続できます。</p>
-          </div>
-          <div class="px-6 py-5">
-            <a href="${escapeHtml(rdpFileUrl)}" download
-              class="inline-flex items-center justify-center gap-2 rounded bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600 shadow-sm transition-colors">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-              .rdp ファイルをダウンロード
-            </a>
-          </div>
-        </div>
-      </div>
-
       <!-- Connecting spinner -->
-      <div id="rdp-connecting" class="hidden flex-1 flex flex-col items-center justify-center p-4 gap-4 text-slate-300">
-        <p>RDP に接続しています… (FreeRDP→VNC ブリッジを起動中)</p>
+      <div id="rdp-connecting" class="flex-1 flex flex-col items-center justify-center p-4 gap-4 text-slate-600">
+        <p class="text-sm">RDP に接続しています…</p>
         <div class="animate-spin h-8 w-8 border-2 border-sky-500 border-t-transparent rounded-full"></div>
-        <p class="text-xs text-slate-500">初回接続には数秒かかります。</p>
+        <p class="text-xs text-slate-400">初回接続には数秒かかります。</p>
       </div>
 
       <!-- Error display -->
-      <div id="rdp-error" class="hidden flex-1 flex flex-col items-center justify-center p-4 gap-4 text-red-400">
-        <p id="rdp-error-msg"></p>
-        <button id="rdp-retry" type="button" class="rounded border border-slate-600 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800">再試行</button>
+      <div id="rdp-error" class="hidden flex-1 flex flex-col items-center justify-center p-4 gap-4 text-red-600">
+        <p id="rdp-error-msg" class="text-sm"></p>
+        <div class="flex gap-2">
+          <button id="rdp-retry" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">再試行</button>
+          <button id="rdp-error-close" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">閉じる</button>
+        </div>
       </div>
 
       <!-- noVNC screen -->
-      <div id="rdp-screen-wrap" class="hidden flex-1 min-h-0 flex flex-col bg-slate-900">
-        <div id="rdp-screen" class="flex-1 min-h-0 w-full"></div>
+      <div id="rdp-screen-wrap" class="hidden flex-1 min-h-0 flex flex-col bg-white border-t border-slate-200 overflow-auto">
+        <div id="rdp-screen" class="relative flex-1 min-h-0 w-full overflow-hidden">
+          <button id="rdp-fullscreen" type="button"
+            class="absolute right-3 bottom-3 z-10 rounded bg-black/60 px-2 py-1 text-[11px] text-white hover:bg-black/80">
+            全画面
+          </button>
+        </div>
       </div>
     </div>
   `
 
+  const connectingEl = container.querySelector('#rdp-connecting')
   const backBtn = container.querySelector('#rdp-back')
   const disconnectBtn = container.querySelector('#rdp-disconnect')
-  const landingEl = container.querySelector('#rdp-landing')
-  const connectingEl = container.querySelector('#rdp-connecting')
   const errorEl = container.querySelector('#rdp-error')
   const errorMsgEl = container.querySelector('#rdp-error-msg')
   const screenWrap = container.querySelector('#rdp-screen-wrap')
   const screenEl = container.querySelector('#rdp-screen')
-  const connectBtn = container.querySelector('#rdp-browser-connect')
   const retryBtn = container.querySelector('#rdp-retry')
+  const errorCloseBtn = container.querySelector('#rdp-error-close')
+  const fullscreenBtn = container.querySelector('#rdp-fullscreen')
 
   let rfb = null
-
-  function showLanding() {
-    landingEl.classList.remove('hidden')
-    connectingEl.classList.add('hidden')
-    errorEl.classList.add('hidden')
-    screenWrap.classList.add('hidden')
-    disconnectBtn.classList.add('hidden')
-  }
+  let resizeRaf = 0
+  // no explicit scaling here; rely on noVNC's scaleViewport so input coordinates stay correct.
 
   function showConnecting() {
-    landingEl.classList.add('hidden')
     connectingEl.classList.remove('hidden')
     errorEl.classList.add('hidden')
     screenWrap.classList.add('hidden')
@@ -126,7 +96,6 @@ export function renderRdpPage(container) {
   }
 
   function showError(msg) {
-    landingEl.classList.add('hidden')
     connectingEl.classList.add('hidden')
     errorMsgEl.textContent = msg
     errorEl.classList.remove('hidden')
@@ -135,7 +104,6 @@ export function renderRdpPage(container) {
   }
 
   function showScreen() {
-    landingEl.classList.add('hidden')
     connectingEl.classList.add('hidden')
     errorEl.classList.add('hidden')
     screenWrap.classList.remove('hidden')
@@ -149,52 +117,100 @@ export function renderRdpPage(container) {
     }
   }
 
-  function startBrowserConnection() {
+  function startConnection() {
+    disconnect()
+    screenEl.innerHTML = ''
     showConnecting()
 
-    const w = window.screen.width
-    const h = window.screen.height
-    const wsUrl = `${wsScheme}//${window.location.host}/ws/rdp/browser?target_id=${encodeURIComponent(targetId)}&w=${w}&h=${h}`
+    // 基本は 1920x1080 で扱い、rw/rh クエリが指定されていればそれを優先する。
+    // ブラウザのウィンドウサイズとは独立した「RDP セッション解像度」として扱う。
+    let baseW = 1920
+    let baseH = 1080
+    const prefW = parseInt(params.get('rw') || '', 10)
+    const prefH = parseInt(params.get('rh') || '', 10)
+    if (Number.isFinite(prefW) && prefW >= 640 && prefW <= 3840) baseW = prefW
+    if (Number.isFinite(prefH) && prefH >= 480 && prefH <= 2160) baseH = prefH
+    let w = baseW
+    let h = baseH
+    // バックエンド側とRDPの制約に合わせて安全な範囲にクリップ
+    if (w < 640) w = 640
+    if (w > 3840) w = 3840
+    if (h < 480) h = 480
+    if (h > 2160) h = 2160
+    let wsUrl = `${wsScheme}//${window.location.host}/ws/rdp/browser?target_id=${encodeURIComponent(targetId)}&w=${w}&h=${h}`
 
-    import('https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js')
-      .then((module) => {
-        const RFB = module.default
-        rfb = new RFB(screenEl, wsUrl, { shared: true })
-        rfb.scaleViewport = true
-        rfb.resizeSession = false
+    try {
+      rfb = new RFB(screenEl, wsUrl, { shared: true })
+      rfb.scaleViewport = true
+      // mstsc の「ウィンドウ内に収める」挙動に寄せる。必要に応じてスクロールも許容。
+      rfb.clipViewport = false
+      rfb.resizeSession = false
 
-        rfb.addEventListener('connect', () => {
-          showScreen()
-        })
-        rfb.addEventListener('disconnect', (e) => {
-          if (e.detail && !e.detail.clean) {
-            showError('接続が切断されました。')
-          } else {
-            showLanding()
-          }
-          rfb = null
-        })
-        rfb.addEventListener('securityfailure', (e) => {
-          const reason = (e.detail && e.detail.reason) ? e.detail.reason : 'セキュリティネゴシエーションに失敗しました。'
-          showError(reason)
-          rfb = null
-        })
+      rfb.addEventListener('connect', () => {
+        showScreen()
+        // 初回だけ軽くリサイズイベントを投げて noVNC に再計算させる
+        setTimeout(() => {
+          try { window.dispatchEvent(new Event('resize')) } catch { /* ignore */ }
+          try { rfb.focus() } catch { /* ignore */ }
+        }, 100)
       })
-      .catch((err) => {
-        showError('noVNC の読み込みに失敗しました: ' + (err.message || String(err)))
+      rfb.addEventListener('disconnect', (e) => {
+        if (e.detail && !e.detail.clean) {
+          showError('接続が切断されました。')
+        } else {
+          showError('切断されました。')
+        }
+        rfb = null
       })
+      rfb.addEventListener('securityfailure', (e) => {
+        const reason = (e.detail && e.detail.reason) ? e.detail.reason : 'セキュリティネゴシエーションに失敗しました。'
+        showError(reason)
+        rfb = null
+      })
+    } catch (err) {
+      showError('noVNC の初期化に失敗しました: ' + (err.message || String(err)))
+    }
   }
 
-  connectBtn.addEventListener('click', startBrowserConnection)
-  retryBtn.addEventListener('click', startBrowserConnection)
+  retryBtn.addEventListener('click', startConnection)
+
+  errorCloseBtn.addEventListener('click', () => {
+    disconnect()
+    window.removeEventListener('resize', onResize)
+    window.location.href = '/'
+  })
 
   backBtn.addEventListener('click', () => {
     disconnect()
+    window.removeEventListener('resize', onResize)
     window.location.href = '/'
   })
 
   disconnectBtn.addEventListener('click', () => {
     disconnect()
-    showLanding()
+    window.removeEventListener('resize', onResize)
+    showError('切断しました。')
   })
+
+  fullscreenBtn.addEventListener('click', () => {
+    const el = screenWrap || document.documentElement
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {})
+      return
+    }
+    if (el.requestFullscreen) el.requestFullscreen().catch(() => {})
+  })
+
+  function onResize() {
+    if (!rfb) return
+    if (resizeRaf) cancelAnimationFrame(resizeRaf)
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = 0
+      // noVNC が内部で scaleViewport に応じて再レイアウトするので、追加処理は不要。
+      try { window.dispatchEvent(new Event('resize')) } catch { /* ignore */ }
+    })
+  }
+  window.addEventListener('resize', onResize)
+
+  startConnection()
 }

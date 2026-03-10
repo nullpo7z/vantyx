@@ -44,8 +44,9 @@ func TestHandleSSHWebSocket_UnauthorizedWithoutCookie(t *testing.T) {
 	defer srv.Close()
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
-
-	_, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	header := http.Header{}
+	header.Set("Origin", "http://"+srv.Listener.Addr().String())
+	_, _, err := websocket.DefaultDialer.Dial(u.String(), header)
 	if err == nil {
 		t.Fatalf("expected WebSocket dial to fail without cookie, got nil error")
 	}
@@ -216,6 +217,7 @@ func TestHandleSSHWebSocket_InvalidCredentialsReturnsError(t *testing.T) {
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
 	header := http.Header{}
+	header.Set("Origin", "http://"+srv.Listener.Addr().String())
 	header.Add("Cookie", (&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"}).String())
 
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)
@@ -258,6 +260,7 @@ func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
 	header := http.Header{}
+	header.Set("Origin", "http://"+srv.Listener.Addr().String())
 	header.Add("Cookie", (&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"}).String())
 
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)
@@ -312,6 +315,7 @@ func TestHandleSSHWebSocket_StartFailsReturns500(t *testing.T) {
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
 	header := http.Header{}
+	header.Set("Origin", "http://"+srv.Listener.Addr().String())
 	header.Add("Cookie", (&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"}).String())
 
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)
@@ -351,6 +355,7 @@ func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
 	header := http.Header{}
+	header.Set("Origin", "http://"+srv.Listener.Addr().String())
 	header.Add("Cookie", (&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"}).String())
 
 	// First connection: start and block in RunBridge
@@ -1052,134 +1057,5 @@ func TestHandleRDPBrowserWebSocket_BridgeStartFails(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500 (no Xvfb available), got %d", w.Code)
-	}
-}
-
-// --- handleRDPFile tests ---
-
-func TestHandleRDPFile_Unauthorized(t *testing.T) {
-	app := newTestAppForTerminal(t)
-	router := app.NewRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/rdp/file?target_id=t1", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
-	}
-}
-
-func TestHandleRDPFile_MissingTargetID(t *testing.T) {
-	app := newTestAppForTerminal(t)
-	router := app.NewRouter()
-	httpSess, _ := app.SessionStore.Create("admin")
-	req := httptest.NewRequest(http.MethodGet, "/api/rdp/file", nil)
-	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-}
-
-func TestHandleRDPFile_TargetNotFound(t *testing.T) {
-	app := newTestAppForTerminal(t)
-	router := app.NewRouter()
-	httpSess, _ := app.SessionStore.Create("admin")
-	req := httptest.NewRequest(http.MethodGet, "/api/rdp/file?target_id=nonexistent", nil)
-	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", w.Code)
-	}
-}
-
-func TestHandleRDPFile_Forbidden(t *testing.T) {
-	app := newTestAppForTerminal(t)
-	router := app.NewRouter()
-	ctx := context.Background()
-	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "")
-	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
-
-	httpSess, _ := app.SessionStore.Create("admin")
-	req := httptest.NewRequest(http.MethodGet, "/api/rdp/file?target_id=rdp1", nil)
-	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", w.Code)
-	}
-}
-
-func TestHandleRDPFile_WrongProtocol(t *testing.T) {
-	app := newTestAppForTerminal(t)
-	router := app.NewRouter()
-	ctx := context.Background()
-	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("ssh1"), "SSH", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
-	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("ssh1"))
-
-	httpSess, _ := app.SessionStore.Create("admin")
-	req := httptest.NewRequest(http.MethodGet, "/api/rdp/file?target_id=ssh1", nil)
-	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-}
-
-func TestHandleRDPFile_Success(t *testing.T) {
-	app := newTestAppForTerminal(t)
-	router := app.NewRouter()
-	ctx := context.Background()
-	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "rdpuser", "", "", "")
-	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
-
-	httpSess, _ := app.SessionStore.Create("admin")
-	req := httptest.NewRequest(http.MethodGet, "/api/rdp/file?target_id=rdp1", nil)
-	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-	ct := w.Header().Get("Content-Type")
-	if ct != "application/x-rdp" {
-		t.Fatalf("expected Content-Type application/x-rdp, got %s", ct)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "full address:s:192.168.1.1:3389") {
-		t.Fatalf("expected rdp content to contain address, got: %s", body)
-	}
-	if !strings.Contains(body, "username:s:rdpuser") {
-		t.Fatalf("expected rdp content to contain username, got: %s", body)
-	}
-}
-
-func TestHandleRDPFile_SuccessDefaultPort(t *testing.T) {
-	app := newTestAppForTerminal(t)
-	router := app.NewRouter()
-	ctx := context.Background()
-	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp2"), "RDP2", "10.0.0.1", 0, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "")
-	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp2"))
-
-	httpSess, _ := app.SessionStore.Create("admin")
-	req := httptest.NewRequest(http.MethodGet, "/api/rdp/file?target_id=rdp2", nil)
-	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "full address:s:10.0.0.1:3389") {
-		t.Fatalf("expected default port 3389, got: %s", body)
 	}
 }

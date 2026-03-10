@@ -196,6 +196,7 @@ func TestHandleVNCWebSocket_SuccessBridgesToTarget(t *testing.T) {
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/vnc", RawQuery: "target_id=vnc1"}
 	header := http.Header{}
+	header.Set("Origin", "http://"+srv.Listener.Addr().String())
 	header.Add("Cookie", (&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"}).String())
 
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)

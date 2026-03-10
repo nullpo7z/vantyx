@@ -2,6 +2,20 @@
 
 本ドキュメントは Vantyx を OWASP Application Security Verification Standard (ASVS) Level 2 に照らして確認した結果です。
 
+## 0. 重要ギャップと対応状況（優先度）
+
+- **P0（重大）**
+  - **WebSocket Origin 未検証（CSWSH）**: 対応済み（同一オリジン/allowlistに制限）
+  - **RDP（ブラウザ）資格情報のURLクエリ**: 対応済み（クエリから受け取らない）
+  - **localStorage に秘密情報一時保存**: 対応済み（BroadcastChannel に統一）
+- **P1（高）**
+  - **Cookie 認証の変更系に対する CSRF**: 対応済み（ブラウザ向け Origin/Referer 検証）
+  - **共通のリクエストボディ上限**: 対応済み（multipart除外で 2MiB）
+  - **X-Forwarded-For の信頼境界**: 対応済み（デフォルト不信、明示設定で利用）
+  - **`target=_blank` の opener 悪用**: 対応済み（VNC/RDPは noopener、ターミナルは parent_token+noopener）
+- **P2（中）**
+  - **CSP 強化（/docs分離）**、**鍵ローテーション**、**パスワード変更時セッション失効**などは運用要件に応じて検討（下部参照）。
+
 ## 1. 認証 (Authentication)
 
 | 要件 | 状態 | 備考 |
@@ -21,6 +35,7 @@
 | V3.2 セッションの無効化（ログアウト・タイムアウト） | ✅ | ログアウトで Delete。Get 時に有効期限チェック（24h TTL） |
 | V3.3 Cookie の HttpOnly / Secure / SameSite | ✅ | HttpOnly, SameSite=Lax, Secure（TLS 時）, MaxAge=24h |
 | V3.4 セッション固定化対策 | ✅ | ログイン成功時に新規セッション ID を発行 |
+| V3.x WebSocket のセッション保護 | ✅ | Cookie 認証 + **WebSocket Origin 検証**で CSWSH を緩和（`internal/httpapi/terminal.go`） |
 
 ## 3. アクセス制御 (Access Control)
 
@@ -89,6 +104,8 @@
 | 認証の一貫性 | ✅ | API は Cookie ベース認証。WebSocket /ws/ssh も Cookie 必須 |
 | 認可の一貫性 | ✅ | ターゲット・グループ・ターミナルはすべてサーバーでユーザー権限チェック |
 | マスアサインメント対策 | ✅ | 作成/更新は必要なフィールドのみ受け取り（createGroupRequest 等） |
+| CSRF（Cookie 認証の変更系） | ✅ | 変更系リクエストは **同一オリジン Origin/Referer を要求**（主にブラウザ向け、`internal/httpapi/router.go`） |
+| リクエストサイズ制限 | ✅ | 共通 `MaxBytesReader`（2MiB）＋アップロードは別途 64MiB（`internal/httpapi/router.go`, `internal/httpapi/files.go`） |
 
 ## 実施した改善（本チェックに伴う変更）
 
@@ -110,10 +127,35 @@
 6. **V8.1 内部エラー漏洩の排除**  
    500/503 応答で `err.Error()` を返していた箇所を、`writeInternalError` / `writeServiceUnavailableError` に統一。クライアントには "internal error" / "service unavailable" のみ返し、詳細はサーバー側でログ出力。
 
+7. **WebSocket Origin 検証（CSWSH 緩和）**  
+   `websocket.Upgrader.CheckOrigin` を同一オリジン（または `VANTYX_WS_ALLOWED_ORIGINS`）に制限し、クロスサイトからの WebSocket 乗っ取りを緩和。`Origin` 欠落をデフォルト拒否（ローカル用途のみ `VANTYX_ALLOW_WS_NO_ORIGIN=1`）。
+
+8. **RDP（ブラウザ）資格情報のURLクエリ排除**  
+   `/ws/rdp/browser` で `rdp_user`/`rdp_pass` を URL クエリから受け取らない（履歴・ログ等への残留を回避）。保存済み資格情報のみ利用。
+
+9. **ブラウザ永続ストレージ（localStorage）への秘密情報保存の撤廃**  
+   ターミナル接続の不足情報（パスワード/パスフレーズ）を localStorage に保存する方式を廃止し、`BroadcastChannel` に統一。
+
+10. **Cookie認証の変更系APIに対するCSRF緩和**  
+   Cookie を持つ変更系（POST/PUT/PATCH/DELETE）は、同一オリジンの `Origin` または `Referer` を検証（主にブラウザ向け）。非ブラウザの自動化を想定する場合は `VANTYX_DISABLE_ORIGIN_CHECK=1` で無効化可能。
+
+11. **共通のリクエストボディ上限（DoS 緩和）**  
+   multipart 以外に `MaxBytesReader` を適用（2MiB）。アップロードは既存の 64MiB 制限を維持。
+
+12. **`X-Forwarded-For` の信頼境界の明確化**  
+   ログイン失敗レート制限のクライアントIPはデフォルトで `RemoteAddr` を使用し、明示的に `VANTYX_TRUST_X_FORWARDED_FOR=1` のときのみXFFを利用。
+
+13. **`target=_blank` の `noopener` 化（タブナビング緩和）**  
+   VNC/RDP の新タブ遷移に `rel=\"noopener noreferrer\"` を付与。ターミナルは `parent_token`（BroadcastChannel）で親タブ復帰できるため、`window.open(...,'noopener')` を利用。
+
 ## 推奨する追加対策（任意）
 
 - **監査ログの永続化**: 現状は標準出力。本番ではファイル/外部ログ基盤への出力を検討。
+- **パスワード変更時の全セッション失効**: パスワード変更後に他端末セッションを失効させる運用要件がある場合は実装を検討。
+- **CSP の分離強化**: `/docs`（Swagger UI）とアプリ本体で CSP を分け、可能な範囲で `unsafe-inline` 等を削減。
+- **暗号鍵ローテーション設計**: `VANTYX_SSH_PASSWORD_ENCRYPTION_KEY` のローテーション/移行手順（複数キー対応、世代管理）を検討。
+- **Host header 検証（HTTPS側）**: デプロイ形態によっては HTTPS 本体でも Host allowlist を検討。
 
 ---
 
-*最終確認: 2026年。ASVS 5.0 Level 2 に準拠したセキュリティチェックを実施。コードベース検証に基づく。*
+*最終確認: 2026年。ASVS 4.0 Level 2 を基準に、コードベース検証に基づくセキュリティチェックを実施。*

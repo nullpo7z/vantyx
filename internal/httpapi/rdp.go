@@ -75,9 +75,14 @@ func (a *App) handleRDPWebSocket(w http.ResponseWriter, r *http.Request) {
 	_ = rdpproxy.Bridge(conn, targetAddr)
 }
 
-// handleRDPFile generates and serves a .rdp connection file for the target.
-// Query: target_id (required). Session cookie required. Target must have protocol "rdp".
-func (a *App) handleRDPFile(w http.ResponseWriter, r *http.Request) {
+// RDPSessionItem is one entry in GET /api/rdp/sessions response.
+type RDPSessionItem struct {
+	TargetID   string `json:"target_id"`
+	TargetName string `json:"target_name"`
+}
+
+// handleRDPSessions returns the list of active RDP (browser) sessions for the current user.
+func (a *App) handleRDPSessions(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("vantyx_session")
 	if err != nil || cookie.Value == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
@@ -88,20 +93,11 @@ func (a *App) handleRDPFile(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-
-	targetID := r.URL.Query().Get("target_id")
-	if targetID == "" {
-		writeJSONError(w, "target_id required", http.StatusBadRequest)
+	if a.RDPVNCManager == nil {
+		writeJSON(w, map[string]interface{}{"items": []RDPSessionItem{}})
 		return
 	}
-
 	ctx := r.Context()
-	target, err := a.TargetStore.Get(ctx, access.TargetID(targetID))
-	if err != nil {
-		writeJSONError(w, "target not found", http.StatusNotFound)
-		return
-	}
-
 	allowed, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
 	if err != nil {
 		writeInternalError(w, err)
@@ -111,37 +107,22 @@ func (a *App) handleRDPFile(w http.ResponseWriter, r *http.Request) {
 	for _, id := range allowed {
 		allowedSet[id] = struct{}{}
 	}
-	if _, ok := allowedSet[access.TargetID(targetID)]; !ok {
-		writeJSONError(w, "forbidden", http.StatusForbidden)
-		return
+	activeIDs := a.RDPVNCManager.ActiveTargetIDsForUser(sess.UserID)
+	items := make([]RDPSessionItem, 0, len(activeIDs))
+	for _, targetID := range activeIDs {
+		if _, ok := allowedSet[access.TargetID(targetID)]; !ok {
+			continue
+		}
+		target, err := a.TargetStore.Get(ctx, access.TargetID(targetID))
+		if err != nil {
+			continue
+		}
+		if target.Protocol != access.ProtocolRDP {
+			continue
+		}
+		items = append(items, RDPSessionItem{TargetID: targetID, TargetName: target.Name})
 	}
-
-	if target.Protocol != access.ProtocolRDP {
-		writeJSONError(w, "target is not an RDP server", http.StatusBadRequest)
-		return
-	}
-
-	port := int(target.Port)
-	if port == 0 {
-		port = 3389
-	}
-
-	rdpContent := fmt.Sprintf("full address:s:%s:%d\r\n", target.Host, port)
-	if target.SSHUsername != "" {
-		rdpContent += fmt.Sprintf("username:s:%s\r\n", target.SSHUsername)
-	}
-	rdpContent += "prompt for credentials on client:i:1\r\n"
-	rdpContent += "screen mode id:i:2\r\n"
-	rdpContent += "desktopwidth:i:1920\r\n"
-	rdpContent += "desktopheight:i:1080\r\n"
-	rdpContent += "session bpp:i:32\r\n"
-	rdpContent += "compression:i:1\r\n"
-	rdpContent += "displayconnectionbar:i:1\r\n"
-	rdpContent += "autoreconnection enabled:i:1\r\n"
-
-	w.Header().Set("Content-Type", "application/x-rdp")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.rdp"`, target.Name))
-	_, _ = w.Write([]byte(rdpContent)) // #nosec G705 -- content is built from validated target fields, not user-supplied taint
+	writeJSON(w, map[string]interface{}{"items": items})
 }
 
 // handleRDPBrowserWebSocket launches xfreerdp→Xvfb→x11vnc, then proxies the
@@ -200,41 +181,65 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 		height = v
 	}
 
-	bridge, err := rdpvnc.Start(ctx, target.Host, int(target.Port), target.SSHUsername, target.SSHPassword, width, height)
-	if err != nil {
-		log.Printf("rdp browser bridge_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
-		writeJSONError(w, "failed to start RDP bridge: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
+	bridgeKey := fmt.Sprintf("%s:%s", sess.UserID, targetID)
+	var bridge *rdpvnc.Bridge
+	var targetAddr string
 	if a.RDPVNCManager != nil {
-		bridgeKey := fmt.Sprintf("%s:%s", sess.UserID, targetID)
-		a.RDPVNCManager.Register(bridgeKey, bridge)
+		if existing, ok := a.RDPVNCManager.GetBridge(bridgeKey); ok {
+			ew, eh := existing.Size()
+			if ew == width && eh == height {
+				targetAddr = fmt.Sprintf("127.0.0.1:%d", existing.VNCPort())
+				log.Printf("rdp browser reconnect user_id=%s target_id=%s vnc_port=%d", sess.UserID, targetID, existing.VNCPort())
+			} else {
+				// Screen size changed; recreate bridge to match new window size.
+				a.RDPVNCManager.Remove(bridgeKey)
+			}
+		}
+	}
+	if targetAddr == "" {
+		// Do not accept credentials via URL query (leaks via logs/history/referrers).
+		// Use stored credentials from target.
+		rdpUser := target.SSHUsername
+		rdpPass := target.SSHPassword
+		var err error
+		bridge, err = rdpvnc.Start(ctx, target.Host, int(target.Port), rdpUser, rdpPass, width, height)
+		if err != nil {
+			log.Printf("rdp browser bridge_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+			writeJSONError(w, "failed to start RDP bridge: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if a.RDPVNCManager != nil {
+			a.RDPVNCManager.Register(bridgeKey, bridge)
+		}
+		targetAddr = fmt.Sprintf("127.0.0.1:%d", bridge.VNCPort())
+		log.Printf("rdp browser start user_id=%s target_id=%s vnc_port=%d", sess.UserID, targetID, bridge.VNCPort())
 	}
 
 	wsConn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("rdp browser upgrade_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
-		bridge.Stop()
+		if bridge != nil {
+			bridge.Stop()
+		}
 		return
 	}
 	defer wsConn.Close()
 
-	targetAddr := fmt.Sprintf("127.0.0.1:%d", bridge.VNCPort())
-	log.Printf("rdp browser start user_id=%s target_id=%s vnc_port=%d", sess.UserID, targetID, bridge.VNCPort())
-
-	bridgeDone := bridge.Done()
 	proxyDone := make(chan struct{})
 	go func() {
 		defer close(proxyDone)
 		_ = vncproxy.Bridge(wsConn, targetAddr)
 	}()
 
-	select {
-	case <-bridgeDone:
-		_ = wsConn.Close()
-	case <-proxyDone:
+	if bridge != nil {
+		bridgeDone := bridge.Done()
+		select {
+		case <-bridgeDone:
+			_ = wsConn.Close()
+		case <-proxyDone:
+		}
+	} else {
+		<-proxyDone
 	}
-
-	bridge.Stop()
+	// Do not stop the bridge on client disconnect so the session stays for reconnect.
 }

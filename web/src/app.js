@@ -58,12 +58,98 @@ export function renderApp(container) {
   let selectedRecordingsTargetName = ''
   /** 新しいタブに渡す SSH 認証情報（BroadcastChannel 用） */
   const pendingTerminalCreds = Object.create(null)
+  /** ターミナルタブ用: 親タブへフォーカス要求するための待受（opener が無い環境向け） */
+  const pendingTerminalParents = Object.create(null)
 
   function randomToken() {
     const b = new Uint8Array(16)
     crypto.getRandomValues(b)
     return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
   }
+
+  function openTerminalTabWithParent(url) {
+    const token = randomToken()
+    const u = new URL(url, window.location.origin)
+    u.searchParams.set('parent_token', token)
+
+    const bc = new BroadcastChannel(`vantyx-terminal-parent-${token}`)
+    pendingTerminalParents[token] = bc
+    const timeoutId = window.setTimeout(() => {
+      try { bc.close() } catch { /* ignore */ }
+      delete pendingTerminalParents[token]
+    }, 10 * 60 * 1000)
+    bc.onmessage = (ev) => {
+      if (ev?.data?.type !== 'focus') return
+      try { window.focus() } catch { /* ignore */ }
+      // If active sessions modal is open, refresh it on return.
+      try {
+        const m = document.getElementById('active-sessions-modal')
+        if (m && !m.classList.contains('hidden') && typeof m._vantyxRefreshActiveSessions === 'function') {
+          m._vantyxRefreshActiveSessions()
+        }
+      } catch { /* ignore */ }
+      window.clearTimeout(timeoutId)
+      try { bc.close() } catch { /* ignore */ }
+      delete pendingTerminalParents[token]
+    }
+
+    // ターミナルタブ側は parent_token (BroadcastChannel) で親タブへ戻れるため、opener は無効化する。
+    window.open(u.toString(), '_blank', 'noopener')
+  }
+
+  function getRdpResolutionForTarget(id) {
+    try {
+      if (!id) return { w: 1920, h: 1080 }
+      const raw = localStorage.getItem(`vantyx_rdp_res_${id}`)
+      if (!raw) return { w: 1920, h: 1080 }
+      const parsed = JSON.parse(raw)
+      const w = Number(parsed.w) || 1920
+      const h = Number(parsed.h) || 1080
+      return { w, h }
+    } catch {
+      return { w: 1920, h: 1080 }
+    }
+  }
+
+  function setRdpResolutionForTarget(id, w, h) {
+    try {
+      if (!id) return
+      const ww = Number(w) || 0
+      const hh = Number(h) || 0
+      if (!ww || !hh) {
+        localStorage.removeItem(`vantyx_rdp_res_${id}`)
+        return
+      }
+      localStorage.setItem(`vantyx_rdp_res_${id}`, JSON.stringify({ w: ww, h: hh }))
+    } catch {
+      // ignore storage errors
+    }
+  }
+  function openPopup(url, title, w = 1280, h = 800) {
+    const left = Math.max(0, Math.round((window.screen.width - w) / 2))
+    const top = Math.max(0, Math.round((window.screen.height - h) / 2))
+    const feats = [
+      'popup=yes',
+      'resizable=yes',
+      'scrollbars=no',
+      'noopener=yes',
+      `width=${w}`,
+      `height=${h}`,
+      `left=${left}`,
+      `top=${top}`,
+    ].join(',')
+    window.open(url, title || '_blank', feats)
+  }
+
+  // When this tab regains focus, refresh active sessions modal if open.
+  window.addEventListener('focus', () => {
+    try {
+      const m = document.getElementById('active-sessions-modal')
+      if (m && !m.classList.contains('hidden') && typeof m._vantyxRefreshActiveSessions === 'function') {
+        m._vantyxRefreshActiveSessions()
+      }
+    } catch { /* ignore */ }
+  })
 
   function showUserInfo() {
     if (!meData) return
@@ -907,54 +993,102 @@ export function renderApp(container) {
     }
     modal.querySelector('#active-sessions-close').addEventListener('click', close)
     const bodyEl = modal.querySelector('#active-sessions-body')
-    try {
-      const sessionsRes = await API.terminalSessions()
-      const allSessions = sessionsRes.items || []
-      const sessions = targetIdsInGroup.length > 0
-        ? allSessions.filter((s) => targetIdsInGroup.includes(s.target_id))
-        : allSessions
-      if (sessions.length === 0) {
-        const oneServer = targetIdsInGroup.length === 1
-        bodyEl.innerHTML = targetIdsInGroup.length > 0
-          ? (oneServer
-            ? '<p class="text-sm text-slate-500">このサーバーに対する再接続可能なセッションはありません。接続したあと、一度切断するとここに表示され、再接続できます。</p>'
-            : '<p class="text-sm text-slate-500">このグループ内のサーバーに対する再接続可能なセッションはありません。ターミナルで接続したあと、一度切断するとここに表示され、再接続できます。</p>')
-          : '<p class="text-sm text-slate-500">アクティブなセッションはありません。左のツリーでサーバー（グループ）を選択すると、そのグループに属するサーバー単位で表示されます。</p>'
-      } else {
-        const byTarget = {}
-        sessions.forEach((s) => {
-          const id = s.target_id
-          if (!byTarget[id]) byTarget[id] = []
-          byTarget[id].push(s)
-        })
-        const targetIds = Object.keys(byTarget).sort((a, b) => {
-          const na = byTarget[a][0].target_name || a
-          const nb = byTarget[b][0].target_name || b
-          return na.localeCompare(nb)
-        })
-        bodyEl.innerHTML = targetIds.map((targetId) => {
-          const list = byTarget[targetId]
-          const serverName = list[0].target_name || targetId
-          const rows = list.map((s) => {
-            const titleText = s.name ? escapeHtml(s.name) : '(無題)'
-            const descHtml = s.description ? `<p class="text-xs text-slate-500 mt-0.5 break-words">${escapeHtml(s.description)}</p>` : ''
+    const refresh = async () => {
+      try {
+        const [sessionsRes, rdpRes] = await Promise.all([API.terminalSessions(), API.rdpSessions()])
+        const allSessions = sessionsRes.items || []
+        const sessions = targetIdsInGroup.length > 0
+          ? allSessions.filter((s) => targetIdsInGroup.includes(s.target_id))
+          : allSessions
+        const allRdp = rdpRes.items || []
+        const rdpSessions = targetIdsInGroup.length > 0
+          ? allRdp.filter((r) => targetIdsInGroup.includes(r.target_id))
+          : allRdp
+        const hasAny = sessions.length > 0 || rdpSessions.length > 0
+        if (!hasAny) {
+          const oneServer = targetIdsInGroup.length === 1
+          bodyEl.innerHTML = targetIdsInGroup.length > 0
+            ? (oneServer
+              ? '<p class="text-sm text-slate-500">このサーバーに対する再接続可能なセッションはありません。接続したあと、一度切断するとここに表示され、再接続できます。</p>'
+              : '<p class="text-sm text-slate-500">このグループ内のサーバーに対する再接続可能なセッションはありません。ターミナルで接続したあと、一度切断するとここに表示され、再接続できます。</p>')
+            : '<p class="text-sm text-slate-500">アクティブなセッションはありません。左のツリーでサーバー（グループ）を選択すると、そのグループに属するサーバー単位で表示されます。</p>'
+          return
+        }
+        const parts = []
+        if (sessions.length > 0) {
+          const byTarget = {}
+          sessions.forEach((s) => {
+            const id = s.target_id
+            if (!byTarget[id]) byTarget[id] = []
+            byTarget[id].push(s)
+          })
+          const targetIds = Object.keys(byTarget).sort((a, b) => {
+            const na = byTarget[a][0].target_name || a
+            const nb = byTarget[b][0].target_name || b
+            return na.localeCompare(nb)
+          })
+          parts.push(targetIds.map((targetId) => {
+            const list = byTarget[targetId]
+            const serverName = list[0].target_name || targetId
+            const rows = list.map((s) => {
+              const titleText = s.name ? escapeHtml(s.name) : '(無題)'
+              const descHtml = s.description ? `<p class="text-xs text-slate-500 mt-0.5 break-words">${escapeHtml(s.description)}</p>` : ''
+              return `<li class="flex items-start justify-between gap-3 py-2 px-3 rounded border border-slate-100 hover:bg-slate-50">
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-medium text-slate-800">${titleText}</p>
+                  ${descHtml}
+                </div>
+                <button type="button" data-terminal-reconnect-session-id="${escapeHtml(s.session_id)}" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shrink-0 self-center">再接続</button>
+              </li>`
+            }).join('')
+            return `<div class="mb-4"><h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">${escapeHtml(serverName)}（SSH ターミナル）</h4><ul class="space-y-2">${rows}</ul></div>`
+          }).join(''))
+        }
+        if (rdpSessions.length > 0) {
+          const rdpHtml = rdpSessions.map((r) => {
+            const name = escapeHtml(r.target_name || r.target_id)
+            const url = `/rdp?target_id=${encodeURIComponent(r.target_id)}&target_name=${encodeURIComponent(r.target_name || r.target_id)}`
             return `<li class="flex items-start justify-between gap-3 py-2 px-3 rounded border border-slate-100 hover:bg-slate-50">
               <div class="min-w-0 flex-1">
-                <p class="text-sm font-medium text-slate-800">${titleText}</p>
-                ${descHtml}
+                <p class="text-sm font-medium text-slate-800">${name}</p>
+                <p class="text-xs text-slate-500 mt-0.5">RDP（ブラウザ）</p>
               </div>
-              <a href="/terminal?session_id=${encodeURIComponent(s.session_id)}" target="_blank" rel="noreferrer" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shrink-0 self-center">再接続</a>
+              <a href="${url}" target="_blank" rel="noopener noreferrer" data-rdp-target-id="${escapeHtml(r.target_id)}" class="rdp-reconnect-link rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shrink-0 self-center">再接続</a>
             </li>`
           }).join('')
-          return `<div class="mb-4"><h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">${escapeHtml(serverName)}</h4><ul class="space-y-2">${rows}</ul></div>`
-        }).join('')
+          parts.push(`<div class="mb-4"><h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">RDP（ブラウザ）</h4><ul class="space-y-2">${rdpHtml}</ul></div>`)
+        }
+        bodyEl.innerHTML = parts.join('')
+        bodyEl.querySelectorAll('[data-terminal-reconnect-session-id]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const sid = btn.getAttribute('data-terminal-reconnect-session-id') || ''
+            if (!sid) return
+            openTerminalTabWithParent(`/terminal?session_id=${encodeURIComponent(sid)}`)
+          })
+        })
+        bodyEl.querySelectorAll('.rdp-reconnect-link').forEach((link) => {
+          link.addEventListener('click', (e) => {
+            e.preventDefault()
+            const id = link.dataset.rdpTargetId || ''
+            const { w, h } = getRdpResolutionForTarget(id)
+            const u = new URL(link.href, window.location.origin)
+            if (w) u.searchParams.set('rw', String(w))
+            if (h) u.searchParams.set('rh', String(h))
+            window.open(u.toString(), '_blank', 'noopener')
+          })
+        })
+      } catch {
+        bodyEl.innerHTML = '<p class="text-sm text-red-600">セッション一覧の取得に失敗しました。</p>'
       }
-    } catch {
-      bodyEl.innerHTML = '<p class="text-sm text-red-600">セッション一覧の取得に失敗しました。</p>'
     }
+    // Expose refresh hook for parent focus event
+    modal._vantyxRefreshActiveSessions = refresh
+    await refresh()
   }
 
-  /** 保存済み認証のターゲット用: 接続前にモーダルで不足情報（セッション名・説明・パスワード・パスフレーズ）を入力させる */
+  /** 保存済み認証のターゲット用: 接続前にモーダルで不足情報を入力させる。
+   * パスワード認証・パスフレーズ無しの公開鍵・パスフレーズありで登録済みの場合はセッション名と説明のみ。
+   * パスワード未登録のときはパスワード欄、パスフレーズ未登録のときはパスフレーズ欄を表示する。 */
   function showStoredCredentialModal(targetId, targetName, needsPassword, needsPassphrase) {
     const modal = document.getElementById('ssh-credential-modal')
     modal.classList.remove('hidden')
@@ -965,14 +1099,17 @@ export function renderApp(container) {
         <input type="password" id="ssh-cred-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
       </div>`
       : ''
-    const passphraseLabel = needsPassphrase
-      ? '秘密鍵のパスフレーズ <span class="text-amber-600">（未登録のため入力してください）</span>'
-      : '秘密鍵のパスフレーズ（任意・暗号化鍵の場合のみ）'
-    const passphraseBlock = `
+    const passphraseBlock = needsPassphrase
+      ? `
       <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1.5">${passphraseLabel}</label>
+        <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ <span class="text-amber-600">（未登録のため入力してください）</span></label>
         <input type="password" id="ssh-cred-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="暗号化された秘密鍵のパスフレーズ" />
       </div>`
+      : ''
+    const hasExtraFields = needsPassword || needsPassphrase
+    const introText = hasExtraFields
+      ? '不足している情報を入力してください。接続でコンソールを開きます。'
+      : 'セッション名と説明を入力してください（任意）。接続で保存済み認証を使ってコンソールを開きます。'
     modal.innerHTML = `
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
@@ -982,7 +1119,7 @@ export function renderApp(container) {
           </div>
           <form id="ssh-cred-form">
             <div class="px-6 py-5 space-y-5">
-              <p class="text-sm text-slate-600">不足している情報を入力してください。接続でコンソールを開きます。</p>
+              <p class="text-sm text-slate-600">${introText}</p>
               ${passwordBlock}
               ${passphraseBlock}
               <div>
@@ -1033,16 +1170,36 @@ export function renderApp(container) {
       params.set('use_stored_credentials', '1')
       params.set('session_name', sessionName)
       params.set('session_description', sessionDesc)
-      if (password || passphrase) {
+      const token = randomToken()
+      pendingTerminalCreds[token] = { targetId, targetName, password: password || '', passphrase: passphrase || '', sessionName, sessionDesc, useStoredCredentials: true }
+      params.set('channel', token)
+      openTerminalTabWithParent(`/terminal?${params.toString()}`)
+
+      // 新しいタブとは BroadcastChannel で不足分（パスワード/パスフレーズ）を受け渡しする（localStorageに保存しない）
+      const bc = new BroadcastChannel(`vantyx-terminal-${token}`)
+      const timeoutId = window.setTimeout(() => {
+        try { bc.close() } catch { /* ignore */ }
+        delete pendingTerminalCreds[token]
+      }, 15_000)
+      bc.onmessage = (ev) => {
+        if (ev?.data?.type !== 'ready') return
+        if (ev?.data?.target_id !== targetId) return
+        const creds = pendingTerminalCreds[token]
+        if (!creds) return
         try {
-          // localStorage は同一オリジンでタブ間共有のため、window.open で開いたタブから読める（sessionStorage はタブごとで読めない）
-          localStorage.setItem(
-            `vantyx_terminal_pending_${targetId}`,
-            JSON.stringify({ password: password || '', private_key_passphrase: passphrase || '' })
-          )
-        } catch { /* ignore */ }
+          bc.postMessage({
+            type: 'stored_credentials',
+            password: creds.password || '',
+            private_key_passphrase: creds.passphrase || '',
+            name: creds.sessionName || '',
+            description: creds.sessionDesc || '',
+          })
+        } finally {
+          window.clearTimeout(timeoutId)
+          try { bc.close() } catch { /* ignore */ }
+          delete pendingTerminalCreds[token]
+        }
       }
-      window.open(`/terminal?${params.toString()}`, '_blank', 'noreferrer')
       close()
     })
   }
@@ -1112,7 +1269,8 @@ export function renderApp(container) {
       const token = randomToken()
       pendingTerminalCreds[token] = { targetId, targetName, username, password, passphrase, sessionName, sessionDesc }
       const url = `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&channel=${encodeURIComponent(token)}`
-      window.open(url, '_blank', 'noreferrer')
+      // NOTE: ターミナルの「戻る/セッション終了」で元タブに戻れるよう、opener を残す（noreferrer/noopener は付けない）
+      openTerminalTabWithParent(url)
 
       // 新しいタブとは BroadcastChannel で認証情報を受け渡しする
       const bc = new BroadcastChannel(`vantyx-terminal-${token}`)
@@ -1309,6 +1467,8 @@ export function renderApp(container) {
               path: btn.dataset.targetPath || '',
               ssh_username: btn.dataset.targetSshUsername || '',
               tags: (btn.dataset.targetTags || '').split(',').map((s) => s.trim()).filter(Boolean),
+              has_ssh_key: btn.dataset.targetHasSshKey === '1',
+              needs_passphrase: btn.dataset.targetNeedsPassphrase === '1',
             }
             if (target.id) showEditTargetModal(target)
           })
@@ -1351,10 +1511,38 @@ export function renderApp(container) {
             }
           })
         })
-        // 非 SSH はボタンのみでアラート。
-        mainContent.querySelectorAll('.connect-btn-in-group:not(.terminal-open-btn)').forEach((btn) => {
+        // VNC: ポップアップで開く（専用ウィンドウ）
+        mainContent.querySelectorAll('button[data-popup-protocol]').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.preventDefault()
+            const protocol = btn.dataset.popupProtocol || ''
+            const id = btn.dataset.popupTargetId || ''
+            const name = btn.dataset.popupTargetName || ''
+            if (!protocol || !id) return
+            const u = `/${protocol}?target_id=${encodeURIComponent(id)}&target_name=${encodeURIComponent(name || '')}`
+            const title = `Vantyx VNC - ${name || id}`
+            openPopup(u, title, 1400, 900)
+          })
+        })
+
+        // RDP: 解像度設定（ローカル保存）に基づき、新しいタブで開く
+        mainContent.querySelectorAll('.rdp-open-link').forEach((link) => {
+          link.addEventListener('click', (e) => {
+            e.preventDefault()
+            const id = link.dataset.rdpTargetId || ''
+            const name = link.dataset.rdpTargetName || ''
+            const { w, h } = getRdpResolutionForTarget(id)
+            const u = new URL(link.href, window.location.origin)
+            if (w) u.searchParams.set('rw', String(w))
+            if (h) u.searchParams.set('rh', String(h))
+            window.open(u.toString(), '_blank', 'noopener')
+          })
+        })
+
+        // 未対応プロトコル (telnet等) はアラート表示。
+        mainContent.querySelectorAll('.connect-btn-in-group:not(.terminal-open-btn):not(.vnc-open-btn):not([data-popup-protocol]):not(a)').forEach((btn) => {
           btn.addEventListener('click', () => {
-            alert('このターゲットは SSH のみ対応しています。Telnet は未対応です。')
+            alert('このターゲットは SSH / VNC / RDP のみ対応しています。')
           })
         })
       }
@@ -1448,23 +1636,50 @@ export function renderApp(container) {
                   </select>
                 </div>
               </div>
-              <div id="add-target-ssh-fields">
-                <div class="space-y-5">
-                  <div>
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名（任意）</label>
-                    <input type="text" id="add-target-ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
+              <div id="add-target-rdp-res-wrap" class="grid grid-cols-2 gap-4 hidden">
+                <div>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">RDP 解像度（幅）</label>
+                  <input type="number" id="add-target-rdp-width" min="640" max="3840" value="1920" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">RDP 解像度（高さ）</label>
+                  <input type="number" id="add-target-rdp-height" min="480" max="2160" value="1080" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
+                </div>
+              </div>
+              <div id="add-target-cred-fields">
+                <div id="add-target-auth-type-wrap" class="space-y-3 hidden">
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">認証方法</label>
+                  <div class="space-y-2">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="add-target-auth-type" value="password" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" checked />
+                      <span class="text-sm text-slate-800">パスワード認証</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="add-target-auth-type" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                      <span class="text-sm text-slate-800">公開鍵認証（パスフレーズなし）</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="add-target-auth-type" value="key_passphrase" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                      <span class="text-sm text-slate-800">公開鍵認証（パスフレーズあり）</span>
+                    </label>
                   </div>
-                  <div>
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード（任意）</label>
-                    <input type="password" id="add-target-ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="保存すると接続時に利用できます" />
+                </div>
+                <div class="space-y-5 mt-4">
+                  <div id="add-target-username-wrap">
+                    <label id="add-target-username-label" class="block text-xs font-medium text-slate-600 mb-1.5">ユーザー名（任意）</label>
+                    <input type="text" id="add-target-ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="例: root" />
                   </div>
-                  <div>
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH 秘密鍵（PEM・任意）</label>
-                    <textarea id="add-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" placeholder="-----BEGIN ... 形式の秘密鍵を貼り付け。パスワードとどちらかまたは両方設定可"></textarea>
+                  <div id="add-target-password-wrap">
+                    <label id="add-target-password-label" class="block text-xs font-medium text-slate-600 mb-1.5">パスワード（任意）</label>
+                    <input type="password" id="add-target-ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="保存すると接続時に利用できます" />
                   </div>
-                  <div>
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
-                    <input type="password" id="add-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="暗号化された秘密鍵の場合" />
+                  <div id="add-target-key-wrap" class="hidden">
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH 秘密鍵（PEM）</label>
+                    <textarea id="add-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono placeholder-slate-400" placeholder="-----BEGIN ... 形式の秘密鍵を貼り付け"></textarea>
+                  </div>
+                  <div id="add-target-passphrase-wrap" class="hidden">
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ</label>
+                    <input type="password" id="add-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="暗号化された秘密鍵のパスフレーズ" />
                   </div>
                 </div>
               </div>
@@ -1480,16 +1695,48 @@ export function renderApp(container) {
     `
     const defaultPorts = { ssh: 22, telnet: 23, vnc: 5900, rdp: 3389, tftp: 69 }
     const addProtoSelect = modal.querySelector('#add-target-protocol')
-    const addSshFields = modal.querySelector('#add-target-ssh-fields')
+    const addCredFields = modal.querySelector('#add-target-cred-fields')
+    const addAuthTypeWrap = modal.querySelector('#add-target-auth-type-wrap')
+    const addPasswordWrap = modal.querySelector('#add-target-password-wrap')
     const addPortInput = modal.querySelector('#add-target-port')
+    const addKeyWrap = modal.querySelector('#add-target-key-wrap')
+    const addPassphraseWrap = modal.querySelector('#add-target-passphrase-wrap')
+    const addUsernameLabel = modal.querySelector('#add-target-username-label')
+    const addPasswordLabel = modal.querySelector('#add-target-password-label')
+    const addRdpResWrap = modal.querySelector('#add-target-rdp-res-wrap')
+    const addRdpWidthInput = modal.querySelector('#add-target-rdp-width')
+    const addRdpHeightInput = modal.querySelector('#add-target-rdp-height')
+    function syncAddAuthType() {
+      const proto = addProtoSelect.value
+      if (proto === 'rdp') {
+        addPasswordWrap.classList.remove('hidden')
+        addKeyWrap.classList.add('hidden')
+        addPassphraseWrap.classList.add('hidden')
+        return
+      }
+      if (proto !== 'ssh') return
+      const authType = modal.querySelector('input[name="add-target-auth-type"]:checked')?.value || 'password'
+      addPasswordWrap.classList.toggle('hidden', authType !== 'password')
+      addKeyWrap.classList.toggle('hidden', authType === 'password')
+      addPassphraseWrap.classList.toggle('hidden', authType !== 'key_passphrase')
+    }
     function syncAddProtocol() {
       const proto = addProtoSelect.value
-      addSshFields.style.display = proto === 'ssh' ? '' : 'none'
+      const hasCreds = proto === 'ssh' || proto === 'rdp'
+      addCredFields.style.display = hasCreds ? '' : 'none'
+      addAuthTypeWrap.classList.toggle('hidden', proto !== 'ssh')
+      addUsernameLabel.textContent = proto === 'rdp' ? 'RDP ユーザー名（任意）' : 'SSH ユーザー名（任意）'
+      addPasswordLabel.textContent = proto === 'rdp' ? 'RDP パスワード（任意）' : 'SSH パスワード（任意）'
+      addRdpResWrap.classList.toggle('hidden', proto !== 'rdp')
       if (defaultPorts[proto] !== undefined) {
         addPortInput.value = defaultPorts[proto]
       }
+      syncAddAuthType()
     }
     addProtoSelect.addEventListener('change', syncAddProtocol)
+    modal.querySelectorAll('input[name="add-target-auth-type"]').forEach((radio) => {
+      radio.addEventListener('change', syncAddAuthType)
+    })
     syncAddProtocol()
 
     modal.querySelector('#add-target-close').addEventListener('click', () => {
@@ -1511,9 +1758,20 @@ export function renderApp(container) {
       const port = parseInt(modal.querySelector('#add-target-port').value, 10) || 22
       const protocol = modal.querySelector('#add-target-protocol').value
       const ssh_username = modal.querySelector('#add-target-ssh-username').value.trim()
-      const ssh_password = modal.querySelector('#add-target-ssh-password').value
-      const ssh_private_key = modal.querySelector('#add-target-ssh-private-key').value
-      const ssh_private_key_passphrase = modal.querySelector('#add-target-ssh-key-passphrase').value
+      const authType = protocol === 'ssh' ? (modal.querySelector('input[name="add-target-auth-type"]:checked')?.value || 'password') : 'password'
+      const payload = { name, host, port, protocol, group_id, ssh_username }
+      if (protocol === 'rdp' || authType === 'password') {
+        const v = modal.querySelector('#add-target-ssh-password').value
+        if (v !== '') payload.ssh_password = v
+      }
+      if (protocol === 'ssh' && (authType === 'key' || authType === 'key_passphrase')) {
+        const keyVal = modal.querySelector('#add-target-ssh-private-key').value.trim()
+        if (keyVal) payload.ssh_private_key = keyVal
+        if (authType === 'key_passphrase') {
+          const pp = modal.querySelector('#add-target-ssh-key-passphrase').value
+          if (pp !== '') payload.ssh_private_key_passphrase = pp
+        }
+      }
       if (!name || !host) {
         errorEl.textContent = '名前とホストを入力してください'
         errorEl.classList.remove('hidden')
@@ -1524,9 +1782,18 @@ export function renderApp(container) {
         errorEl.classList.remove('hidden')
         return
       }
+      let rdpW = 1920
+      let rdpH = 1080
+      if (protocol === 'rdp') {
+        rdpW = parseInt(addRdpWidthInput.value, 10) || 1920
+        rdpH = parseInt(addRdpHeightInput.value, 10) || 1080
+      }
       submitBtn.disabled = true
       try {
-        await API.createTarget({ name, host, port, protocol, group_id, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase })
+        const created = await API.createTarget(payload)
+        if (protocol === 'rdp' && created && created.id) {
+          setRdpResolutionForTarget(created.id, rdpW, rdpH)
+        }
         modal.classList.add('hidden')
         modal.innerHTML = ''
         groupsCache = null
@@ -1576,24 +1843,41 @@ export function renderApp(container) {
                   </select>
                 </div>
               </div>
-              <div id="edit-target-ssh-fields">
-                <div class="space-y-5">
-                  <div>
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名（任意）</label>
-                    <input type="text" id="edit-target-ssh-username" value="${escapeHtml(target.ssh_username || '')}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
+              <div id="edit-target-cred-fields">
+                <div id="edit-target-auth-type-wrap" class="space-y-3 hidden">
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">認証方法</label>
+                  <div class="space-y-2">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="edit-target-auth-type" value="password" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                      <span class="text-sm text-slate-800">パスワード認証</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="edit-target-auth-type" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                      <span class="text-sm text-slate-800">公開鍵認証（パスフレーズなし）</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="edit-target-auth-type" value="key_passphrase" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                      <span class="text-sm text-slate-800">公開鍵認証（パスフレーズあり）</span>
+                    </label>
                   </div>
-                  <div>
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード（任意）</label>
-                    <input type="password" id="edit-target-ssh-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="変更する場合のみ入力（空のままなら変更しません）" />
+                </div>
+                <div class="space-y-5 mt-4">
+                  <div id="edit-target-username-wrap">
+                    <label id="edit-target-username-label" class="block text-xs font-medium text-slate-600 mb-1.5">ユーザー名（任意）</label>
+                    <input type="text" id="edit-target-ssh-username" value="${escapeHtml(target.ssh_username || '')}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="例: root" />
                   </div>
-                  <div>
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH 秘密鍵（PEM・任意）</label>
-                    <textarea id="edit-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" placeholder="${target.has_ssh_key ? '設定済み。上書きする場合は新しい鍵を貼り付け' : '-----BEGIN ... 形式の秘密鍵を貼り付け'}" autocomplete="off"></textarea>
+                  <div id="edit-target-password-wrap">
+                    <label id="edit-target-password-label" class="block text-xs font-medium text-slate-600 mb-1.5">パスワード（任意）</label>
+                    <input type="password" id="edit-target-ssh-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="変更する場合のみ入力（空のままなら変更しません）" />
+                  </div>
+                  <div id="edit-target-key-wrap" class="hidden">
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH 秘密鍵（PEM）</label>
+                    <textarea id="edit-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono placeholder-slate-400" placeholder="${target.has_ssh_key ? '設定済み。上書きする場合は新しい鍵を貼り付け' : '-----BEGIN ... 形式の秘密鍵を貼り付け'}" autocomplete="off"></textarea>
                     ${target.has_ssh_key ? '<label class="mt-1.5 flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" id="edit-target-clear-ssh-key" class="rounded border-slate-300" /> 保存済み秘密鍵をクリア</label>' : ''}
                   </div>
-                  <div>
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
-                    <input type="password" id="edit-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="変更する場合のみ入力" />
+                  <div id="edit-target-passphrase-wrap" class="hidden">
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ</label>
+                    <input type="password" id="edit-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="変更する場合のみ入力" />
                   </div>
                 </div>
               </div>
@@ -1601,6 +1885,16 @@ export function renderApp(container) {
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">タグ（カンマ区切り）</label>
                 <input type="text" id="edit-target-tags" value="${escapeHtml((target.tags || []).join(', '))}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: prod, network, ops" />
                 <div id="edit-target-tags-picker" class="mt-2"></div>
+              </div>
+              <div id="edit-target-rdp-res-wrap" class="grid grid-cols-2 gap-4 hidden">
+                <div>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">RDP 解像度（幅）</label>
+                  <input type="number" id="edit-target-rdp-width" min="640" max="3840" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">RDP 解像度（高さ）</label>
+                  <input type="number" id="edit-target-rdp-height" min="480" max="2160" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
+                </div>
               </div>
               <p id="edit-target-error" class="text-sm text-red-600 hidden"></p>
             </div>
@@ -1615,11 +1909,40 @@ export function renderApp(container) {
     fillExistingTagsPicker(modal, 'edit-target-tags')
     const editDefaultPorts = { ssh: 22, telnet: 23, vnc: 5900, rdp: 3389, tftp: 69 }
     const editProtoSelect = modal.querySelector('#edit-target-protocol')
-    const editSshFields = modal.querySelector('#edit-target-ssh-fields')
+    const editCredFields = modal.querySelector('#edit-target-cred-fields')
+    const editAuthTypeWrap = modal.querySelector('#edit-target-auth-type-wrap')
+    const editPasswordWrap = modal.querySelector('#edit-target-password-wrap')
     const editPortInput = modal.querySelector('#edit-target-port')
+    const editKeyWrap = modal.querySelector('#edit-target-key-wrap')
+    const editPassphraseWrap = modal.querySelector('#edit-target-passphrase-wrap')
+    const editUsernameLabel = modal.querySelector('#edit-target-username-label')
+    const editPasswordLabel = modal.querySelector('#edit-target-password-label')
+    const editRdpResWrap = modal.querySelector('#edit-target-rdp-res-wrap')
+    const editRdpWidthInput = modal.querySelector('#edit-target-rdp-width')
+    const editRdpHeightInput = modal.querySelector('#edit-target-rdp-height')
+    function syncEditAuthType() {
+      const proto = editProtoSelect.value
+      if (proto === 'rdp') {
+        editPasswordWrap.classList.remove('hidden')
+        editKeyWrap.classList.add('hidden')
+        editPassphraseWrap.classList.add('hidden')
+        return
+      }
+      if (proto !== 'ssh') return
+      const authType = modal.querySelector('input[name="edit-target-auth-type"]:checked')?.value || 'password'
+      editPasswordWrap.classList.toggle('hidden', authType !== 'password')
+      editKeyWrap.classList.toggle('hidden', authType === 'password')
+      editPassphraseWrap.classList.toggle('hidden', authType !== 'key_passphrase')
+    }
     function syncEditProtocol() {
       const proto = editProtoSelect.value
-      editSshFields.style.display = proto === 'ssh' ? '' : 'none'
+      const hasCreds = proto === 'ssh' || proto === 'rdp'
+      editCredFields.style.display = hasCreds ? '' : 'none'
+      editAuthTypeWrap.classList.toggle('hidden', proto !== 'ssh')
+      editUsernameLabel.textContent = proto === 'rdp' ? 'RDP ユーザー名（任意）' : 'SSH ユーザー名（任意）'
+      editPasswordLabel.textContent = proto === 'rdp' ? 'RDP パスワード（任意）' : 'SSH パスワード（任意）'
+      editRdpResWrap.classList.toggle('hidden', proto !== 'rdp')
+      syncEditAuthType()
     }
     editProtoSelect.addEventListener('change', () => {
       syncEditProtocol()
@@ -1628,7 +1951,19 @@ export function renderApp(container) {
         editPortInput.value = editDefaultPorts[proto]
       }
     })
+    modal.querySelectorAll('input[name="edit-target-auth-type"]').forEach((radio) => {
+      radio.addEventListener('change', syncEditAuthType)
+    })
+    const initialAuthType = target.protocol === 'ssh'
+      ? (target.has_ssh_key ? (target.needs_passphrase ? 'key_passphrase' : 'key') : 'password')
+      : 'password'
+    const initialAuthRadio = modal.querySelector(`input[name="edit-target-auth-type"][value="${initialAuthType}"]`)
+    if (initialAuthRadio) initialAuthRadio.checked = true
     syncEditProtocol()
+
+    const { w: initialRdpW, h: initialRdpH } = getRdpResolutionForTarget(target.id)
+    if (editRdpWidthInput) editRdpWidthInput.value = initialRdpW || 1920
+    if (editRdpHeightInput) editRdpHeightInput.value = initialRdpH || 1080
 
     modal.querySelector('#edit-target-close').addEventListener('click', () => {
       modal.classList.add('hidden')
@@ -1651,13 +1986,21 @@ export function renderApp(container) {
       const port = parseInt(modal.querySelector('#edit-target-port').value, 10) || 22
       const protocol = modal.querySelector('#edit-target-protocol').value
       const ssh_username = modal.querySelector('#edit-target-ssh-username').value.trim()
-      const pwVal = modal.querySelector('#edit-target-ssh-password').value
-      const ssh_password = pwVal === '' ? undefined : pwVal
-      const keyVal = modal.querySelector('#edit-target-ssh-private-key').value
+      const authType = protocol === 'ssh' ? (modal.querySelector('input[name="edit-target-auth-type"]:checked')?.value || 'password') : 'password'
       const clearKeyChecked = modal.querySelector('#edit-target-clear-ssh-key') && modal.querySelector('#edit-target-clear-ssh-key').checked
-      const ssh_private_key = clearKeyChecked ? '' : (keyVal === '' ? undefined : keyVal)
-      const keyPassVal = modal.querySelector('#edit-target-ssh-key-passphrase').value
-      const ssh_private_key_passphrase = clearKeyChecked ? '' : (keyPassVal === '' ? undefined : keyPassVal)
+      let ssh_password, ssh_private_key, ssh_private_key_passphrase
+      if (protocol === 'rdp' || authType === 'password') {
+        const pwVal = modal.querySelector('#edit-target-ssh-password').value
+        ssh_password = pwVal === '' ? undefined : pwVal
+      }
+      if (protocol === 'ssh' && (authType === 'key' || authType === 'key_passphrase')) {
+        const keyVal = modal.querySelector('#edit-target-ssh-private-key').value
+        ssh_private_key = clearKeyChecked ? '' : (keyVal === '' ? undefined : keyVal)
+        if (authType === 'key_passphrase') {
+          const keyPassVal = modal.querySelector('#edit-target-ssh-key-passphrase').value
+          ssh_private_key_passphrase = clearKeyChecked ? '' : (keyPassVal === '' ? undefined : keyPassVal)
+        }
+      }
       const tagsRaw = modal.querySelector('#edit-target-tags').value.trim()
       const tags = tagsRaw ? tagsRaw.split(',').map((s) => s.trim()).filter(Boolean) : []
       if (!name || !host) {
@@ -1665,9 +2008,18 @@ export function renderApp(container) {
         errorEl.classList.remove('hidden')
         return
       }
+      const updatePayload = { name, host, port, protocol, path: target.path || '', ssh_username }
+      if (ssh_password !== undefined) updatePayload.ssh_password = ssh_password
+      if (ssh_private_key !== undefined) updatePayload.ssh_private_key = ssh_private_key
+      if (ssh_private_key_passphrase !== undefined) updatePayload.ssh_private_key_passphrase = ssh_private_key_passphrase
       submitBtn.disabled = true
       try {
-        await API.updateTarget(targetId, { name, host, port, protocol, path: target.path || '', ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase })
+        await API.updateTarget(targetId, updatePayload)
+        if (protocol === 'rdp') {
+          const rdpW = parseInt(editRdpWidthInput.value, 10) || 1920
+          const rdpH = parseInt(editRdpHeightInput.value, 10) || 1080
+          setRdpResolutionForTarget(targetId, rdpW, rdpH)
+        }
         await API.setTargetTags(targetId, tags)
         modal.classList.add('hidden')
         modal.innerHTML = ''
@@ -1703,7 +2055,7 @@ export function renderApp(container) {
           <td class="px-4 py-2 text-right">
             ${isManageMode ? `
             <div class="flex items-center justify-end gap-2">
-              <button type="button" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-target-host="${escapeHtml(t.host)}" data-target-port="${t.port}" data-target-protocol="${escapeHtml(t.protocol || 'ssh')}" data-target-path="${escapeHtml(t.path || '')}" data-target-ssh-username="${escapeHtml(t.ssh_username || '')}" data-target-tags="${escapeHtml((tags || []).join(','))}"
+              <button type="button" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-target-host="${escapeHtml(t.host)}" data-target-port="${t.port}" data-target-protocol="${escapeHtml(t.protocol || 'ssh')}" data-target-path="${escapeHtml(t.path || '')}" data-target-ssh-username="${escapeHtml(t.ssh_username || '')}" data-target-tags="${escapeHtml((tags || []).join(','))}" data-target-has-ssh-key="${t.has_ssh_key ? '1' : '0'}" data-target-needs-passphrase="${t.needs_passphrase ? '1' : '0'}"
                 class="edit-btn-in-group rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 border border-slate-300 shadow-sm transition-colors">
                 編集
               </button>
@@ -1720,11 +2072,15 @@ export function renderApp(container) {
               接続
             </button>`
             : t.protocol === 'vnc'
-            ? `<a href="/vnc?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(t.name || '')}" target="_blank" rel="noreferrer" class="connect-btn-in-group vnc-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block">
+            ? `<button type="button" data-popup-protocol="vnc" data-popup-target-id="${escapeHtml(t.id)}" data-popup-target-name="${escapeHtml(t.name || '')}"
+              class="connect-btn-in-group vnc-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block">
               VNC
-            </a>`
+            </button>`
             : t.protocol === 'rdp'
-            ? `<a href="/rdp?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(t.name || '')}" target="_blank" rel="noreferrer" class="connect-btn-in-group rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block">
+            ? `<a href="/rdp?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(t.name || '')}"
+              target="_blank" rel="noopener noreferrer"
+              data-rdp-target-id="${escapeHtml(t.id)}" data-rdp-target-name="${escapeHtml(t.name || '')}"
+              class="connect-btn-in-group rdp-open-link rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block">
               RDP
             </a>`
             : t.protocol === 'tftp'

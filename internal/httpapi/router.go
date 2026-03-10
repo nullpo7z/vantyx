@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -53,17 +54,99 @@ func newLoginRateLimiter() *loginRateLimiter {
 }
 
 func (l *loginRateLimiter) clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.Index(xff, ","); i > 0 {
-			return strings.TrimSpace(xff[:i])
+	if strings.TrimSpace(os.Getenv("VANTYX_TRUST_X_FORWARDED_FOR")) == "1" {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.Index(xff, ","); i > 0 {
+				return strings.TrimSpace(xff[:i])
+			}
+			return strings.TrimSpace(xff)
 		}
-		return strings.TrimSpace(xff)
 	}
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if host != "" {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+func requestScheme(r *http.Request) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+// csrfOriginMiddleware mitigates CSRF for cookie-authenticated browser requests by enforcing same-origin
+// Origin/Referer on unsafe methods. This is intentionally lightweight (no per-session token) and can
+// be disabled via env for non-browser automation.
+func csrfOriginMiddleware(next http.Handler) http.Handler {
+	if strings.TrimSpace(os.Getenv("VANTYX_DISABLE_ORIGIN_CHECK")) == "1" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/ws/") || r.URL.Path == "/api/login" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Only enforce when cookie auth is present.
+		if c, err := r.Cookie("vantyx_session"); err != nil || c.Value == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		want := requestScheme(r) + "://" + r.Host
+		secFetchSite := strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))
+		if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+			if origin != want {
+				writeJSONError(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+		ref := strings.TrimSpace(r.Referer())
+		// If browser fetch metadata is present but we don't have Origin/Referer, treat as suspicious.
+		if ref == "" && secFetchSite != "" {
+			writeJSONError(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		// Non-browser clients may not send Origin/Referer. Allow in that case.
+		if ref == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		u, err := url.Parse(ref)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			writeJSONError(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if u.Scheme+"://"+u.Host != want {
+			writeJSONError(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func maxBodyBytesMiddleware(limit int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Skip multipart uploads (have their own MaxBytesReader limits).
+			if ct := r.Header.Get("Content-Type"); strings.Contains(ct, "multipart/form-data") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if limit > 0 {
+				r.Body = http.MaxBytesReader(w, r.Body, limit)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func (l *loginRateLimiter) allow(ip string) bool {
@@ -232,6 +315,8 @@ func (a *App) NewRouter() http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(requestLog)
+	r.Use(maxBodyBytesMiddleware(2 << 20))
+	r.Use(csrfOriginMiddleware)
 	r.Use(a.sessionMiddleware)
 
 	// Health check
@@ -285,9 +370,9 @@ func (a *App) NewRouter() http.Handler {
 	})
 	r.Get("/ws/ssh", a.handleSSHWebSocket)
 	r.Get("/ws/vnc", a.handleVNCWebSocket)
+	r.Get("/api/rdp/sessions", a.handleRDPSessions)
 	r.Get("/ws/rdp", a.handleRDPWebSocket)
 	r.Get("/ws/rdp/browser", a.handleRDPBrowserWebSocket)
-	r.Get("/api/rdp/file", a.handleRDPFile)
 
 	// Recordings (asciinema): list and download (owner only)
 	r.Get("/api/recordings", a.handleListRecordings)

@@ -26,15 +26,15 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /out/vantyx ./cmd/vantyx-server
 
 # -----------------------------------------------------------------------------
-# Stage 3: Runtime (Alpine + entrypoint so /app/certs volume is writable)
+# Stage 3: Runtime (Alpine edge for FreeRDP 3.x; gnome-remote-desktop on Ubuntu 24.04 requires it)
 # -----------------------------------------------------------------------------
-FROM alpine:3.21
+FROM alpine:edge
 
 # su-exec, nonroot user, asciinema-agg (GIF 用), ffmpeg (WebM 用), フォント (agg の描画用)
-# freerdp + Xvfb + x11vnc: browser-based RDP via FreeRDP→Xvfb→x11vnc→noVNC
+# freerdp (3.x) + Xvfb + x11vnc: browser-based RDP via FreeRDP→Xvfb→x11vnc→noVNC
 ARG AGG_VERSION=v1.7.0
 RUN apk add --no-cache su-exec wget ffmpeg fontconfig font-dejavu \
-	freerdp xvfb x11vnc xdpyinfo \
+	freerdp xvfb x11vnc xdpyinfo xkeyboard-config \
 	&& adduser -D -u 65532 nonroot \
 	&& wget -q "https://github.com/asciinema/agg/releases/download/${AGG_VERSION}/agg-x86_64-unknown-linux-musl" -O /usr/local/bin/agg \
 	&& chmod +x /usr/local/bin/agg \

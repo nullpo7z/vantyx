@@ -472,7 +472,15 @@ func RunBridgeDetachable(ctx context.Context, host string, port uint16, username
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	// Ensure cleanup happens on ctx cancel too, otherwise stdout/stderr reads can block forever
+	// and the detachable session never stops (leaving "active sessions" behind).
+	var cleanupOnce sync.Once
+	doCleanup := func() { cleanupOnce.Do(func() { cleanup() }) }
+	defer doCleanup()
+	go func() {
+		<-ctx.Done()
+		doCleanup()
+	}()
 
 	stdinCh := make(chan []byte, 256)
 	var clientMu sync.Mutex

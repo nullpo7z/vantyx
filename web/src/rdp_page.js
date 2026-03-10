@@ -150,7 +150,7 @@ export function renderRdpPage(container) {
         showScreen()
         // 初回だけ軽くリサイズイベントを投げて noVNC に再計算させる
         setTimeout(() => {
-          try { window.dispatchEvent(new Event('resize')) } catch { /* ignore */ }
+          try { window.dispatchEvent(new window.Event('resize')) } catch { /* ignore */ }
           try { rfb.focus() } catch { /* ignore */ }
         }, 100)
       })
@@ -203,11 +203,11 @@ export function renderRdpPage(container) {
 
   function onResize() {
     if (!rfb) return
-    if (resizeRaf) cancelAnimationFrame(resizeRaf)
-    resizeRaf = requestAnimationFrame(() => {
+    if (resizeRaf) window.cancelAnimationFrame(resizeRaf)
+    resizeRaf = window.requestAnimationFrame(() => {
       resizeRaf = 0
       // noVNC が内部で scaleViewport に応じて再レイアウトするので、追加処理は不要。
-      try { window.dispatchEvent(new Event('resize')) } catch { /* ignore */ }
+      try { window.dispatchEvent(new window.Event('resize')) } catch { /* ignore */ }
     })
   }
   window.addEventListener('resize', onResize)

@@ -2,17 +2,10 @@
  * VNC viewer page: connects to /ws/vnc?target_id=... via noVNC (RFB over WebSocket).
  */
 import RFB from '@novnc/novnc/lib/rfb.js'
-function escapeHtml(s) {
-  if (s == null) return ''
-  const div = document.createElement('div')
-  div.textContent = s
-  return div.innerHTML
-}
 
 export function renderVncPage(container) {
   const params = new URLSearchParams(window.location.search)
   const targetId = params.get('target_id') || ''
-  const targetName = params.get('target_name') || targetId || 'VNC'
 
   if (!targetId) {
     container.innerHTML = `
@@ -103,7 +96,7 @@ export function renderVncPage(container) {
         // 端数丸めで下端が見切れるケースがあるためトグルで再計算させる
         try { rfb.scaleViewport = false } catch { /* ignore */ }
         try { rfb.scaleViewport = true } catch { /* ignore */ }
-        try { window.dispatchEvent(new Event('resize')) } catch { /* ignore */ }
+        try { window.dispatchEvent(new window.Event('resize')) } catch { /* ignore */ }
       }, 100)
     })
     rfb.addEventListener('disconnect', (e) => {

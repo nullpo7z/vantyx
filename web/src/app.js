@@ -1530,7 +1530,6 @@ export function renderApp(container) {
           link.addEventListener('click', (e) => {
             e.preventDefault()
             const id = link.dataset.rdpTargetId || ''
-            const name = link.dataset.rdpTargetName || ''
             const { w, h } = getRdpResolutionForTarget(id)
             const u = new URL(link.href, window.location.origin)
             if (w) u.searchParams.set('rw', String(w))
@@ -2057,8 +2056,8 @@ export function renderApp(container) {
             <div class="flex items-center justify-end gap-2">
               <button type="button" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-target-host="${escapeHtml(t.host)}" data-target-port="${t.port}" data-target-protocol="${escapeHtml(t.protocol || 'ssh')}" data-target-path="${escapeHtml(t.path || '')}" data-target-ssh-username="${escapeHtml(t.ssh_username || '')}" data-target-tags="${escapeHtml((tags || []).join(','))}" data-target-has-ssh-key="${t.has_ssh_key ? '1' : '0'}" data-target-needs-passphrase="${t.needs_passphrase ? '1' : '0'}"
                 class="edit-btn-in-group rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 border border-slate-300 shadow-sm transition-colors">
-                編集
-              </button>
+              編集
+            </button>
               <button type="button" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}"
                 class="delete-btn-in-group rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 shadow-sm transition-colors">
                 削除

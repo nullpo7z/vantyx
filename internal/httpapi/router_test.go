@@ -3129,7 +3129,6 @@ func TestApp_DeleteUserSSHKey_Success(t *testing.T) {
 	}
 }
 
-
 // --- CreateUser additional coverage ---
 
 func TestApp_CreateUser_MissingUsername(t *testing.T) {

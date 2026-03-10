@@ -210,6 +210,8 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 		for {
 			mt, msg, err := conn.ReadMessage()
 			if err != nil {
+				// Client closed or read error: close SSH session so stdout/stderr goroutines get EOF and RunBridge can return.
+				cleanup()
 				return
 			}
 			select {

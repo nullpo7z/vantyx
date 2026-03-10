@@ -1113,8 +1113,13 @@ func TestHandleRDPSessions_WithActiveSession(t *testing.T) {
 	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
 
-	// Register a dummy active bridge for admin:rdp1 so that handleRDPSessions can discover it.
+	// Also create a non-RDP target to exercise the protocol filter branch.
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("ssh1"), "SSH1", "192.168.1.2", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("ssh1"))
+
+	// Register dummy active bridges so that handleRDPSessions can discover them.
 	app.RDPVNCManager.Register("admin:rdp1", &rdpvnc.Bridge{})
+	app.RDPVNCManager.Register("admin:ssh1", &rdpvnc.Bridge{})
 
 	httpSess, _ := app.SessionStore.Create("admin")
 	req := httptest.NewRequest(http.MethodGet, "/api/rdp/sessions", nil)

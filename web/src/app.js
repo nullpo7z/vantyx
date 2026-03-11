@@ -1074,7 +1074,7 @@ export function renderApp(container) {
             const u = new URL(link.href, window.location.origin)
             if (w) u.searchParams.set('rw', String(w))
             if (h) u.searchParams.set('rh', String(h))
-            window.open(u.toString(), '_blank', 'noopener')
+            openTerminalTabWithParent(u.toString())
           })
         })
       } catch {
@@ -1525,7 +1525,7 @@ export function renderApp(container) {
           })
         })
 
-        // RDP: 解像度設定（ローカル保存）に基づき、新しいタブで開く
+        // RDP: 解像度設定（ローカル保存）に基づき、新しいタブで開く（親タブへ戻れるよう parent_token 付きで開く）
         mainContent.querySelectorAll('.rdp-open-link').forEach((link) => {
           link.addEventListener('click', (e) => {
             e.preventDefault()
@@ -1534,7 +1534,7 @@ export function renderApp(container) {
             const u = new URL(link.href, window.location.origin)
             if (w) u.searchParams.set('rw', String(w))
             if (h) u.searchParams.set('rh', String(h))
-            window.open(u.toString(), '_blank', 'noopener')
+            openTerminalTabWithParent(u.toString())
           })
         })
 

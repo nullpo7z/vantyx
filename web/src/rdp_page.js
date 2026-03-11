@@ -17,6 +17,7 @@ export function renderRdpPage(container) {
   const targetId = params.get('target_id') || ''
   const targetName = params.get('target_name') || targetId || 'RDP'
   const sessionId = params.get('session_id') || ''
+  const parentToken = params.get('parent_token') || ''
 
   if (!targetId) {
     container.innerHTML = `
@@ -119,6 +120,16 @@ export function renderRdpPage(container) {
     }
   }
 
+  function closeWindow() {
+    if (parentToken) {
+      try {
+        const bc = new BroadcastChannel(`vantyx-terminal-parent-${parentToken}`)
+        try { bc.postMessage({ type: 'focus', refresh: 'active_sessions' }) } finally { bc.close() }
+      } catch { /* ignore */ }
+    }
+    try { window.close() } catch { /* ignore */ }
+  }
+
   function startConnection() {
     disconnect()
     screenEl.innerHTML = ''
@@ -179,12 +190,12 @@ export function renderRdpPage(container) {
   errorCloseBtn.addEventListener('click', () => {
     disconnect()
     window.removeEventListener('resize', onResize)
-    window.location.href = '/'
+    closeWindow()
   })
 
   backBtn.addEventListener('click', () => {
     window.removeEventListener('resize', onResize)
-    window.location.href = '/'
+    closeWindow()
   })
 
   disconnectBtn.addEventListener('click', async () => {
@@ -197,7 +208,7 @@ export function renderRdpPage(container) {
     }
     disconnect()
     window.removeEventListener('resize', onResize)
-    showError('切断しました。')
+    closeWindow()
   })
 
   fullscreenBtn.addEventListener('click', () => {

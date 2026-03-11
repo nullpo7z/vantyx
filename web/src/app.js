@@ -1047,7 +1047,7 @@ export function renderApp(container) {
         if (rdpSessions.length > 0) {
           const rdpHtml = rdpSessions.map((r) => {
             const name = escapeHtml(r.target_name || r.target_id)
-            const url = `/rdp?target_id=${encodeURIComponent(r.target_id)}&target_name=${encodeURIComponent(r.target_name || r.target_id)}`
+            const url = `/rdp?target_id=${encodeURIComponent(r.target_id)}&target_name=${encodeURIComponent(r.target_name || r.target_id)}&session_id=${encodeURIComponent(r.session_id)}`
             return `<li class="flex items-start justify-between gap-3 py-2 px-3 rounded border border-slate-100 hover:bg-slate-50">
               <div class="min-w-0 flex-1">
                 <p class="text-sm font-medium text-slate-800">${name}</p>

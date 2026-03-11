@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -254,7 +255,10 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 		rdpUser := target.SSHUsername
 		rdpPass := target.SSHPassword
 		var err error
-		bridge, err = rdpvnc.Start(ctx, target.Host, int(target.Port), rdpUser, rdpPass, width, height)
+		// Use a detached background context for the bridge so that it
+		// survives HTTP handler return and client disconnect; lifecycle
+		// is instead tied to the RDP process and explicit session delete.
+		bridge, err = rdpvnc.Start(context.Background(), target.Host, int(target.Port), rdpUser, rdpPass, width, height)
 		if err != nil {
 			log.Printf("rdp browser bridge_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
 			writeJSONError(w, "failed to start RDP bridge: "+err.Error(), http.StatusInternalServerError)

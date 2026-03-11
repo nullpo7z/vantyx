@@ -4,6 +4,7 @@
  * Connects immediately on page load using stored target credentials.
  */
 import RFB from '@novnc/novnc/lib/rfb.js'
+import API from './api.js'
 function escapeHtml(s) {
   if (s == null) return ''
   const div = document.createElement('div')
@@ -15,6 +16,7 @@ export function renderRdpPage(container) {
   const params = new URLSearchParams(window.location.search)
   const targetId = params.get('target_id') || ''
   const targetName = params.get('target_name') || targetId || 'RDP'
+  const sessionId = params.get('session_id') || ''
 
   if (!targetId) {
     container.innerHTML = `
@@ -181,12 +183,18 @@ export function renderRdpPage(container) {
   })
 
   backBtn.addEventListener('click', () => {
-    disconnect()
     window.removeEventListener('resize', onResize)
     window.location.href = '/'
   })
 
-  disconnectBtn.addEventListener('click', () => {
+  disconnectBtn.addEventListener('click', async () => {
+    try {
+      if (sessionId && typeof API?.rdpSessionDelete === 'function') {
+        await API.rdpSessionDelete(sessionId)
+      }
+    } catch {
+      // エラー時もローカル側は切断しておく（UI 優先）。
+    }
     disconnect()
     window.removeEventListener('resize', onResize)
     showError('切断しました。')

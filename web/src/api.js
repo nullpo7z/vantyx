@@ -227,6 +227,21 @@ const API = {
     return res.json()
   },
 
+  /** RDP ブラウザセッションを終了する（再接続候補からも消す）。 */
+  async rdpSessionDelete(sessionId) {
+    const res = await fetch(`/api/rdp/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+      keepalive: true,
+    })
+    // セッションが既に終了している場合は 404 になり得るため、成功扱いにする。
+    if (res.status === 404) return
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete RDP session')
+    }
+  },
+
   /** ターミナルセッションを終了する（閉じる用）。keepalive でタブ閉鎖時も送信完了させる。 */
   async terminalSessionDelete(sessionId) {
     const res = await fetch(`/api/terminal/sessions/${encodeURIComponent(sessionId)}`, {

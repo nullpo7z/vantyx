@@ -192,7 +192,12 @@ func (b *Bridge) Done() <-chan struct{} { return b.done }
 
 // Stop kills all child processes and waits for cleanup.
 func (b *Bridge) Stop() {
-	b.cancel()
+	if b == nil {
+		return
+	}
+	if b.cancel != nil {
+		b.cancel()
+	}
 	killProc(b.freerdp)
 	killProc(b.x11vnc)
 	killProc(b.xvfb)
@@ -200,6 +205,9 @@ func (b *Bridge) Stop() {
 		_ = b.freerdpPty.Close()
 	}
 
+	if b.done == nil {
+		return
+	}
 	select {
 	case <-b.done:
 	case <-time.After(5 * time.Second):
@@ -291,15 +299,35 @@ func waitForPort(ctx context.Context, port int, timeout time.Duration) error {
 	}
 }
 
-// Manager tracks active RDP-to-VNC bridges for cleanup.
+// Session represents one browser RDP session (xfreerdp→Xvfb→x11vnc) managed for reconnect/list/delete.
+type Session struct {
+	ID         string
+	UserID     string
+	TargetID   string
+	TargetName string
+	Width      int
+	Height     int
+	CreatedAt  time.Time
+	Bridge     *Bridge
+}
+
+// Manager tracks active RDP-to-VNC bridges for cleanup and session management.
 type Manager struct {
-	mu      sync.Mutex
-	bridges map[string]*Bridge
+	mu             sync.Mutex
+	bridges        map[string]*Bridge  // key -> bridge (legacy key: "userID:targetID")
+	sessionsByID   map[string]*Session // sessionID -> session
+	sessionIDByKey map[string]string   // key -> sessionID
+	now            func() time.Time
 }
 
 // NewManager creates a new bridge manager.
 func NewManager() *Manager {
-	return &Manager{bridges: make(map[string]*Bridge)}
+	return &Manager{
+		bridges:        make(map[string]*Bridge),
+		sessionsByID:   make(map[string]*Session),
+		sessionIDByKey: make(map[string]string),
+		now:            time.Now,
+	}
 }
 
 // Register adds a bridge under the given key.
@@ -316,8 +344,118 @@ func (m *Manager) Register(key string, b *Bridge) {
 		if m.bridges[key] == b {
 			delete(m.bridges, key)
 		}
+		if sid, ok := m.sessionIDByKey[key]; ok {
+			if s, ok := m.sessionsByID[sid]; ok && s.Bridge == b {
+				delete(m.sessionsByID, sid)
+			}
+			delete(m.sessionIDByKey, key)
+		}
 		m.mu.Unlock()
 	}()
+}
+
+// RegisterSession registers a bridge as a managed session for the given key ("userID:targetID").
+// If an existing session exists for the key, it is stopped and replaced.
+func (m *Manager) RegisterSession(key string, sessionID string, userID, targetID, targetName string, width, height int, b *Bridge) *Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Replace any existing bridge/session for the key.
+	if old, ok := m.bridges[key]; ok {
+		old.Stop()
+	}
+	if oldID, ok := m.sessionIDByKey[key]; ok {
+		delete(m.sessionsByID, oldID)
+	}
+
+	s := &Session{
+		ID:         sessionID,
+		UserID:     userID,
+		TargetID:   targetID,
+		TargetName: targetName,
+		Width:      width,
+		Height:     height,
+		CreatedAt:  m.now(),
+		Bridge:     b,
+	}
+	m.bridges[key] = b
+	m.sessionsByID[sessionID] = s
+	m.sessionIDByKey[key] = sessionID
+
+	go func() {
+		<-b.Done()
+		m.mu.Lock()
+		if m.bridges[key] == b {
+			delete(m.bridges, key)
+		}
+		if cur, ok := m.sessionsByID[sessionID]; ok && cur.Bridge == b {
+			delete(m.sessionsByID, sessionID)
+		}
+		if m.sessionIDByKey[key] == sessionID {
+			delete(m.sessionIDByKey, key)
+		}
+		m.mu.Unlock()
+	}()
+	return s
+}
+
+// GetSessionByKey returns the managed session for the given key if present.
+func (m *Manager) GetSessionByKey(key string) (*Session, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sid, ok := m.sessionIDByKey[key]
+	if !ok {
+		return nil, false
+	}
+	s, ok := m.sessionsByID[sid]
+	return s, ok
+}
+
+// GetSession returns the managed session by session ID if present.
+func (m *Manager) GetSession(sessionID string) (*Session, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessionsByID[sessionID]
+	return s, ok
+}
+
+// ActiveSessionsForUser returns managed sessions for a user (copy).
+func (m *Manager) ActiveSessionsForUser(userID string) []Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Session
+	for _, s := range m.sessionsByID {
+		if s.UserID == userID {
+			out = append(out, *s)
+		}
+	}
+	return out
+}
+
+// RemoveSession stops and removes the managed session by session ID.
+func (m *Manager) RemoveSession(sessionID string) {
+	var (
+		key string
+		b   *Bridge
+		ok  bool
+	)
+	m.mu.Lock()
+	if s, exists := m.sessionsByID[sessionID]; exists {
+		b = s.Bridge
+		ok = true
+		key = s.UserID + ":" + s.TargetID
+		delete(m.sessionsByID, sessionID)
+		if m.sessionIDByKey[key] == sessionID {
+			delete(m.sessionIDByKey, key)
+		}
+		if m.bridges[key] == b {
+			delete(m.bridges, key)
+		}
+	}
+	m.mu.Unlock()
+	if ok && b != nil {
+		b.Stop()
+	}
 }
 
 // Remove stops and removes the bridge for the given key.
@@ -326,6 +464,10 @@ func (m *Manager) Remove(key string) {
 	b, ok := m.bridges[key]
 	if ok {
 		delete(m.bridges, key)
+	}
+	if sid, ok2 := m.sessionIDByKey[key]; ok2 {
+		delete(m.sessionIDByKey, key)
+		delete(m.sessionsByID, sid)
 	}
 	m.mu.Unlock()
 	if ok {

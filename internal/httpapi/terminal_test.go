@@ -1117,9 +1117,10 @@ func TestHandleRDPSessions_WithActiveSession(t *testing.T) {
 	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("ssh1"), "SSH1", "192.168.1.2", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("ssh1"))
 
-	// Register dummy active bridges so that handleRDPSessions can discover them.
-	app.RDPVNCManager.Register("admin:rdp1", &rdpvnc.Bridge{})
-	app.RDPVNCManager.Register("admin:ssh1", &rdpvnc.Bridge{})
+	// Register dummy managed sessions so that handleRDPSessions can discover them.
+	// (Bridge is a nil-process placeholder here; we only need the manager bookkeeping.)
+	app.RDPVNCManager.RegisterSession("admin:rdp1", "s1", "admin", "rdp1", "RDP1", 1920, 1080, &rdpvnc.Bridge{})
+	app.RDPVNCManager.RegisterSession("admin:ssh1", "s2", "admin", "ssh1", "SSH1", 1920, 1080, &rdpvnc.Bridge{})
 
 	httpSess, _ := app.SessionStore.Create("admin")
 	req := httptest.NewRequest(http.MethodGet, "/api/rdp/sessions", nil)
@@ -1131,6 +1132,7 @@ func TestHandleRDPSessions_WithActiveSession(t *testing.T) {
 	}
 	var resp struct {
 		Items []struct {
+			SessionID  string `json:"session_id"`
 			TargetID   string `json:"target_id"`
 			TargetName string `json:"target_name"`
 		} `json:"items"`
@@ -1141,10 +1143,41 @@ func TestHandleRDPSessions_WithActiveSession(t *testing.T) {
 	if len(resp.Items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(resp.Items))
 	}
+	if resp.Items[0].SessionID == "" {
+		t.Fatalf("expected non-empty session_id")
+	}
 	if resp.Items[0].TargetID != "rdp1" {
 		t.Fatalf("expected target_id rdp1, got %s", resp.Items[0].TargetID)
 	}
 	if resp.Items[0].TargetName != "RDP1" {
 		t.Fatalf("expected target_name RDP1, got %s", resp.Items[0].TargetName)
+	}
+}
+
+func TestHandleRDPSessionDelete_Success(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	if app.RDPVNCManager == nil {
+		app.RDPVNCManager = rdpvnc.NewManager()
+	}
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "")
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
+
+	app.RDPVNCManager.RegisterSession("admin:rdp1", "s1", "admin", "rdp1", "RDP1", 1920, 1080, &rdpvnc.Bridge{})
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/rdp/sessions/s1", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Code)
+	}
+	if _, ok := app.RDPVNCManager.GetSession("s1"); ok {
+		t.Fatalf("expected session to be removed")
 	}
 }

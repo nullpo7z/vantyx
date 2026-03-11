@@ -370,7 +370,10 @@ func (a *App) NewRouter() http.Handler {
 	})
 	r.Get("/ws/ssh", a.handleSSHWebSocket)
 	r.Get("/ws/vnc", a.handleVNCWebSocket)
-	r.Get("/api/rdp/sessions", a.handleRDPSessions)
+	r.Route("/api/rdp/sessions", func(r chi.Router) {
+		r.Get("/", a.handleRDPSessions)
+		r.Delete("/{session_id}", a.handleRDPSessionDelete)
+	})
 	r.Get("/ws/rdp", a.handleRDPWebSocket)
 	r.Get("/ws/rdp/browser", a.handleRDPBrowserWebSocket)
 

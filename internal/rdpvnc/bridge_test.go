@@ -134,6 +134,61 @@ func TestBridgeStopNilProcesses(t *testing.T) {
 	_ = ctx
 }
 
+func TestBridgeStopZeroValueDoesNotPanic(t *testing.T) {
+	// Zero-value Bridge used in some HTTP tests as a placeholder.
+	// Stop should be safe even when cancel/done are nil.
+	b := &Bridge{}
+	b.Stop()
+}
+
+func TestManagerRegisterSessionGetListRemove(t *testing.T) {
+	m := NewManager()
+	done := make(chan struct{})
+	_, cancel := context.WithCancel(context.Background())
+	b := &Bridge{done: done, cancel: cancel, vncPort: 5901, width: 1920, height: 1080}
+
+	s := m.RegisterSession("u:t1", "sid1", "u", "t1", "T1", 1920, 1080, b)
+	if s == nil || s.ID != "sid1" || s.UserID != "u" || s.TargetID != "t1" {
+		t.Fatalf("unexpected session: %+v", s)
+	}
+	if got, ok := m.GetSession("sid1"); !ok || got.ID != "sid1" {
+		t.Fatalf("GetSession failed: ok=%v got=%+v", ok, got)
+	}
+	if got, ok := m.GetSessionByKey("u:t1"); !ok || got.ID != "sid1" {
+		t.Fatalf("GetSessionByKey failed: ok=%v got=%+v", ok, got)
+	}
+	list := m.ActiveSessionsForUser("u")
+	if len(list) != 1 || list[0].ID != "sid1" {
+		t.Fatalf("expected 1 active session sid1, got %+v", list)
+	}
+
+	m.RemoveSession("sid1")
+	if _, ok := m.GetSession("sid1"); ok {
+		t.Fatal("expected session removed")
+	}
+	if _, ok := m.GetSessionByKey("u:t1"); ok {
+		t.Fatal("expected key mapping removed")
+	}
+}
+
+func TestManagerRegisterSessionAutoCleanupOnDone(t *testing.T) {
+	m := NewManager()
+	done := make(chan struct{})
+	_, cancel := context.WithCancel(context.Background())
+	b := &Bridge{done: done, cancel: cancel}
+
+	_ = m.RegisterSession("u:t2", "sid2", "u", "t2", "T2", 800, 600, b)
+	close(done)
+	time.Sleep(50 * time.Millisecond)
+
+	if _, ok := m.GetSession("sid2"); ok {
+		t.Fatal("expected session to be auto-cleaned after done closed")
+	}
+	if _, ok := m.GetSessionByKey("u:t2"); ok {
+		t.Fatal("expected key mapping to be auto-cleaned after done closed")
+	}
+}
+
 func TestKillProcNil(t *testing.T) {
 	killProc(nil)
 }

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
@@ -1179,5 +1180,85 @@ func TestHandleRDPSessionDelete_Success(t *testing.T) {
 	}
 	if _, ok := app.RDPVNCManager.GetSession("s1"); ok {
 		t.Fatalf("expected session to be removed")
+	}
+}
+
+func TestHandleRDPSessionDelete_Unauthorized(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/rdp/sessions/s1", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestHandleRDPSessionDelete_NoManager(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	app.RDPVNCManager = nil
+	router := app.NewRouter()
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/rdp/sessions/s1", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestHandleRDPSessionDelete_NotOwner(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	if app.RDPVNCManager == nil {
+		app.RDPVNCManager = rdpvnc.NewManager()
+	}
+	router := app.NewRouter()
+
+	app.RDPVNCManager.RegisterSession("admin:rdp1", "s1", "admin", "rdp1", "RDP1", 1920, 1080, &rdpvnc.Bridge{})
+
+	_, _ = app.UserStore.CreateUser("u2", "user2", "User123!", "user")
+	httpSess, _ := app.SessionStore.Create("u2")
+	req := httptest.NewRequest(http.MethodDelete, "/api/rdp/sessions/s1", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestNewRDPSessionID_Format(t *testing.T) {
+	id, err := newRDPSessionID()
+	if err != nil {
+		t.Fatalf("newRDPSessionID: %v", err)
+	}
+	// 32 bytes => 64 hex chars
+	if len(id) != 64 {
+		t.Fatalf("expected 64 hex chars, got %d", len(id))
+	}
+}
+
+func TestHandleRDPSessionDelete_EmptySessionID_BadRequest(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	if app.RDPVNCManager == nil {
+		app.RDPVNCManager = rdpvnc.NewManager()
+	}
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/rdp/sessions/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+
+	// Call handler directly with empty chi URL param to cover bad-request branch.
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("session_id", "")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	w := httptest.NewRecorder()
+	app.handleRDPSessionDelete(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }

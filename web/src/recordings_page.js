@@ -244,7 +244,6 @@ export async function renderRecordingsPage({
           const res = await fetch(url, { credentials: 'include' })
           if (!res.ok) {
             const err = await res.json().catch(() => ({ message: res.statusText }))
-            // eslint-disable-next-line no-alert
             alert(
               err.message ||
                 '動画のダウンロードに失敗しました。サーバーに agg（および WebM の場合は ffmpeg）がインストールされている必要があります。',
@@ -258,7 +257,6 @@ export async function renderRecordingsPage({
           x.click()
           URL.revokeObjectURL(x.href)
         } catch (err) {
-          // eslint-disable-next-line no-alert
           alert(err.message || 'ダウンロードに失敗しました')
         }
       })

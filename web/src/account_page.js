@@ -87,7 +87,6 @@ export function showChangePasswordModal() {
     try {
       await API.changePassword({ current_password: current, new_password: newPass })
       close()
-      // eslint-disable-next-line no-alert
       alert('パスワードを変更しました')
     } catch (err) {
       errorEl.textContent = err.message || '変更に失敗しました'

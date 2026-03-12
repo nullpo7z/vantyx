@@ -119,7 +119,7 @@ export async function renderUsersPage({
   }
 }
 
-function showAddUserModal({ mainContent, escapeHtml, reload }) {
+function showAddUserModal({ reload }) {
   const modal = document.getElementById('add-user-modal')
   modal.classList.remove('hidden')
   modal.innerHTML = `

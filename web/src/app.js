@@ -3,7 +3,7 @@ import { renderLogin } from './login.js'
 import { initNav, setActiveNav } from './nav.js'
 import { renderUsersPage } from './users_page.js'
 import { renderRecordingsPage } from './recordings_page.js'
-import { renderUserInfo, showChangePasswordModal } from './account_page.js'
+import { renderUserInfo } from './account_page.js'
 import { renderGroupTargetsTable } from './targets_page.js'
 
 // TFTP 機能フラグ用の内部タグ名（サーバー管理画面での「TFTP を有効にする」に対応）
@@ -444,6 +444,13 @@ export function renderApp(container) {
     } catch (e) {
       modal.querySelector('#user-ssh-keys-list').innerHTML = `<p class="text-sm text-red-600">${escapeHtml(e.message || '取得に失敗しました')}</p>`
     }
+  }
+
+  // Keep legacy user modals reachable and marked as used for now.
+  window._vantyxLegacyUserModals = {
+    showAddUserModal,
+    showEditUserModal,
+    showUserSSHKeysModal,
   }
 
   function showChangePasswordModal() {

@@ -1685,6 +1685,10 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if cur == nil {
+		writeInternalError(w, errors.New("nil target in handleUpdateTarget"))
+		return
+	}
 	ctx := r.Context()
 	var req updateTargetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

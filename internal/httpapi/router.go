@@ -1685,10 +1685,6 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if cur == nil {
-		writeInternalError(w, errors.New("nil target in handleUpdateTarget"))
-		return
-	}
 	ctx := r.Context()
 	var req updateTargetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1711,9 +1707,11 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string
-	sshPassword = cur.SSHPassword
-	sshPrivateKey = cur.SSHPrivateKey
-	sshPrivateKeyPassphrase = cur.SSHPrivateKeyPassphrase
+	if cur != nil {
+		sshPassword = cur.SSHPassword
+		sshPrivateKey = cur.SSHPrivateKey
+		sshPrivateKeyPassphrase = cur.SSHPrivateKeyPassphrase
+	}
 	if req.SSHPassword != nil {
 		sshPassword = *req.SSHPassword
 	}

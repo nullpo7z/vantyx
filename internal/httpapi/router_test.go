@@ -220,6 +220,27 @@ func TestApp_Targets_WithTargets(t *testing.T) {
 	}
 }
 
+func TestTargetToResponse_BoolFlags(t *testing.T) {
+	tgt := &access.Target{
+		ID:           access.TargetID("t1"),
+		Name:         "name",
+		Host:         "host",
+		Port:         22,
+		Protocol:     access.ProtocolSSH,
+		Path:         "path",
+		SFTPEnabled:  false,
+		FTPEnabled:   true,
+		TFTPEnabled:  true,
+	}
+	resp := targetToResponse(tgt, nil)
+	if resp.ID != "t1" || resp.Name != "name" || resp.Host != "host" || resp.Port != 22 || resp.Protocol != "ssh" || resp.Path != "path" {
+		t.Fatalf("unexpected basic mapping: %+v", resp)
+	}
+	if resp.SFTPEnabled != false || !resp.FTPEnabled || !resp.TFTPEnabled {
+		t.Fatalf("unexpected protocol flags: sftp=%v ftp=%v tftp=%v", resp.SFTPEnabled, resp.FTPEnabled, resp.TFTPEnabled)
+	}
+}
+
 func TestApp_CreateTarget_Success(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
@@ -2458,7 +2479,7 @@ func TestApp_UpdateTarget_Success(t *testing.T) {
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
-	body := []byte(`{"name":"Updated","host":"10.0.0.2","port":2222,"protocol":"ssh","path":"","ssh_username":"","ssh_password":""}`)
+	body := []byte(`{"name":"Updated","host":"10.0.0.2","port":2222,"protocol":"ssh","path":"","ssh_username":"","ssh_password":"","sftp_enabled":false,"ftp_enabled":true,"tftp_enabled":true}`)
 	req := httptest.NewRequest(http.MethodPut, "/api/targets/t1", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
@@ -2474,6 +2495,9 @@ func TestApp_UpdateTarget_Success(t *testing.T) {
 	}
 	if out.Name != "Updated" || out.Host != "10.0.0.2" || out.Port != 2222 {
 		t.Fatalf("unexpected response: %+v", out)
+	}
+	if out.SFTPEnabled != false || !out.FTPEnabled || !out.TFTPEnabled {
+		t.Fatalf("unexpected protocol flags after update: sftp=%v ftp=%v tftp=%v", out.SFTPEnabled, out.FTPEnabled, out.TFTPEnabled)
 	}
 }
 
@@ -3449,6 +3473,135 @@ func TestTFTPWriteCloser_Write(t *testing.T) {
 	}
 	if n != 5 {
 		t.Fatalf("expected 5, got %d", n)
+	}
+}
+
+// --- TFTP server files handlers ---
+
+func setupAppWithTFTPServerTarget(t *testing.T, root string) (*App, string) {
+	t.Helper()
+	app := newTestApp(t)
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	// TFTP サーバー用ターゲット (プロトコル: tftp、機能フラグ: tftp_enabled=true)
+	id := access.TargetID("tftp1")
+	if _, err := app.TargetStore.CreateWithPath(ctx, id, "TFTP1", "127.0.0.1", 69, access.ProtocolTFTP, access.GroupID("g1"), "", "", "", "", "", false, false, true); err != nil {
+		t.Fatalf("CreateWithPath: %v", err)
+	}
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), id)
+	return app, string(id)
+}
+
+func withTFTPRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	old := os.Getenv("VANTYX_TFTP_ROOT")
+	if err := os.Setenv("VANTYX_TFTP_ROOT", root); err != nil {
+		t.Fatalf("set env: %v", err)
+	}
+	t.Cleanup(func() {
+		if old != "" {
+			_ = os.Setenv("VANTYX_TFTP_ROOT", old)
+		} else {
+			_ = os.Unsetenv("VANTYX_TFTP_ROOT")
+		}
+	})
+	return root
+}
+
+func TestTFTPServer_ListFiles_EmptyDir(t *testing.T) {
+	root := withTFTPRoot(t)
+	app, targetID := setupAppWithTFTPServerTarget(t, root)
+	router := app.NewRouter()
+	sessID := adminSession(t, app)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/tftp/targets/"+targetID+"/files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sessID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	res := w.Result()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.StatusCode, w.Body.String())
+	}
+	body, _ := io.ReadAll(res.Body)
+	if strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("expected empty JSON array, got %s", string(body))
+	}
+}
+
+func TestTFTPServer_UploadDownloadDelete(t *testing.T) {
+	root := withTFTPRoot(t)
+	app, targetID := setupAppWithTFTPServerTarget(t, root)
+	router := app.NewRouter()
+	sessID := adminSession(t, app)
+
+	// Upload
+	var buf bytes.Buffer
+	mp := multipart.NewWriter(&buf)
+	const relPath = "/dir/file.txt"
+	if err := mp.WriteField("path", relPath); err != nil {
+		t.Fatalf("WriteField: %v", err)
+	}
+	fw, err := mp.CreateFormFile("file", "file.txt")
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	const content = "hello tftp"
+	if _, err := fw.Write([]byte(content)); err != nil {
+		t.Fatalf("Write file content: %v", err)
+	}
+	_ = mp.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/tftp/targets/"+targetID+"/files/upload", &buf)
+	req.Header.Set("Content-Type", mp.FormDataContentType())
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sessID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("upload expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+
+	// Download
+	req = httptest.NewRequest(http.MethodGet, "/api/tftp/targets/"+targetID+"/files/download?path="+relPath, nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sessID, Path: "/"})
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("download expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+	downloaded, _ := io.ReadAll(w.Body)
+	if string(downloaded) != content {
+		t.Fatalf("downloaded content mismatch: got %q, want %q", string(downloaded), content)
+	}
+
+	// Delete
+	req = httptest.NewRequest(http.MethodDelete, "/api/tftp/targets/"+targetID+"/files?path="+relPath, nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sessID, Path: "/"})
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("delete expected 204, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+	fullPath := filepath.Join(root, targetID, "dir", "file.txt")
+	if _, err := os.Stat(fullPath); !os.IsNotExist(err) {
+		t.Fatalf("expected file to be removed, stat err=%v", err)
+	}
+}
+
+// --- convertCastToVideo ---
+
+func TestConvertCastToVideo_NoAggInPath(t *testing.T) {
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", ""); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	defer func() {
+		_ = os.Setenv("PATH", oldPath)
+	}()
+	if _, _, _, err := convertCastToVideo("/tmp/nonexistent.cast", "gif"); err == nil {
+		t.Fatal("expected error when agg is not found in PATH")
 	}
 }
 

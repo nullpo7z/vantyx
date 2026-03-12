@@ -153,7 +153,6 @@ func (a *ftpClientAdapter) Open(path string) (FileTransferFile, error) {
 	return f, nil
 }
 
-
 // remotePath returns the path query parameter, defaulting to "/". No local filesystem use.
 func remotePath(r *http.Request) string {
 	p := strings.TrimSpace(r.URL.Query().Get("path"))

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -30,6 +31,109 @@ func newTestAppForTerminal(t *testing.T) *App {
 	}
 	return NewApp()
 }
+
+// --- allowedWebSocketOrigin ---
+
+func TestAllowedWebSocketOrigin_SameOriginHTTPS(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/ws", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.TLS = &tls.ConnectionState{}
+	req.Host = "example.com"
+	req.Header.Set("Origin", "https://example.com")
+	if !allowedWebSocketOrigin(req) {
+		t.Fatal("expected same-origin HTTPS request to be allowed")
+	}
+}
+
+func TestAllowedWebSocketOrigin_NoOriginLoopbackAllowed(t *testing.T) {
+	old := os.Getenv("VANTYX_ALLOW_WS_NO_ORIGIN")
+	_ = os.Setenv("VANTYX_ALLOW_WS_NO_ORIGIN", "1")
+	defer func() {
+		if old != "" {
+			_ = os.Setenv("VANTYX_ALLOW_WS_NO_ORIGIN", old)
+		} else {
+			_ = os.Unsetenv("VANTYX_ALLOW_WS_NO_ORIGIN")
+		}
+	}()
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/ws", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	if !allowedWebSocketOrigin(req) {
+		t.Fatal("expected no-Origin loopback request to be allowed when VANTYX_ALLOW_WS_NO_ORIGIN=1")
+	}
+}
+
+// --- readTerminalCredentials ---
+
+type fakeWSConn struct {
+	msgType int
+	data    []byte
+}
+
+func (f *fakeWSConn) ReadMessage() (int, []byte, error) {
+	return f.msgType, f.data, nil
+}
+
+func (f *fakeWSConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+
+func TestReadTerminalCredentials_UseStored(t *testing.T) {
+	target := &access.Target{
+		SSHUsername:             "user",
+		SSHPassword:             "stored-pass",
+		SSHPrivateKey:           "key",
+		SSHPrivateKeyPassphrase: "",
+	}
+	msg := wsAuthMessage{
+		UseStoredCredentials: true,
+		Password:             "override-pass",
+		PrivateKeyPassphrase: "runtime-pass",
+		Name:                 "n",
+		Description:          "d",
+	}
+	b, _ := json.Marshal(msg)
+	conn := &fakeWSConn{msgType: websocket.TextMessage, data: b}
+	creds, err := readTerminalCredentials(conn, target)
+	if err != nil {
+		t.Fatalf("readTerminalCredentials returned error: %v", err)
+	}
+	if creds.Username != "user" || creds.Password != "override-pass" || creds.PrivateKey != "key" || creds.PrivateKeyPassphrase != "runtime-pass" {
+		t.Fatalf("unexpected creds: %+v", creds)
+	}
+	if creds.Name != "n" || creds.Description != "d" {
+		t.Fatalf("unexpected name/description: %+v", creds)
+	}
+}
+
+func TestReadTerminalCredentials_ExplicitUsernameWithKeyPassphrase(t *testing.T) {
+	target := &access.Target{
+		SSHPrivateKey: "key",
+	}
+	msg := wsAuthMessage{
+		Username:             "u",
+		Password:             "p",
+		PrivateKeyPassphrase: "pp",
+		Name:                 "n",
+		Description:          "d",
+	}
+	b, _ := json.Marshal(msg)
+	conn := &fakeWSConn{msgType: websocket.TextMessage, data: b}
+	creds, err := readTerminalCredentials(conn, target)
+	if err != nil {
+		t.Fatalf("readTerminalCredentials returned error: %v", err)
+	}
+	if creds.Username != "u" || creds.Password != "p" {
+		t.Fatalf("unexpected basic creds: %+v", creds)
+	}
+	if creds.PrivateKey != "key" || creds.PrivateKeyPassphrase != "pp" {
+		t.Fatalf("expected target key with provided passphrase, got %+v", creds)
+	}
+	if creds.Name != "n" || creds.Description != "d" {
+		t.Fatalf("unexpected name/description: %+v", creds)
+	}
+}
+
+// (helper removed – readTerminalCredentials is tested via fakeWSConn)
 
 func TestHandleSSHWebSocket_UnauthorizedWithoutCookie(t *testing.T) {
 	app := newTestAppForTerminal(t)

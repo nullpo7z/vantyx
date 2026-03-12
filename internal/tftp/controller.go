@@ -142,4 +142,3 @@ func NotifyTargetDeleted(proto access.Protocol) {
 	defaultController.server = nil
 	defaultController.running = false
 }
-

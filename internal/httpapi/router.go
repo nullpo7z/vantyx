@@ -1760,8 +1760,8 @@ type updateTargetRequest struct {
 	Path                    string  `json:"path"`
 	SSHUsername             string  `json:"ssh_username"`
 	SSHPassword             *string `json:"ssh_password,omitempty"`               // nil = 変更しない、空文字 = クリア
-	SSHPrivateKey           *string `json:"ssh_private_key,omitempty"`             // nil = 変更しない、空文字 = クリア
-	SSHPrivateKeyPassphrase *string `json:"ssh_private_key_passphrase,omitempty"`   // nil = 変更しない、空文字 = クリア
+	SSHPrivateKey           *string `json:"ssh_private_key,omitempty"`            // nil = 変更しない、空文字 = クリア
+	SSHPrivateKeyPassphrase *string `json:"ssh_private_key_passphrase,omitempty"` // nil = 変更しない、空文字 = クリア
 	SFTPEnabled             *bool   `json:"sftp_enabled,omitempty"`
 	FTPEnabled              *bool   `json:"ftp_enabled,omitempty"`
 	TFTPEnabled             *bool   `json:"tftp_enabled,omitempty"`

@@ -204,4 +204,3 @@ func (c *Client) RemoveAll(p string) error {
 	}
 	return c.conn.Delete(p)
 }
-

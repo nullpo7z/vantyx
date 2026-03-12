@@ -114,9 +114,15 @@ type wsAuthMessage struct {
 	Description          string `json:"description"`
 }
 
+// wsReadConn is the minimal interface needed from *websocket.Conn for readTerminalCredentials.
+type wsReadConn interface {
+	ReadMessage() (int, []byte, error)
+	SetReadDeadline(time.Time) error
+}
+
 // readTerminalCredentials reads the first text message and returns credentials.
 // If use_stored_credentials is true, uses target's stored SSH username/password/key; client may send password or private_key_passphrase when not stored.
-func readTerminalCredentials(conn *websocket.Conn, target *access.Target) (sshproxy.Credentials, error) {
+func readTerminalCredentials(conn wsReadConn, target *access.Target) (sshproxy.Credentials, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	mt, msg, err := conn.ReadMessage()

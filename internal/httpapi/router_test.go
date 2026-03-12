@@ -822,7 +822,7 @@ func TestApp_CreateTarget_InvalidProtocol_BadRequest(t *testing.T) {
 		t.Fatalf("Create session: %v", err)
 	}
 
-	body := []byte(`{"name":"Bad","host":"10.0.0.2","port":22,"protocol":"ftp","group_id":"default"}`)
+	body := []byte(`{"name":"Bad","host":"10.0.0.2","port":22,"protocol":"http","group_id":"default"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/targets", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})

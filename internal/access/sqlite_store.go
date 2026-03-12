@@ -94,10 +94,10 @@ func validateHost(host string) error {
 // validateProtocol ensures protocol is in the allowed whitelist (ASVS V5.1.4).
 func validateProtocol(protocol Protocol) error {
 	switch protocol {
-	case ProtocolSSH, ProtocolTelnet, ProtocolVNC, ProtocolTFTP, ProtocolRDP:
+	case ProtocolSSH, ProtocolTelnet, ProtocolVNC, ProtocolTFTP, ProtocolRDP, ProtocolFTP:
 		return nil
 	default:
-		return errors.New("protocol must be ssh, telnet, vnc, tftp, or rdp")
+		return errors.New("protocol must be ssh, telnet, vnc, tftp, ftp, or rdp")
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path"
@@ -13,6 +14,14 @@ import (
 
 	jftp "github.com/jlaffaye/ftp"
 )
+
+// ftpSizeToInt64 converts FTP entry size (uint64) to int64 for os.FileInfo, capping at math.MaxInt64.
+func ftpSizeToInt64(u uint64) int64 {
+	if u > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(u)
+}
 
 // Client is a minimal FTP client wrapper that provides directory listing
 // and file transfer operations used by the HTTP file handlers.
@@ -86,7 +95,7 @@ func (c *Client) ReadDir(p string) ([]os.FileInfo, error) {
 		}
 		out = append(out, ftpFileInfo{
 			name:    e.Name,
-			size:    int64(e.Size),
+			size:    ftpSizeToInt64(e.Size),
 			mode:    mode,
 			modTime: e.Time,
 			isDir:   isDir,
@@ -115,7 +124,7 @@ func (c *Client) stat(p string) (os.FileInfo, error) {
 			}
 			return ftpFileInfo{
 				name:    e.Name,
-				size:    int64(e.Size),
+				size:    ftpSizeToInt64(e.Size),
 				mode:    mode,
 				modTime: e.Time,
 				isDir:   isDir,

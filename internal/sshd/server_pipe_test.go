@@ -41,7 +41,7 @@ func setupServerWithTCPEmptyGroups(t *testing.T) (*Server, string, ssh.Signer) {
 	_, _ = groupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = groupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
 	// Only telnet target -> no SSH targets -> loadGroupsWithSSHTargets returns empty
-	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "telnet1", "127.0.0.1", 23, access.ProtocolTelnet, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "telnet1", "127.0.0.1", 23, access.ProtocolTelnet, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	_ = groupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	mgr := session.NewManager()
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -84,7 +84,7 @@ func setupServerWithTCP(t *testing.T) (*Server, string, ssh.Signer) {
 	ctx := context.Background()
 	_, _ = groupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = groupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "srv1", "127.0.0.1", 1, access.ProtocolSSH, access.GroupID("g1"), "g1", "root", "pass", "", "")
+	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "srv1", "127.0.0.1", 1, access.ProtocolSSH, access.GroupID("g1"), "g1", "root", "pass", "", "", true, false, false)
 	_ = groupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	mgr := session.NewManager()
 
@@ -372,7 +372,7 @@ func setupServerWithTCPNoCreds(t *testing.T) (*Server, string, ssh.Signer) {
 	_, _ = groupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = groupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
 	// Target with no SSH username/password -> connect prompts for them
-	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "srv1", "127.0.0.1", 1, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "srv1", "127.0.0.1", 1, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = groupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	mgr := session.NewManager()
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -526,7 +526,7 @@ func TestServer_Serve_AcceptError(t *testing.T) {
 	ctx := context.Background()
 	_, _ = groupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = groupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "srv1", "127.0.0.1", 1, access.ProtocolSSH, access.GroupID("g1"), "g1", "root", "pass", "", "")
+	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "srv1", "127.0.0.1", 1, access.ProtocolSSH, access.GroupID("g1"), "g1", "root", "pass", "", "", true, false, false)
 	_ = groupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	signer, _ := ssh.NewSignerFromKey(key)

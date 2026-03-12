@@ -5,6 +5,8 @@ import 'asciinema-player/dist/bundle/asciinema-player.css'
 
 // TFTP 機能フラグ用の内部タグ名（サーバー管理画面での「TFTP を有効にする」に対応）
 const TFTP_CAPABILITY_TAG = 'tftp_enabled'
+// SFTP 無効化用の内部タグ（SSH ターゲットで「ファイル転送で使用するプロトコル」の SFTP をオフにした場合に付与）
+const SFTP_DISABLED_TAG = 'no-sftp'
 
 export function renderApp(container) {
   container.innerHTML = `
@@ -91,6 +93,9 @@ export function renderApp(container) {
         if (m && !m.classList.contains('hidden') && typeof m._vantyxRefreshActiveSessions === 'function') {
           m._vantyxRefreshActiveSessions()
         }
+        if (typeof window.vantyxUpdateActiveSessionCounts === 'function') {
+          window.vantyxUpdateActiveSessionCounts()
+        }
       } catch { /* ignore */ }
       window.clearTimeout(timeoutId)
       try { bc.close() } catch { /* ignore */ }
@@ -151,6 +156,9 @@ export function renderApp(container) {
       const m = document.getElementById('active-sessions-modal')
       if (m && !m.classList.contains('hidden') && typeof m._vantyxRefreshActiveSessions === 'function') {
         m._vantyxRefreshActiveSessions()
+      }
+      if (typeof window.vantyxUpdateActiveSessionCounts === 'function') {
+        window.vantyxUpdateActiveSessionCounts()
       }
     } catch { /* ignore */ }
   })
@@ -1001,7 +1009,7 @@ export function renderApp(container) {
       try {
         const [sessionsRes, rdpRes] = await Promise.all([API.terminalSessions(), API.rdpSessions()])
         const allSessions = sessionsRes.items || []
-        const sessions = targetIdsInGroup.length > 0
+            const sessions = targetIdsInGroup.length > 0
           ? allSessions.filter((s) => targetIdsInGroup.includes(s.target_id))
           : allSessions
         const allRdp = rdpRes.items || []
@@ -1068,7 +1076,7 @@ export function renderApp(container) {
           parts.push(`<div class="mb-4"><h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">RDP（ブラウザ）</h4><ul class="space-y-2">${rdpHtml}</ul></div>`)
         }
         bodyEl.innerHTML = parts.join('')
-        bodyEl.querySelectorAll('[data-terminal-reconnect-session-id]').forEach((btn) => {
+            bodyEl.querySelectorAll('[data-terminal-reconnect-session-id]').forEach((btn) => {
           btn.addEventListener('click', () => {
             const sid = btn.getAttribute('data-terminal-reconnect-session-id') || ''
             if (!sid) return
@@ -1089,7 +1097,7 @@ export function renderApp(container) {
                 return
               }
               const name = `${targetId} (TFTP)`
-              const url = `/tftp-console?tftp_target_id=${encodeURIComponent(tftpTargetId)}&ssh_target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(name)}`
+              const url = `/tftp-console?tftp_target_id=${encodeURIComponent(tftpTargetId)}&ssh_target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(name)}&session_id=${encodeURIComponent(sid)}`
               openTerminalTabWithParent(url)
               return
             }
@@ -1554,7 +1562,12 @@ export function renderApp(container) {
               needs_passphrase: btn.dataset.targetNeedsPassphrase === '1',
               group_id: btn.dataset.targetGroupId || '',
               has_tftp_for_host: btn.dataset.targetHasTftpForHost === '1',
-              tftp_target_id: btn.dataset.targetTftpTargetId || '',
+              tftp_target_id: btn.dataset.targetTftpId || '',
+              has_ftp_for_host: btn.dataset.targetHasFtpForHost === '1',
+              ftp_target_id: btn.dataset.targetFtpId || '',
+              sftp_enabled: btn.dataset.targetSftpEnabled === '1',
+              ftp_enabled: btn.dataset.targetFtpEnabled === '1',
+              tftp_enabled: btn.dataset.targetTftpEnabled === '1',
             }
             if (target.id) showEditTargetModal(target)
           })
@@ -1575,6 +1588,42 @@ export function renderApp(container) {
           })
         })
       } else {
+        // アクティブなセッション数を定期的に取得して、ボタンのラベルにリアルタイム反映する。
+        const updateActiveSessionCounts = async () => {
+          try {
+            const [sessionsRes, rdpRes] = await Promise.all([API.terminalSessions(), API.rdpSessions()])
+            const termItems = Array.isArray(sessionsRes.items) ? sessionsRes.items : []
+            const rdpItems = Array.isArray(rdpRes.items) ? rdpRes.items : []
+            const counts = {}
+            termItems.forEach((s) => {
+              const tid = s.target_id
+              if (!tid) return
+              counts[tid] = (counts[tid] || 0) + 1
+            })
+            rdpItems.forEach((s) => {
+              const tid = s.target_id
+              if (!tid) return
+              counts[tid] = (counts[tid] || 0) + 1
+            })
+            mainContent.querySelectorAll('.active-sessions-btn').forEach((btn) => {
+              const targetId = btn.dataset.targetId || ''
+              const baseLabel = 'アクティブなセッション'
+              const n = targetId ? (counts[targetId] || 0) : 0
+              btn.textContent = `${baseLabel} (${n})`
+            })
+          } catch (e) {
+            console.error('Failed to load active session counts', e)
+          }
+        }
+        // グローバルからも呼べるようにする（ターミナルタブからの戻り時など）。
+        window.vantyxUpdateActiveSessionCounts = updateActiveSessionCounts
+        // 初回即時反映
+        updateActiveSessionCounts()
+        // 既存のポーリングがあればクリアしてから開始（タブ内での再描画に対応）
+        if (window.vantyxActiveSessionPoll) {
+          window.clearInterval(window.vantyxActiveSessionPoll)
+        }
+        window.vantyxActiveSessionPoll = window.setInterval(updateActiveSessionCounts, 5000)
         mainContent.querySelectorAll('.active-sessions-btn').forEach((btn) => {
           btn.addEventListener('click', (e) => {
             e.preventDefault()
@@ -1610,11 +1659,36 @@ export function renderApp(container) {
                   chk.dataset.tftpExistingId = createdTftp.id
                 }
               } else {
-                // OFF にした場合は紐づく TFTP ターゲットを削除（サーバー停止）。
-                const tftpId = existingId
-                if (tftpId) {
-                  await API.deleteTarget(tftpId)
-                  chk.dataset.tftpExistingId = ''
+                // OFF にする前に、この TFTP ターゲットに紐づくアクティブな TFTP セッションが無いか確認する。
+                if (existingId) {
+                  try {
+                    const sessionsRes = await API.terminalSessions()
+                    const items = Array.isArray(sessionsRes.items) ? sessionsRes.items : []
+                    const hasTftpSession = items.some((s) => {
+                      const desc = s.description || ''
+                      return typeof desc === 'string'
+                        && desc.startsWith('TFTP_CONSOLE:')
+                        && desc.includes(`tftp_target_id=${existingId}`)
+                    })
+                    if (hasTftpSession) {
+                      // アクティブな TFTP セッションがある場合は OFF にできない。
+                      window.alert('この TFTP サーバーにはアクティブな TFTP セッションがあるため、OFF にできません。先にセッションを終了してください。')
+                      chk.checked = true
+                      return
+                    }
+                  } catch (e) {
+                    console.error('Failed to check TFTP sessions', e)
+                    // セッション状態が確認できない場合は、安全のため OFF を拒否する。
+                    window.alert('アクティブな TFTP セッションの確認に失敗しました。後でもう一度お試しください。')
+                    chk.checked = true
+                    return
+                  }
+                  // OFF にした場合は紐づく TFTP ターゲットを削除（サーバー停止）。
+                  const tftpId = existingId
+                  if (tftpId) {
+                    await API.deleteTarget(tftpId)
+                    chk.dataset.tftpExistingId = ''
+                  }
                 }
               }
               // ツリーを再読み込みして表示と状態を同期。
@@ -1631,22 +1705,37 @@ export function renderApp(container) {
         mainContent.querySelectorAll('.files-open-btn').forEach((btn) => {
           btn.addEventListener('click', (e) => {
             e.preventDefault()
+            if (btn.disabled || btn.dataset.filesDisabled === '1') {
+              return
+            }
             const targetId = btn.dataset.filesTargetId || ''
             const targetName = btn.dataset.filesTargetName || ''
             const proto = btn.dataset.filesProtocol || 'ssh'
             const hostForTftp = btn.dataset.filesHost || ''
             if (!targetId) return
             const actions = []
+            const sftpEnabled = btn.dataset.filesSftpEnabled === '1'
             if (proto === 'ssh') {
-              actions.push({
-                label: 'SFTP (SSH)',
-                onSelect: () => {
-                  const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=sftp`
-                  window.location.href = url
-                },
-              })
-              // SSH ホストで TFTP サーバーが起動中なら、「TFTP + コンソール」ページを選べるようにする。
+              if (sftpEnabled) {
+                actions.push({
+                  label: 'SFTP (SSH)',
+                  onSelect: () => {
+                    const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=sftp`
+                    window.location.href = url
+                  },
+                })
+              }
               if (hostForTftp) {
+                const ftpTarget = targets.find((t) => t.protocol === 'ftp' && t.host === hostForTftp)
+                if (ftpTarget) {
+                  actions.push({
+                    label: 'FTP',
+                    onSelect: () => {
+                      const url = `/files?target_id=${encodeURIComponent(ftpTarget.id)}&target_name=${encodeURIComponent(ftpTarget.name || targetName || '')}&protocol=ftp`
+                      window.location.href = url
+                    },
+                  })
+                }
                 const tftpTarget = targets.find((t) => t.protocol === 'tftp' && t.host === hostForTftp)
                 if (tftpTarget) {
                   actions.push({
@@ -1654,7 +1743,7 @@ export function renderApp(container) {
                     onSelect: () => {
                       const name = tftpTarget.name || hostForTftp
                       const url = `/tftp-console?tftp_target_id=${encodeURIComponent(tftpTarget.id)}&ssh_target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(name)}`
-                      window.location.href = url
+                      openTerminalTabWithParent(url)
                     },
                   })
                 }
@@ -1785,7 +1874,7 @@ export function renderApp(container) {
             <button id="add-target-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="add-target-form">
-            <div class="px-6 py-5 space-y-5">
+            <div class="px-6 py-5 space-y-5 max-h-[70vh] overflow-y-auto">
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">名前</label>
                 <input type="text" id="add-target-name" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="例: My Server" />
@@ -1825,11 +1914,21 @@ export function renderApp(container) {
                   <input type="number" id="add-target-rdp-height" min="480" max="2160" value="1080" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
                 </div>
               </div>
-              <div id="add-target-tftp-wrap" class="flex items-start gap-2 hidden">
-                <input type="checkbox" id="add-target-enable-tftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-                <div class="space-y-0.5">
-                  <p class="text-xs font-medium text-slate-700">TFTP を有効にする</p>
-                  <p class="text-[11px] text-slate-500">このホストを TFTP サーバーとして登録し、同じ IP からの TFTP アクセスのみ許可します（Cisco などからのコンフィグ転送用）。</p>
+              <div id="add-target-file-protocols-wrap" class="space-y-3 hidden">
+                <p class="text-xs font-medium text-slate-700">ファイル転送で使用するプロトコル</p>
+                <div class="space-y-2 pl-0">
+                  <label id="add-target-sftp-label" class="flex items-start gap-2 cursor-pointer hidden">
+                    <input type="checkbox" id="add-target-enable-sftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                    <span class="text-sm text-slate-800">SFTP（SSH で利用可）</span>
+                  </label>
+                  <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="add-target-enable-ftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                    <span class="text-sm text-slate-800">FTP</span>
+                  </label>
+                  <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="add-target-enable-tftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                    <span class="text-sm text-slate-800">TFTP（Cisco などからのコンフィグ転送用）</span>
+                  </label>
                 </div>
               </div>
               <div id="add-target-cred-fields">
@@ -1892,7 +1991,10 @@ export function renderApp(container) {
     const addRdpResWrap = modal.querySelector('#add-target-rdp-res-wrap')
     const addRdpWidthInput = modal.querySelector('#add-target-rdp-width')
     const addRdpHeightInput = modal.querySelector('#add-target-rdp-height')
-    const addTftpWrap = modal.querySelector('#add-target-tftp-wrap')
+    const addFileProtocolsWrap = modal.querySelector('#add-target-file-protocols-wrap')
+    const addSftpLabel = modal.querySelector('#add-target-sftp-label')
+    const addSftpCheckbox = modal.querySelector('#add-target-enable-sftp')
+    const addFtpCheckbox = modal.querySelector('#add-target-enable-ftp')
     const addTftpCheckbox = modal.querySelector('#add-target-enable-tftp')
     function syncAddAuthType() {
       const proto = addProtoSelect.value
@@ -1916,10 +2018,15 @@ export function renderApp(container) {
       addUsernameLabel.textContent = proto === 'rdp' ? 'RDP ユーザー名（任意）' : proto === 'ftp' ? 'FTP ユーザー名（任意）' : 'SSH ユーザー名（任意）'
       addPasswordLabel.textContent = proto === 'rdp' ? 'RDP パスワード（任意）' : proto === 'ftp' ? 'FTP パスワード（任意）' : 'SSH パスワード（任意）'
       addRdpResWrap.classList.toggle('hidden', proto !== 'rdp')
-      const canEnableTftp = proto === 'ssh' || proto === 'telnet'
-      addTftpWrap.classList.toggle('hidden', !canEnableTftp)
-      if (!canEnableTftp && addTftpCheckbox) {
-        addTftpCheckbox.checked = false
+      const canEditFileProtocols = proto === 'ssh' || proto === 'telnet'
+      addFileProtocolsWrap.classList.toggle('hidden', !canEditFileProtocols)
+      if (addSftpLabel && addSftpCheckbox) {
+        addSftpLabel.classList.toggle('hidden', proto !== 'ssh')
+        addSftpCheckbox.checked = proto === 'ssh' // 新規追加時はデフォルトで SFTP 有効
+      }
+      if (!canEditFileProtocols) {
+        if (addFtpCheckbox) addFtpCheckbox.checked = false
+        if (addTftpCheckbox) addTftpCheckbox.checked = false
       }
       if (defaultPorts[proto] !== undefined) {
         addPortInput.value = defaultPorts[proto]
@@ -1981,21 +2088,38 @@ export function renderApp(container) {
         rdpW = parseInt(addRdpWidthInput.value, 10) || 1920
         rdpH = parseInt(addRdpHeightInput.value, 10) || 1080
       }
-      const enableTftp = !!(addTftpCheckbox && !addTftpWrap.classList.contains('hidden') && addTftpCheckbox.checked)
+      const enableSftp = !(addSftpCheckbox && addFileProtocolsWrap && !addFileProtocolsWrap.classList.contains('hidden') && addSftpCheckbox.checked === false)
+      const enableFtp = !!(addFtpCheckbox && !addFileProtocolsWrap.classList.contains('hidden') && addFtpCheckbox.checked)
+      const enableTftp = !!(addTftpCheckbox && !addFileProtocolsWrap.classList.contains('hidden') && addTftpCheckbox.checked)
+      if (protocol === 'ssh' || protocol === 'telnet') {
+        payload.sftp_enabled = protocol === 'ssh' ? enableSftp : false
+        payload.ftp_enabled = enableFtp
+        payload.tftp_enabled = enableTftp
+      }
       submitBtn.disabled = true
       try {
         const created = await API.createTarget(payload)
         if (protocol === 'rdp' && created && created.id) {
           setRdpResolutionForTarget(created.id, rdpW, rdpH)
         }
-        // このホストが TFTP を使用する場合は、機能フラグ用タグを付与する。
-        if (enableTftp && created && created.id) {
-          try {
-            const baseTags = Array.isArray(created.tags) ? created.tags.filter((t) => t !== TFTP_CAPABILITY_TAG) : []
-            baseTags.push(TFTP_CAPABILITY_TAG)
-            await API.setTargetTags(created.id, baseTags)
-          } catch (tftpTagErr) {
-            console.error('Failed to set TFTP capability tag', tftpTagErr)
+        // FTP は引き続き自動で補助ターゲットを作成するが、
+        // TFTP はここではターゲットを自動作成しない（ホーム画面の TFTP トグルのみで起動する）。
+        if (created && created.id && (protocol === 'ssh' || protocol === 'telnet')) {
+          if (enableFtp) {
+            try {
+              await API.createTarget({
+                name: `${name} (FTP)`,
+                host,
+                port: 21,
+                protocol: 'ftp',
+                group_id,
+                path: group_id || '',
+                ssh_username: ssh_username || '',
+                ...(payload.ssh_password !== undefined && { ssh_password: payload.ssh_password }),
+              })
+            } catch (ftpErr) {
+              console.error('Failed to create FTP target', ftpErr)
+            }
           }
         }
         modal.classList.add('hidden')
@@ -2022,7 +2146,7 @@ export function renderApp(container) {
             <button id="edit-target-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="edit-target-form" data-edit-target-id="${escapeHtml(target.id)}">
-            <div class="px-6 py-5 space-y-5">
+            <div class="px-6 py-5 space-y-5 max-h-[70vh] overflow-y-auto">
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">名前</label>
                 <input type="text" id="edit-target-name" required value="${escapeHtml(target.name)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
@@ -2091,11 +2215,21 @@ export function renderApp(container) {
                 <input type="text" id="edit-target-tags" value="${escapeHtml((target.tags || []).join(', '))}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: prod, network, ops" />
                 <div id="edit-target-tags-picker" class="mt-2"></div>
               </div>
-              <div id="edit-target-tftp-wrap" class="flex items-start gap-2 hidden">
-                <input type="checkbox" id="edit-target-enable-tftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-                <div class="space-y-0.5">
-                  <p class="text-xs font-medium text-slate-700">TFTP を有効にする</p>
-                  <p class="text-[11px] text-slate-500">このホストを TFTP サーバーとして登録し、同じ IP からの TFTP アクセスのみ許可します（Cisco などからのコンフィグ転送用）。</p>
+              <div id="edit-target-file-protocols-wrap" class="space-y-3 hidden">
+                <p class="text-xs font-medium text-slate-700">ファイル転送で使用するプロトコル</p>
+                <div class="space-y-2 pl-0">
+                  <label id="edit-target-sftp-label" class="flex items-start gap-2 cursor-pointer hidden">
+                    <input type="checkbox" id="edit-target-enable-sftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                    <span class="text-sm text-slate-800">SFTP（SSH で利用可）</span>
+                  </label>
+                  <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="edit-target-enable-ftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                    <span class="text-sm text-slate-800">FTP</span>
+                  </label>
+                  <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="edit-target-enable-tftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                    <span class="text-sm text-slate-800">TFTP（Cisco などからのコンフィグ転送用）</span>
+                  </label>
                 </div>
               </div>
               <div id="edit-target-rdp-res-wrap" class="grid grid-cols-2 gap-4 hidden">
@@ -2118,8 +2252,8 @@ export function renderApp(container) {
         </div>
       </div>
     `
-    // 画面上のタグ入力からは内部タグ（TFTP_CAPABILITY_TAG）を除外して表示する。
-    const displayTags = (target.tags || []).filter((t) => t !== TFTP_CAPABILITY_TAG)
+    // 画面上のタグ入力からは内部タグ（TFTP_CAPABILITY_TAG, SFTP_DISABLED_TAG）を除外して表示する。
+    const displayTags = (target.tags || []).filter((t) => t !== TFTP_CAPABILITY_TAG && t !== SFTP_DISABLED_TAG)
     const tagsInput = modal.querySelector('#edit-target-tags')
     if (tagsInput) {
       tagsInput.value = escapeHtml((displayTags || []).join(', '))
@@ -2138,7 +2272,10 @@ export function renderApp(container) {
     const editRdpResWrap = modal.querySelector('#edit-target-rdp-res-wrap')
     const editRdpWidthInput = modal.querySelector('#edit-target-rdp-width')
     const editRdpHeightInput = modal.querySelector('#edit-target-rdp-height')
-    const editTftpWrap = modal.querySelector('#edit-target-tftp-wrap')
+    const editFileProtocolsWrap = modal.querySelector('#edit-target-file-protocols-wrap')
+    const editSftpLabel = modal.querySelector('#edit-target-sftp-label')
+    const editSftpCheckbox = modal.querySelector('#edit-target-enable-sftp')
+    const editFtpCheckbox = modal.querySelector('#edit-target-enable-ftp')
     const editTftpCheckbox = modal.querySelector('#edit-target-enable-tftp')
 
     function syncEditAuthType() {
@@ -2163,12 +2300,19 @@ export function renderApp(container) {
       editUsernameLabel.textContent = proto === 'rdp' ? 'RDP ユーザー名（任意）' : proto === 'ftp' ? 'FTP ユーザー名（任意）' : 'SSH ユーザー名（任意）'
       editPasswordLabel.textContent = proto === 'rdp' ? 'RDP パスワード（任意）' : proto === 'ftp' ? 'FTP パスワード（任意）' : 'SSH パスワード（任意）'
       editRdpResWrap.classList.toggle('hidden', proto !== 'rdp')
-      const canEnableTftp = proto === 'ssh' || proto === 'telnet'
-      if (editTftpWrap) {
-        editTftpWrap.classList.toggle('hidden', !canEnableTftp)
-        if (!canEnableTftp && editTftpCheckbox) {
-          editTftpCheckbox.checked = false
-        }
+      const canEditFileProtocols = proto === 'ssh' || proto === 'telnet'
+      if (editFileProtocolsWrap) {
+        editFileProtocolsWrap.classList.toggle('hidden', !canEditFileProtocols)
+      }
+      if (editSftpLabel && editSftpCheckbox) {
+        editSftpLabel.classList.toggle('hidden', proto !== 'ssh')
+        // DB の sftp_enabled のみで判定（タグには依存しない）
+        const sftpEnabled = proto === 'ssh' && (target.sftp_enabled !== false)
+        editSftpCheckbox.checked = sftpEnabled
+      }
+      if (!canEditFileProtocols) {
+        if (editFtpCheckbox) editFtpCheckbox.checked = false
+        if (editTftpCheckbox) editTftpCheckbox.checked = false
       }
       syncEditAuthType()
     }
@@ -2189,12 +2333,16 @@ export function renderApp(container) {
     if (initialAuthRadio) initialAuthRadio.checked = true
     syncEditProtocol()
 
-    // TFTP 対応ホストであれば、初期状態でチェックを反映する。
-    if (editTftpCheckbox && (target.protocol === 'ssh' || target.protocol === 'telnet') && target.has_tftp_for_host) {
-      editTftpCheckbox.checked = true
-      if (editTftpWrap) {
-        editTftpWrap.classList.remove('hidden')
+    // ファイル転送プロトコルの初期状態（SFTP は SSH のときのみ選択可能）
+    if ((target.protocol === 'ssh' || target.protocol === 'telnet') && editFileProtocolsWrap) {
+      editFileProtocolsWrap.classList.remove('hidden')
+      if (editSftpLabel) editSftpLabel.classList.toggle('hidden', target.protocol !== 'ssh')
+      if (editSftpCheckbox) {
+        const sftpEnabled = target.protocol === 'ssh' && (target.sftp_enabled !== false)
+        editSftpCheckbox.checked = sftpEnabled
       }
+      if (editFtpCheckbox) editFtpCheckbox.checked = !!target.ftp_enabled
+      if (editTftpCheckbox) editTftpCheckbox.checked = !!target.tftp_enabled
     }
 
     const { w: initialRdpW, h: initialRdpH } = getRdpResolutionForTarget(target.id)
@@ -2238,24 +2386,24 @@ export function renderApp(container) {
         }
       }
       const tagsRaw = modal.querySelector('#edit-target-tags').value.trim()
-      // 画面上のタグ入力には内部タグ（TFTP_CAPABILITY_TAG）は含めない前提なので、ここで再構成する。
       const userTags = tagsRaw ? tagsRaw.split(',').map((s) => s.trim()).filter(Boolean) : []
-      let tags = userTags.slice()
-      const enableTftpEdit = !!(editTftpCheckbox && !editTftpWrap.classList.contains('hidden') && editTftpCheckbox.checked)
+      const tags = userTags.slice()
+      const enableSftpEdit = !!(editSftpCheckbox && editFileProtocolsWrap && !editFileProtocolsWrap.classList.contains('hidden') && editSftpCheckbox.checked)
+      const enableFtpEdit = !!(editFtpCheckbox && editFileProtocolsWrap && !editFileProtocolsWrap.classList.contains('hidden') && editFtpCheckbox.checked)
+      const enableTftpEdit = !!(editTftpCheckbox && editFileProtocolsWrap && !editFileProtocolsWrap.classList.contains('hidden') && editTftpCheckbox.checked)
+      const prevFtpEnabled = !!target.has_ftp_for_host
       const prevTftpEnabled = !!target.has_tftp_for_host
-      if (enableTftpEdit) {
-        if (!tags.includes(TFTP_CAPABILITY_TAG)) {
-          tags.push(TFTP_CAPABILITY_TAG)
-        }
-      } else {
-        tags = tags.filter((t) => t !== TFTP_CAPABILITY_TAG)
-      }
       if (!name || !host) {
         errorEl.textContent = '名前とホストを入力してください'
         errorEl.classList.remove('hidden')
         return
       }
       const updatePayload = { name, host, port, protocol, path: target.path || '', ssh_username }
+      if (protocol === 'ssh' || protocol === 'telnet') {
+        updatePayload.sftp_enabled = protocol === 'ssh' ? enableSftpEdit : false
+        updatePayload.ftp_enabled = enableFtpEdit
+        updatePayload.tftp_enabled = enableTftpEdit
+      }
       if (ssh_password !== undefined) updatePayload.ssh_password = ssh_password
       if (ssh_private_key !== undefined) updatePayload.ssh_private_key = ssh_private_key
       if (ssh_private_key_passphrase !== undefined) updatePayload.ssh_private_key_passphrase = ssh_private_key_passphrase
@@ -2268,6 +2416,33 @@ export function renderApp(container) {
           setRdpResolutionForTarget(targetId, rdpW, rdpH)
         }
         await API.setTargetTags(targetId, tags)
+        // ファイル転送: FTP の補助ターゲットは引き続き自動作成/削除するが、
+        // TFTP はここではターゲットを自動作成しない（ホーム画面の TFTP トグルのみで起動する）。
+        if (protocol === 'ssh' || protocol === 'telnet') {
+          if (enableFtpEdit && !prevFtpEnabled) {
+            try {
+              await API.createTarget({
+                name: `${name} (FTP)`,
+                host,
+                port: 21,
+                protocol: 'ftp',
+                group_id: selectedGroupId || '',
+                path: target.path || selectedGroupId || '',
+                ssh_username: updatePayload.ssh_username || '',
+                ...(updatePayload.ssh_password !== undefined && { ssh_password: updatePayload.ssh_password }),
+              })
+            } catch (e) { console.error('Failed to create FTP target', e) }
+          } else if (!enableFtpEdit && prevFtpEnabled && target.ftp_target_id) {
+            try {
+              await API.deleteTarget(target.ftp_target_id)
+            } catch (e) { console.error('Failed to delete FTP target', e) }
+          }
+          if (!enableTftpEdit && prevTftpEnabled && target.tftp_target_id) {
+            try {
+              await API.deleteTarget(target.tftp_target_id)
+            } catch (e) { console.error('Failed to delete TFTP target', e) }
+          }
+        }
         modal.classList.add('hidden')
         modal.innerHTML = ''
         groupsCache = null
@@ -2287,17 +2462,20 @@ export function renderApp(container) {
       return '<p class="text-sm text-slate-500">このグループに登録されているサーバーはありません。</p>'
     }
     const targetTags = (t) => Array.isArray(t.tags) ? t.tags : []
-    // ホスト単位で「TFTP サーバー起動中かどうか」（protocol=tftp ターゲット有無）と、
-    // SSH/Telnet ターゲット単位で「TFTP を使用するホストかどうか」（機能フラグ用タグ）を管理する。
+    // ホスト単位で TFTP/FTP ターゲット有無と、SSH/Telnet の機能フラグを管理する。
     const tftpActiveByHost = {}
+    const ftpActiveByHost = {}
     const tftpCapableByTargetId = {}
     targets.forEach((t) => {
       if (t.protocol === 'tftp' && t.host) {
         tftpActiveByHost[t.host] = t
       }
+      if (t.protocol === 'ftp' && t.host) {
+        ftpActiveByHost[t.host] = t
+      }
     })
     targets.forEach((t) => {
-      if ((t.protocol === 'ssh' || t.protocol === 'telnet') && Array.isArray(t.tags) && t.tags.includes(TFTP_CAPABILITY_TAG)) {
+      if ((t.protocol === 'ssh' || t.protocol === 'telnet') && t.tftp_enabled) {
         tftpCapableByTargetId[t.id] = true
       }
     })
@@ -2310,22 +2488,29 @@ export function renderApp(container) {
           const tags = targetTags(t)
           const isTftpCapableHost = !!tftpCapableByTargetId[t.id]
           const activeTftp = (t.protocol === 'ssh' || t.protocol === 'telnet') ? (tftpActiveByHost[t.host] || null) : null
+          const activeFtp = (t.protocol === 'ssh' || t.protocol === 'telnet') ? (ftpActiveByHost[t.host] || null) : null
+          // SFTP 有効判定は DB の sftp_enabled のみを使用する（タグには依存しない）。
+          const hasSftpEnabled = t.protocol !== 'ssh'
+            ? true
+            : (t.sftp_enabled !== false)
+          const showFileBtn = (t.protocol === 'ssh' && ((hasSftpEnabled && (t.has_stored_credentials || t.has_ssh_key)) || activeFtp || activeTftp)) || t.protocol === 'ftp'
           // ホーム画面では、「TFTP を使用するホスト」（サーバー管理で機能フラグ ON のホスト）のみトグルを表示する。
+          // トグルがない行でも同じ幅のプレースホルダを表示しておき、横幅のガタつきを防ぐ。
           const tftpToggleHtml = (!isManageMode && (t.protocol === 'ssh' || t.protocol === 'telnet') && isTftpCapableHost)
-            ? `<label class="inline-flex items-center gap-1 text-[11px] text-slate-500 mr-2">
+            ? `<label class="group inline-flex items-center justify-end gap-2 text-[11px] text-slate-600 mr-2 cursor-pointer w-[96px]">
                 <input
                   type="checkbox"
-                  class="tftp-toggle peer sr-only"
+                  class="tftp-toggle sr-only"
                   data-tftp-base-id="${escapeHtml(t.id)}"
                   data-tftp-host="${escapeHtml(t.host)}"
                   data-tftp-existing-id="${activeTftp ? escapeHtml(activeTftp.id) : ''}"
                   ${activeTftp ? 'checked' : ''} />
-                <span class="w-8 h-4 rounded-full bg-slate-300 relative transition-colors peer-checked:bg-sky-600">
-                  <span class="absolute left-0.5 top-0.5 w-3 h-3 rounded-full bg-white shadow transform transition-transform peer-checked:translate-x-3"></span>
+                <span class="inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-slate-300 bg-slate-200 transition-colors duration-200 group-has-[:checked]:border-sky-500 group-has-[:checked]:bg-sky-600">
+                  <span class="pointer-events-none inline-block h-4 w-4 shrink-0 translate-x-0.5 rounded-full bg-white shadow transition-transform duration-200 group-has-[:checked]:translate-x-4"></span>
                 </span>
                 <span>TFTP</span>
               </label>`
-            : ''
+            : '<span class="inline-block w-[96px] mr-2"></span>'
           return `
         <tr class="border-b border-slate-200 hover:bg-slate-50">
           <td class="px-4 py-2 text-sm text-slate-900 font-medium">${escapeHtml(t.name)}</td>
@@ -2335,41 +2520,51 @@ export function renderApp(container) {
           <td class="px-4 py-2 text-right">
             ${isManageMode ? `
             <div class="flex items-center justify-end gap-2">
-              <button type="button" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-target-host="${escapeHtml(t.host)}" data-target-port="${t.port}" data-target-protocol="${escapeHtml(t.protocol || 'ssh')}" data-target-path="${escapeHtml(t.path || '')}" data-target-ssh-username="${escapeHtml(t.ssh_username || '')}" data-target-tags="${escapeHtml((tags || []).join(','))}" data-target-has-ssh-key="${t.has_ssh_key ? '1' : '0'}" data-target-needs-passphrase="${t.needs_passphrase ? '1' : '0'}" data-target-has-tftp-for-host="${isTftpCapableHost ? '1' : '0'}"
-                class="edit-btn-in-group rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 border border-slate-300 shadow-sm transition-colors">
+              <button type="button" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-target-host="${escapeHtml(t.host)}" data-target-port="${t.port}" data-target-protocol="${escapeHtml(t.protocol || 'ssh')}" data-target-path="${escapeHtml(t.path || '')}" data-target-ssh-username="${escapeHtml(t.ssh_username || '')}" data-target-tags="${escapeHtml((tags || []).join(','))}" data-target-has-ssh-key="${t.has_ssh_key ? '1' : '0'}" data-target-needs-passphrase="${t.needs_passphrase ? '1' : '0'}" data-target-has-tftp-for-host="${activeTftp ? '1' : '0'}" data-target-tftp-id="${activeTftp ? escapeHtml(activeTftp.id) : ''}" data-target-has-ftp-for-host="${activeFtp ? '1' : '0'}" data-target-ftp-id="${activeFtp ? escapeHtml(activeFtp.id) : ''}" data-target-sftp-enabled="${hasSftpEnabled ? '1' : '0'}" data-target-ftp-enabled="${t.ftp_enabled ? '1' : '0'}" data-target-tftp-enabled="${t.tftp_enabled ? '1' : '0'}"
+                class="edit-btn-in-group rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 border border-slate-300 shadow-sm transition-colors w-[96px] text-center whitespace-nowrap">
               編集
             </button>
               <button type="button" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}"
-                class="delete-btn-in-group rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 shadow-sm transition-colors">
+                class="delete-btn-in-group rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 shadow-sm transition-colors w-[96px] text-center whitespace-nowrap">
                 削除
               </button>
             </div>
             ` : `
             <div class="flex items-center justify-end gap-2">
               ${tftpToggleHtml}
-              ${(t.protocol === 'ssh' && (t.has_stored_credentials || t.has_ssh_key)) || t.protocol === 'ftp' ? `<button type="button" class="files-open-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors" data-files-target-id="${escapeHtml(t.id)}" data-files-target-name="${escapeHtml(t.name || '')}" data-files-protocol="${escapeHtml(t.protocol)}" data-files-host="${escapeHtml(t.host)}">ファイル</button>` : ''}
+              <button
+                type="button"
+                class="files-open-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition-colors w-[104px] text-center whitespace-nowrap ${showFileBtn ? 'hover:bg-slate-50' : 'opacity-40 cursor-default'}"
+                ${showFileBtn ? '' : 'disabled'}
+                data-files-target-id="${escapeHtml(t.id)}"
+                data-files-target-name="${escapeHtml(t.name || '')}"
+                data-files-protocol="${escapeHtml(t.protocol)}"
+                data-files-host="${escapeHtml(t.host)}"
+                data-files-sftp-enabled="${hasSftpEnabled ? '1' : '0'}"
+                data-files-disabled="${showFileBtn ? '0' : '1'}"
+              >ファイル</button>
               ${t.protocol === 'ssh'
             ? `<button type="button" data-terminal-target-id="${escapeHtml(t.id)}" data-terminal-target-name="${escapeHtml(t.name || '')}" data-has-stored-credentials="${t.has_stored_credentials ? '1' : ''}" data-needs-password="${t.needs_password ? '1' : ''}" data-needs-passphrase="${t.needs_passphrase ? '1' : ''}"
-              class="connect-btn-in-group terminal-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50">
+              class="connect-btn-in-group terminal-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50 w-[96px] text-center whitespace-nowrap">
               接続
             </button>`
             : t.protocol === 'vnc'
             ? `<button type="button" data-popup-protocol="vnc" data-popup-target-id="${escapeHtml(t.id)}" data-popup-target-name="${escapeHtml(t.name || '')}"
-              class="connect-btn-in-group vnc-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block">
+              class="connect-btn-in-group vnc-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block w-[96px] text-center whitespace-nowrap">
               接続
             </button>`
             : t.protocol === 'rdp'
             ? `<a href="/rdp?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(t.name || '')}"
               target="_blank" rel="noopener noreferrer"
               data-rdp-target-id="${escapeHtml(t.id)}" data-rdp-target-name="${escapeHtml(t.name || '')}"
-              class="connect-btn-in-group rdp-open-link rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block">
+              class="connect-btn-in-group rdp-open-link rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block w-[96px] text-center whitespace-nowrap">
               接続
             </a>`
             : `<button data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-protocol="${escapeHtml(t.protocol)}"
-              class="connect-btn-in-group rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50">
+              class="connect-btn-in-group rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50 w-[96px] text-center whitespace-nowrap">
               接続
             </button>`}
-              <button type="button" class="active-sessions-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name || '')}">アクティブなセッション</button>
+              <button type="button" class="active-sessions-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors w-[200px] text-center whitespace-nowrap" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name || '')}">アクティブなセッション (0)</button>
             </div>
             `}
           </td>
@@ -2378,17 +2573,17 @@ export function renderApp(container) {
         }
       )
       .join('')
-    const theadTags = isManageMode ? '<th class="px-4 py-2 text-xs font-semibold text-slate-700">タグ</th>' : ''
+    const theadTags = isManageMode ? '<th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[22%]">タグ</th>' : ''
     return `
       <div class="overflow-x-auto">
-        <table class="min-w-full text-left text-sm">
+        <table class="min-w-full text-left text-sm table-fixed">
           <thead class="bg-slate-50 border-b border-slate-200">
             <tr>
-              <th class="px-4 py-2 text-xs font-semibold text-slate-700">名前</th>
-              <th class="px-4 py-2 text-xs font-semibold text-slate-700">ホスト</th>
-              <th class="px-4 py-2 text-xs font-semibold text-slate-700">プロトコル</th>
+              <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[26%]">名前</th>
+              <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[28%]">ホスト</th>
+              <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[12%]">プロトコル</th>
               ${theadTags}
-              <th class="px-4 py-2"></th>
+              <th class="px-4 py-2 w-[34%]"></th>
             </tr>
           </thead>
           <tbody>

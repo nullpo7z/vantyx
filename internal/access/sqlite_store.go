@@ -645,11 +645,11 @@ func NewSQLiteTargetStore(db *sql.DB, cfg *StoreConfig, encKey []byte) *SQLiteTa
 
 // Create inserts a new target without path (group_id and path empty; may fail if FK requires a group).
 func (s *SQLiteTargetStore) Create(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol) (*Target, error) {
-	return s.CreateWithPath(ctx, id, name, host, port, protocol, "", "", "", "", "", "")
+	return s.CreateWithPath(ctx, id, name, host, port, protocol, "", "", "", "", "", "", true, false, false)
 }
 
-// CreateWithPath inserts a new target with group_id, path, and optional SSH credentials (password and/or private key).
-func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (*Target, error) {
+// CreateWithPath inserts a new target with group_id, path, optional SSH credentials, and file transfer protocol toggles.
+func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string, sftpEnabled, ftpEnabled, tftpEnabled bool) (*Target, error) {
 	if err := validateTargetID(id); err != nil {
 		return nil, err
 	}
@@ -697,10 +697,20 @@ func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, nam
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
+	sftpVal, ftpVal, tftpVal := 0, 0, 0
+	if sftpEnabled {
+		sftpVal = 1
+	}
+	if ftpEnabled {
+		ftpVal = 1
+	}
+	if tftpEnabled {
+		tftpVal = 1
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO targets (id, name, host, port, protocol, group_id, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, string(id), name, host, int(port), string(protocol), string(groupID), path, sshUsername, storedPassword, storedKey, storedKeyPass)
+		INSERT INTO targets (id, name, host, port, protocol, group_id, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, sftp_enabled, ftp_enabled, tftp_enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, string(id), name, host, int(port), string(protocol), string(groupID), path, sshUsername, storedPassword, storedKey, storedKeyPass, sftpVal, ftpVal, tftpVal)
 	if err != nil {
 		return nil, ErrTargetExists
 	}
@@ -715,12 +725,15 @@ func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, nam
 		SSHPassword:             sshPassword,
 		SSHPrivateKey:           sshPrivateKey,
 		SSHPrivateKeyPassphrase: sshPrivateKeyPassphrase,
+		SFTPEnabled:             sftpEnabled,
+		FTPEnabled:              ftpEnabled,
+		TFTPEnabled:             tftpEnabled,
 	}, nil
 }
 
-// Update updates a target's name, host, port, protocol, path, and optional SSH credentials.
+// Update updates a target's name, host, port, protocol, path, optional SSH credentials, and file transfer toggles.
 // Target ID and group_id are not changed. Non-empty sshPassword or sshPrivateKey require encKey.
-func (s *SQLiteTargetStore) Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (*Target, error) {
+func (s *SQLiteTargetStore) Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string, sftpEnabled, ftpEnabled, tftpEnabled bool) (*Target, error) {
 	if err := validateTargetID(id); err != nil {
 		return nil, err
 	}
@@ -763,10 +776,20 @@ func (s *SQLiteTargetStore) Update(ctx context.Context, id TargetID, name, host 
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
+	sftpVal, ftpVal, tftpVal := 0, 0, 0
+	if sftpEnabled {
+		sftpVal = 1
+	}
+	if ftpEnabled {
+		ftpVal = 1
+	}
+	if tftpEnabled {
+		tftpVal = 1
+	}
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE targets SET name = ?, host = ?, port = ?, protocol = ?, path = ?, ssh_username = ?, ssh_password = ?, ssh_private_key = ?, ssh_private_key_passphrase = ?, updated_at = CURRENT_TIMESTAMP
+		UPDATE targets SET name = ?, host = ?, port = ?, protocol = ?, path = ?, ssh_username = ?, ssh_password = ?, ssh_private_key = ?, ssh_private_key_passphrase = ?, sftp_enabled = ?, ftp_enabled = ?, tftp_enabled = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, name, host, int(port), string(protocol), path, strings.TrimSpace(sshUsername), storedPassword, storedKey, storedKeyPass, string(id))
+	`, name, host, int(port), string(protocol), path, strings.TrimSpace(sshUsername), storedPassword, storedKey, storedKeyPass, sftpVal, ftpVal, tftpVal, string(id))
 	if err != nil {
 		return nil, err
 	}
@@ -806,16 +829,20 @@ func (s *SQLiteTargetStore) Get(ctx context.Context, id TargetID) (*Target, erro
 	var port int
 	var proto string
 	var storedPassword, storedKey, storedKeyPass string
+	var sftpVal, ftpVal, tftpVal int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,'')
+		SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0)
 		FROM targets
 		WHERE id = ?
-	`, string(id)).Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass)
+	`, string(id)).Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal)
 	if err == nil {
 		t.ID = TargetID(idStr)
 		t.SSHPassword = decryptOrPlain(s.encKey, storedPassword)
 		t.SSHPrivateKey = decryptOrPlain(s.encKey, storedKey)
 		t.SSHPrivateKeyPassphrase = decryptOrPlain(s.encKey, storedKeyPass)
+		t.SFTPEnabled = sftpVal != 0
+		t.FTPEnabled = ftpVal != 0
+		t.TFTPEnabled = tftpVal != 0
 	}
 	if err == sql.ErrNoRows {
 		return nil, ErrTargetNotFound
@@ -897,7 +924,7 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 		err := func() error {
 			// #nosec G202 -- placeholders is "?,?,?" from len(chunk); args are validated TargetIDs
 			rows, err := s.db.QueryContext(ctx, `
-				SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,'')
+				SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0)
 				FROM targets
 				WHERE id IN (`+placeholders+`)`, args...)
 			if err != nil {
@@ -910,7 +937,8 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 				var port int
 				var proto string
 				var storedPassword, storedKey, storedKeyPass string
-				if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass); err != nil {
+				var sftpVal, ftpVal, tftpVal int
+				if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal); err != nil {
 					return err
 				}
 				if port >= 0 && port <= 65535 {
@@ -920,6 +948,9 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 					t.SSHPassword = decryptOrPlain(s.encKey, storedPassword)
 					t.SSHPrivateKey = decryptOrPlain(s.encKey, storedKey)
 					t.SSHPrivateKeyPassphrase = decryptOrPlain(s.encKey, storedKeyPass)
+					t.SFTPEnabled = sftpVal != 0
+					t.FTPEnabled = ftpVal != 0
+					t.TFTPEnabled = tftpVal != 0
 					byID[TargetID(idStr)] = &t
 				}
 			}

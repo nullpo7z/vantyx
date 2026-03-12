@@ -33,14 +33,18 @@ type Target struct {
 	// SSH public key auth: PEM-encoded private key and optional passphrase. Encrypted at rest like SSHPassword.
 	SSHPrivateKey           string
 	SSHPrivateKeyPassphrase string
+	// File transfer protocol toggles (for SSH/telnet: SFTP/FTP/TFTP の「ファイル転送で使用するプロトコル」の有効・無効). Stored in DB.
+	SFTPEnabled bool
+	FTPEnabled  bool
+	TFTPEnabled bool
 }
 
 // TargetStore defines the behavior required for managing targets.
 type TargetStore interface {
 	Create(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol) (*Target, error)
-	CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (*Target, error)
+	CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string, sftpEnabled, ftpEnabled, tftpEnabled bool) (*Target, error)
 	Get(ctx context.Context, id TargetID) (*Target, error)
-	Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (*Target, error)
+	Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string, sftpEnabled, ftpEnabled, tftpEnabled bool) (*Target, error)
 	Delete(ctx context.Context, id TargetID) error
 	ListByIDs(ctx context.Context, ids []TargetID, opts *ListOpts) ([]*Target, error)
 	// ListByProtocol returns targets for the given protocol (e.g. TFTP). Credentials are not populated.

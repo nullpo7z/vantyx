@@ -33,7 +33,7 @@ func TestHandleVNCWebSocket_UnauthorizedWithoutCookie(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("vnc1"), "VNC Host", "127.0.0.1", 5900, access.ProtocolVNC, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("vnc1"), "VNC Host", "127.0.0.1", 5900, access.ProtocolVNC, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("vnc1"))
 
 	srv := httptest.NewServer(router)
@@ -91,7 +91,7 @@ func TestHandleVNCWebSocket_ForbiddenTarget(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("vnc1"), "VNC Host", "127.0.0.1", 5900, access.ProtocolVNC, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("vnc1"), "VNC Host", "127.0.0.1", 5900, access.ProtocolVNC, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("vnc1"))
 
 	_, _ = app.UserStore.CreateUser("other", "other", "Other1!x", "")
@@ -117,7 +117,7 @@ func TestHandleVNCWebSocket_NotVNCTargetReturns400(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("ssh1"), "SSH Host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("ssh1"), "SSH Host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("ssh1"))
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -142,7 +142,7 @@ func TestHandleVNCWebSocket_UpgradeFailsWithoutWebSocketRequest(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("vnc1"), "VNC Host", "127.0.0.1", 5900, access.ProtocolVNC, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("vnc1"), "VNC Host", "127.0.0.1", 5900, access.ProtocolVNC, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("vnc1"))
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -183,7 +183,7 @@ func TestHandleVNCWebSocket_SuccessBridgesToTarget(t *testing.T) {
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
 	_, portStr, _ := net.SplitHostPort(ln.Addr().String())
 	port, _ := strconv.Atoi(portStr)
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("vnc1"), "VNC Host", "127.0.0.1", uint16(port&0xffff), access.ProtocolVNC, access.GroupID("g1"), "g1", "", "", "", "") // #nosec G115
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("vnc1"), "VNC Host", "127.0.0.1", uint16(port&0xffff), access.ProtocolVNC, access.GroupID("g1"), "g1", "", "", "", "", false, false, false) // #nosec G115
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("vnc1"))
 
 	httpSess, err := app.SessionStore.Create("admin")

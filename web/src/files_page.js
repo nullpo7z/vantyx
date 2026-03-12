@@ -37,7 +37,7 @@ export function renderFilesPage(container) {
 
   let currentPath = '/'
   let loading = false
-  const transfers = [] // { id, name, type: 'upload'|'download', status: 'pending'|'done'|'error', err? }
+  const transfers = [] // { id, name, type: 'upload'|'download', status: 'pending'|'done'|'error', percent: number, err? }
 
   function setError(msg) {
     const el = container.querySelector('#files-error')
@@ -54,7 +54,7 @@ export function renderFilesPage(container) {
 
   function addTransfer(name, type, status = 'pending', err = null) {
     const id = `t-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    transfers.push({ id, name, type, status, err })
+    transfers.push({ id, name, type, status, percent: 0, err })
     renderTransfers()
     return id
   }
@@ -63,8 +63,22 @@ export function renderFilesPage(container) {
     const t = transfers.find((x) => x.id === id)
     if (t) {
       t.status = status
+      if (status === 'done') {
+        t.percent = 100
+      }
       t.err = err
       renderTransfers()
+    }
+  }
+
+  function setTransferProgress(id, percent) {
+    const t = transfers.find((x) => x.id === id)
+    if (t && t.status === 'pending') {
+      const p = Math.max(0, Math.min(100, Math.round(percent || 0)))
+      if (p !== t.percent) {
+        t.percent = p
+        renderTransfers()
+      }
     }
   }
 
@@ -86,11 +100,87 @@ export function renderFilesPage(container) {
         <div class="flex items-center gap-2 py-1.5 px-2 rounded text-sm ${t.status === 'error' ? 'text-red-600 bg-red-50' : t.status === 'done' ? 'text-slate-500' : 'text-slate-700'}">
           ${t.type === 'download' ? iconDownload : iconUpload}
           <span class="truncate flex-1 min-w-0">${escapeHtml(t.name)}</span>
-          <span class="text-xs flex-shrink-0">${t.status === 'pending' ? '転送中…' : t.status === 'done' ? '完了' : (t.err && t.err.message) || 'エラー'}</span>
+          <div class="flex items-center gap-2 flex-shrink-0">
+            <div class="w-24 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+              <div class="h-full ${t.status === 'error' ? 'bg-red-400' : 'bg-sky-500'}" style="width:${t.status === 'done' ? 100 : (t.percent || 0)}%"></div>
+            </div>
+            <span class="text-xs min-w-[3rem] text-right">
+              ${t.status === 'pending' && (t.percent || 0) > 0 ? `${t.percent}%` : t.status === 'pending' ? '転送中…' : t.status === 'done' ? '完了' : (t.err && t.err.message) || 'エラー'}
+            </span>
+          </div>
         </div>
       `
       )
       .join('')
+  }
+
+  function downloadWithProgress(path, name, tid) {
+    const q = new URLSearchParams({ path })
+    const url = `/api/targets/${encodeURIComponent(targetId)}/files/download?${q}`
+    const xhr = new XMLHttpRequest()
+    xhr.open('GET', url)
+    xhr.responseType = 'blob'
+    xhr.withCredentials = true
+    xhr.onprogress = (ev) => {
+      if (ev.lengthComputable) {
+        setTransferProgress(tid, (ev.loaded / ev.total) * 100)
+      }
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const blob = xhr.response
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = name
+        a.click()
+        URL.revokeObjectURL(a.href)
+        setTransferStatus(tid, 'done')
+      } else {
+        const err = new Error(`HTTP ${xhr.status}`)
+        setTransferStatus(tid, 'error', err)
+        setError('ダウンロードに失敗しました')
+      }
+    }
+    xhr.onerror = () => {
+      const err = new Error('network error')
+      setTransferStatus(tid, 'error', err)
+      setError('ダウンロードに失敗しました')
+    }
+    xhr.send()
+  }
+
+  function uploadWithProgress(remotePath, file, tid) {
+    const url = `/api/targets/${encodeURIComponent(targetId)}/files/upload`
+    const form = new FormData()
+    form.append('path', remotePath)
+    form.append('file', file)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', url)
+    xhr.withCredentials = true
+    if (xhr.upload) {
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable) {
+          setTransferProgress(tid, (ev.loaded / ev.total) * 100)
+        }
+      }
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        setTransferStatus(tid, 'done')
+        if (!isTftp) loadList()
+        else setError('')
+      } else {
+        const err = new Error(`HTTP ${xhr.status}`)
+        setTransferStatus(tid, 'error', err)
+        setError('アップロードに失敗しました')
+      }
+    }
+    xhr.onerror = () => {
+      const err = new Error('network error')
+      setTransferStatus(tid, 'error', err)
+      setError('アップロードに失敗しました')
+    }
+    xhr.send(form)
   }
 
   function renderBreadcrumb() {
@@ -271,19 +361,7 @@ export function renderFilesPage(container) {
       if (!path) return
       const name = path.split('/').filter(Boolean).pop() || 'download'
       const tid = addTransfer(name, 'download')
-      API.filesDownload(targetId, path)
-        .then((blob) => {
-          const a = document.createElement('a')
-          a.href = URL.createObjectURL(blob)
-          a.download = name
-          a.click()
-          URL.revokeObjectURL(a.href)
-          setTransferStatus(tid, 'done')
-        })
-        .catch((err) => {
-          setTransferStatus(tid, 'error', err)
-          setError(err.message || 'ダウンロードに失敗しました')
-        })
+      downloadWithProgress(path, name, tid)
     } else if (del) {
       e.preventDefault()
       const path = del.dataset.path
@@ -309,17 +387,9 @@ export function renderFilesPage(container) {
       remotePath = currentPath === '/' ? '/' + file.name : currentPath + '/' + file.name
     }
     const tid = addTransfer(file.name, 'upload')
-    API.filesUpload(targetId, remotePath, file)
-      .then(() => {
-        input.value = ''
-        setTransferStatus(tid, 'done')
-        if (!isTftp) loadList()
-        else setError('')
-      })
-      .catch((err) => {
-        setTransferStatus(tid, 'error', err)
-        setError(err.message || 'アップロードに失敗しました')
-      })
+    // 入力はリクエスト送信後にクリアする（同名ファイルを再度アップロードできるように）。
+    input.value = ''
+    uploadWithProgress(remotePath, file, tid)
   })
 
   if (isTftp) {
@@ -334,19 +404,7 @@ export function renderFilesPage(container) {
       const name = path.split('/').filter(Boolean).pop() || 'download'
       setError('')
       const tid = addTransfer(name, 'download')
-      API.filesDownload(targetId, remotePath)
-        .then((blob) => {
-          const a = document.createElement('a')
-          a.href = URL.createObjectURL(blob)
-          a.download = name
-          a.click()
-          URL.revokeObjectURL(a.href)
-          setTransferStatus(tid, 'done')
-        })
-        .catch((err) => {
-          setTransferStatus(tid, 'error', err)
-          setError(err.message || 'ダウンロードに失敗しました')
-        })
+      downloadWithProgress(remotePath, name, tid)
     })
   }
 

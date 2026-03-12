@@ -28,6 +28,8 @@ export function renderTFTPConsolePage(container) {
   const tftpTargetId = params.get('tftp_target_id') || ''
   const sshTargetId = params.get('ssh_target_id') || ''
   const targetName = params.get('target_name') || ''
+  const resumeSessionId = params.get('session_id') || ''
+  const parentToken = params.get('parent_token') || ''
 
   const tftpServerHost = window.location.hostname || ''
   const tftpServerAddr = tftpServerHost || ''
@@ -38,7 +40,7 @@ export function renderTFTPConsolePage(container) {
   let term = null
   let fitAddon = null
   let sshWs = null
-  let currentSessionId = ''
+  let currentSessionId = resumeSessionId || ''
 
   function setError(msg) {
     const el = container.querySelector('#tftp-error')
@@ -179,15 +181,28 @@ export function renderTFTPConsolePage(container) {
       </div>
     `
 
+    function closeWindow() {
+      try { sshWs?.close() } catch { /* ignore */ }
+      if (window.opener && !window.opener.closed) {
+        try { window.opener.focus() } catch { /* ignore */ }
+      } else if (parentToken) {
+        try {
+          const bc = new BroadcastChannel(`vantyx-terminal-parent-${parentToken}`)
+          try { bc.postMessage({ type: 'focus', refresh: 'active_sessions' }) } finally { bc.close() }
+        } catch { /* ignore */ }
+      }
+      try { window.close() } catch { /* ignore */ }
+    }
+
     const backBtn = container.querySelector('#tftp-back')
     backBtn?.addEventListener('click', () => {
-      // セッションは維持したままホームに戻る。
-      window.location.href = '/'
+      // セッションは維持したまま元のタブへ戻る。
+      closeWindow()
     })
 
     const disconnectBtn = container.querySelector('#tftp-disconnect')
     disconnectBtn?.addEventListener('click', async () => {
-      // SSH セッションを明示的に終了してからホームへ戻る。
+      // SSH セッションを明示的に終了してから元のタブへ戻る。
       try {
         if (currentSessionId) {
           await API.terminalSessionDelete(currentSessionId)
@@ -195,12 +210,7 @@ export function renderTFTPConsolePage(container) {
       } catch {
         // エラー時も一旦戻る（詳細はコンソールで確認）
       }
-      try {
-        sshWs?.close()
-      } catch {
-        // ignore
-      }
-      window.location.href = '/'
+      closeWindow()
     })
 
     const copyBtn = container.querySelector('#tftp-copy-addr')
@@ -336,11 +346,13 @@ export function renderTFTPConsolePage(container) {
         term.open(xtermEl)
         try { fitAddon.fit() } catch { /* ignore */ }
 
-        function getWsUrl() {
+        function getWsUrlNew() {
           const cols = term?.cols || 80
           const rows = term?.rows || 24
           return `${wsProtocol}//${window.location.host}/ws/ssh?target_id=${encodeURIComponent(sshTargetId)}&cols=${cols}&rows=${rows}`
         }
+
+        const getWsUrlResume = (sid) => `${wsProtocol}//${window.location.host}/ws/ssh?session_id=${encodeURIComponent(sid)}`
 
         function sendResize(ws) {
           if (!term || !ws || ws.readyState !== WebSocket.OPEN) return
@@ -360,33 +372,35 @@ export function renderTFTPConsolePage(container) {
         })
         resizeObserver.observe(xtermEl)
         // レイアウト確定後に再 fit して下半分いっぱいに表示する
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
             try { fitAddon.fit() } catch { /* ignore */ }
           })
           setTimeout(() => { try { fitAddon.fit() } catch { /* ignore */ } }, 200)
         })
 
         function connectSSH() {
-          const ws = new WebSocket(getWsUrl())
+          const ws = new WebSocket(currentSessionId ? getWsUrlResume(currentSessionId) : getWsUrlNew())
           ws.binaryType = 'arraybuffer'
           sshWs = ws
           ws.onopen = () => {
-            // TFTP コンソールでは保存済み認証情報を使って SSH に接続する。
-            const name = `${targetName || sshTargetId || 'TFTP コンソール'}`
-            const description = `TFTP_CONSOLE:tftp_target_id=${tftpTargetId || ''}`
-            const payload = { use_stored_credentials: true, name, description }
-            try {
-              ws.send(JSON.stringify(payload))
-            } catch {
-              // ignore
+            if (!currentSessionId) {
+              // 新規接続時のみ、保存済み認証情報と TFTP 用メタデータを送る。
+              const name = `${targetName || sshTargetId || 'TFTP コンソール'}`
+              const description = `TFTP_CONSOLE:tftp_target_id=${tftpTargetId || ''}`
+              const payload = { use_stored_credentials: true, name, description }
+              try {
+                ws.send(JSON.stringify(payload))
+              } catch {
+                // ignore
+              }
             }
             sendResize(ws)
             term.focus()
           }
           ws.onmessage = (ev) => {
             if (typeof ev.data === 'string') {
-              // 最初に送られる {"session_id":"..."} はターミナルに表示しない。
+              // 新規接続時のみ、最初に送られる {"session_id":"..."} をターミナルに表示しないで保持する。
               if (!currentSessionId && ev.data.trim().startsWith('{')) {
                 try {
                   const obj = JSON.parse(ev.data)

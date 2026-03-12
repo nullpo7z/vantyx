@@ -198,7 +198,7 @@ func TestApp_Targets_WithTargets(t *testing.T) {
 
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Host1", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("default"), "default", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Host1", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("default"), "default", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("default"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -704,8 +704,8 @@ func TestApp_Targets_PaginationResponse(t *testing.T) {
 	router := app.NewRouter()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("default"), "default", "", "", "", "")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "10.0.0.2", 22, access.ProtocolSSH, access.GroupID("default"), "default", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("default"), "default", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "10.0.0.2", 22, access.ProtocolSSH, access.GroupID("default"), "default", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("default"), access.TargetID("t1"))
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("default"), access.TargetID("t2"))
 	sess, _ := app.SessionStore.Create("admin")
@@ -1260,7 +1260,7 @@ func setupAppWithTargetAndSFTPMock(t *testing.T) (*App, *MockSFTPClient, string)
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, err := app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "host", 22, access.ProtocolSSH, access.GroupID("g1"), "", "root", "pass", "", "")
+	_, err := app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "host", 22, access.ProtocolSSH, access.GroupID("g1"), "", "root", "pass", "", "", true, false, false)
 	if err != nil {
 		t.Fatalf("CreateWithPath: %v", err)
 	}
@@ -1467,7 +1467,7 @@ func TestApp_Files_GetTarget_Forbidden(t *testing.T) {
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "T2", "host", 22, access.ProtocolSSH, access.GroupID("g2"), "", "root", "pass", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "T2", "host", 22, access.ProtocolSSH, access.GroupID("g2"), "", "root", "pass", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g2"), access.TargetID("t2"))
 	app.SFTPClientFactory = func(context.Context, *access.Target) (FileTransferClient, error) { return NewMockSFTPClient(), nil }
 	router := app.NewRouter()
@@ -1486,7 +1486,7 @@ func TestApp_Files_GetTarget_NonSSH(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "host", 23, access.ProtocolTelnet, access.GroupID("g1"), "", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "host", 23, access.ProtocolTelnet, access.GroupID("g1"), "", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	router := app.NewRouter()
 	sess, _ := app.SessionStore.Create("admin")
@@ -1504,7 +1504,7 @@ func TestApp_Files_GetTarget_NoStoredCredentials(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "host", 22, access.ProtocolSSH, access.GroupID("g1"), "", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "host", 22, access.ProtocolSSH, access.GroupID("g1"), "", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	router := app.NewRouter()
 	sess, _ := app.SessionStore.Create("admin")
@@ -1844,7 +1844,7 @@ type targetStoreFailingCreate struct {
 	access.TargetStore
 }
 
-func (t *targetStoreFailingCreate) CreateWithPath(ctx context.Context, id access.TargetID, name, host string, port uint16, protocol access.Protocol, groupID access.GroupID, path string, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (*access.Target, error) {
+func (t *targetStoreFailingCreate) CreateWithPath(ctx context.Context, id access.TargetID, name, host string, port uint16, protocol access.Protocol, groupID access.GroupID, path string, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string, sftpEnabled, ftpEnabled, tftpEnabled bool) (*access.Target, error) {
 	return nil, errors.New("injected create target error")
 }
 
@@ -2390,7 +2390,7 @@ func TestApp_Groups_WithTargets(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Host1", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Host1", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -2421,9 +2421,9 @@ func TestApp_Groups_TwoGroupsWithTargets(t *testing.T) {
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g2"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t3"), "H3", "3.3.3.3", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t3"), "H3", "3.3.3.3", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t2"))
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g2"), access.TargetID("t3"))
@@ -2454,7 +2454,7 @@ func TestApp_UpdateTarget_Success(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Old", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Old", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -2485,7 +2485,7 @@ func TestApp_UpdateTarget_Forbidden(t *testing.T) {
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g2"), access.TargetID("t2"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -2515,7 +2515,7 @@ func TestApp_UpdateTarget_ServiceUnavailableWhenEncryptionKeyMissing(t *testing.
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -2544,7 +2544,7 @@ func TestApp_DeleteTarget_Success(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -2569,7 +2569,7 @@ func TestApp_DeleteTarget_Forbidden(t *testing.T) {
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t2"), "H2", "2.2.2.2", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g2"), access.TargetID("t2"))
 
 	sess, _ := app.SessionStore.Create("admin")
@@ -2874,7 +2874,7 @@ func TestApp_TargetTags_Admin(t *testing.T) {
 	router := app.NewRouter()
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
 	sess, _ := app.SessionStore.Create("admin")
@@ -2892,7 +2892,7 @@ func TestApp_SetTargetTags_Admin(t *testing.T) {
 	router := app.NewRouter()
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "H1", "1.1.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
 	body := []byte(`{"tags":["web"]}`)

@@ -39,7 +39,7 @@ func TestHandleSSHWebSocket_UnauthorizedWithoutCookie(t *testing.T) {
 	// Ensure target_id=demo exists for this test (admin has access via a group).
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	srv := httptest.NewServer(router)
@@ -109,7 +109,7 @@ func TestHandleSSHWebSocket_ForbiddenTarget(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	_, _ = app.UserStore.CreateUser("other", "other", "Other1!x", "")
@@ -135,7 +135,7 @@ func TestHandleSSHWebSocket_NonSSHTargetReturns501(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("telnet1"), "Telnet Host", "127.0.0.1", 23, access.ProtocolTelnet, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("telnet1"), "Telnet Host", "127.0.0.1", 23, access.ProtocolTelnet, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("telnet1"))
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -160,7 +160,7 @@ func TestHandleSSHWebSocket_UpgradeFailsWithoutWebSocketRequest(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -206,7 +206,7 @@ func TestHandleSSHWebSocket_InvalidCredentialsReturnsError(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -249,7 +249,7 @@ func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -307,7 +307,7 @@ func TestHandleSSHWebSocket_StartFailsReturns500(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, _ := app.SessionStore.Create("admin")
@@ -339,7 +339,7 @@ func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -427,7 +427,7 @@ func TestHandleTerminalSessions_ListWithSession(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -934,7 +934,7 @@ func TestHandleRDPWebSocket_Forbidden(t *testing.T) {
 	router := app.NewRouter()
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
 
 	_, _ = app.UserStore.CreateUser("u2", "user2", "User123!", "user")
@@ -954,7 +954,7 @@ func TestHandleRDPWebSocket_WrongProtocol(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("ssh1"), "SSH", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("ssh1"), "SSH", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("ssh1"))
 
 	httpSess, _ := app.SessionStore.Create("admin")
@@ -1011,7 +1011,7 @@ func TestHandleRDPBrowserWebSocket_Forbidden(t *testing.T) {
 	router := app.NewRouter()
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
 
 	httpSess, _ := app.SessionStore.Create("admin")
@@ -1030,7 +1030,7 @@ func TestHandleRDPBrowserWebSocket_WrongProtocol(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("ssh1"), "SSH", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("ssh1"), "SSH", "192.168.1.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("ssh1"))
 
 	httpSess, _ := app.SessionStore.Create("admin")
@@ -1049,7 +1049,7 @@ func TestHandleRDPBrowserWebSocket_BridgeStartFails(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
 
 	httpSess, _ := app.SessionStore.Create("admin")
@@ -1111,11 +1111,11 @@ func TestHandleRDPSessions_WithActiveSession(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
 
 	// Also create a non-RDP target to exercise the protocol filter branch.
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("ssh1"), "SSH1", "192.168.1.2", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("ssh1"), "SSH1", "192.168.1.2", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("ssh1"))
 
 	// Register dummy managed sessions so that handleRDPSessions can discover them.
@@ -1165,7 +1165,7 @@ func TestHandleRDPSessionDelete_Success(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
 
 	app.RDPVNCManager.RegisterSession("admin:rdp1", "s1", "admin", "rdp1", "RDP1", 1920, 1080, &rdpvnc.Bridge{})

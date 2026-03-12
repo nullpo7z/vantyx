@@ -133,5 +133,18 @@ func Migrate(db *sql.DB) error {
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 	)`)
+	// File transfer protocol toggles (SFTP/FTP/TFTP). Stored in DB instead of tags.
+	for _, alter := range []string{
+		`ALTER TABLE targets ADD COLUMN sftp_enabled INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE targets ADD COLUMN ftp_enabled INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE targets ADD COLUMN tftp_enabled INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := db.ExecContext(ctx, alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	// Migrate from tags to columns: no-sftp -> sftp_enabled=0, tftp_enabled tag -> tftp_enabled=1
+	_, _ = db.ExecContext(ctx, `UPDATE targets SET sftp_enabled = 0 WHERE id IN (SELECT target_id FROM target_tags WHERE tag = 'no-sftp')`)
+	_, _ = db.ExecContext(ctx, `UPDATE targets SET tftp_enabled = 1 WHERE id IN (SELECT target_id FROM target_tags WHERE tag = 'tftp_enabled')`)
 	return nil
 }

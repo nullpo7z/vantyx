@@ -911,6 +911,9 @@ type targetResponse struct {
 	NeedsPassword        bool     `json:"needs_password,omitempty"`   // ユーザー名は保存済みだがパスワードが未保存（接続時に入力）
 	NeedsPassphrase      bool     `json:"needs_passphrase,omitempty"` // 暗号化された秘密鍵は保存済みだがパスフレーズが未保存（接続時に入力）
 	Tags                 []string `json:"tags,omitempty"`
+	SFTPEnabled          bool     `json:"sftp_enabled"`
+	FTPEnabled           bool     `json:"ftp_enabled"`
+	TFTPEnabled          bool     `json:"tftp_enabled"`
 }
 
 type groupResponse struct {
@@ -943,6 +946,9 @@ func targetToResponse(t *access.Target, tags []string) targetResponse {
 		Path:        t.Path,
 		SSHUsername: t.SSHUsername,
 		Tags:        tags,
+		SFTPEnabled: t.SFTPEnabled,
+		FTPEnabled:  t.FTPEnabled,
+		TFTPEnabled: t.TFTPEnabled,
 	}
 	if tags == nil {
 		r.Tags = []string{}
@@ -1618,6 +1624,9 @@ type createTargetRequest struct {
 	SSHPassword             string `json:"ssh_password"`
 	SSHPrivateKey           string `json:"ssh_private_key"`
 	SSHPrivateKeyPassphrase string `json:"ssh_private_key_passphrase"`
+	SFTPEnabled             *bool  `json:"sftp_enabled,omitempty"`
+	FTPEnabled              *bool  `json:"ftp_enabled,omitempty"`
+	TFTPEnabled             *bool  `json:"tftp_enabled,omitempty"`
 }
 
 // handleCreateTarget creates a new target and adds it to the specified access group.
@@ -1695,6 +1704,18 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sftpEnabled := protocol == access.ProtocolSSH
+	ftpEnabled := false
+	tftpEnabled := false
+	if req.SFTPEnabled != nil {
+		sftpEnabled = *req.SFTPEnabled
+	}
+	if req.FTPEnabled != nil {
+		ftpEnabled = *req.FTPEnabled
+	}
+	if req.TFTPEnabled != nil {
+		tftpEnabled = *req.TFTPEnabled
+	}
 	baseID := slugID(req.Name)
 	id := baseID
 	for i := 0; ; i++ {
@@ -1705,7 +1726,7 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		if path == "" {
 			path = req.GroupID
 		}
-		_, err := a.TargetStore.CreateWithPath(ctx, access.TargetID(id), req.Name, req.Host, req.Port, protocol, access.GroupID(req.GroupID), path, strings.TrimSpace(req.SSHUsername), req.SSHPassword, req.SSHPrivateKey, req.SSHPrivateKeyPassphrase)
+		_, err := a.TargetStore.CreateWithPath(ctx, access.TargetID(id), req.Name, req.Host, req.Port, protocol, access.GroupID(req.GroupID), path, strings.TrimSpace(req.SSHUsername), req.SSHPassword, req.SSHPrivateKey, req.SSHPrivateKeyPassphrase, sftpEnabled, ftpEnabled, tftpEnabled)
 		if err == nil {
 			break
 		}
@@ -1739,8 +1760,11 @@ type updateTargetRequest struct {
 	Path                    string  `json:"path"`
 	SSHUsername             string  `json:"ssh_username"`
 	SSHPassword             *string `json:"ssh_password,omitempty"`               // nil = 変更しない、空文字 = クリア
-	SSHPrivateKey           *string `json:"ssh_private_key,omitempty"`            // nil = 変更しない、空文字 = クリア
-	SSHPrivateKeyPassphrase *string `json:"ssh_private_key_passphrase,omitempty"` // nil = 変更しない、空文字 = クリア
+	SSHPrivateKey           *string `json:"ssh_private_key,omitempty"`             // nil = 変更しない、空文字 = クリア
+	SSHPrivateKeyPassphrase *string `json:"ssh_private_key_passphrase,omitempty"`   // nil = 変更しない、空文字 = クリア
+	SFTPEnabled             *bool   `json:"sftp_enabled,omitempty"`
+	FTPEnabled              *bool   `json:"ftp_enabled,omitempty"`
+	TFTPEnabled             *bool   `json:"tftp_enabled,omitempty"`
 }
 
 // handleUpdateTarget updates an existing target. Caller must have access to the target.
@@ -1827,7 +1851,19 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	if req.SSHPrivateKeyPassphrase != nil {
 		sshPrivateKeyPassphrase = *req.SSHPrivateKeyPassphrase
 	}
-	t, err := a.TargetStore.Update(ctx, access.TargetID(targetID), req.Name, req.Host, req.Port, protocol, req.Path, strings.TrimSpace(req.SSHUsername), sshPassword, sshPrivateKey, sshPrivateKeyPassphrase)
+	sftpEnabled := cur != nil && cur.SFTPEnabled
+	ftpEnabled := cur != nil && cur.FTPEnabled
+	tftpEnabled := cur != nil && cur.TFTPEnabled
+	if req.SFTPEnabled != nil {
+		sftpEnabled = *req.SFTPEnabled
+	}
+	if req.FTPEnabled != nil {
+		ftpEnabled = *req.FTPEnabled
+	}
+	if req.TFTPEnabled != nil {
+		tftpEnabled = *req.TFTPEnabled
+	}
+	t, err := a.TargetStore.Update(ctx, access.TargetID(targetID), req.Name, req.Host, req.Port, protocol, req.Path, strings.TrimSpace(req.SSHUsername), sshPassword, sshPrivateKey, sshPrivateKeyPassphrase, sftpEnabled, ftpEnabled, tftpEnabled)
 	if err != nil {
 		if errors.Is(err, access.ErrTargetNotFound) {
 			writeJSONError(w, "target not found", http.StatusNotFound)

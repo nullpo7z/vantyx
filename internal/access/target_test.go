@@ -30,7 +30,7 @@ func TestSQLiteTargetStore_CreateAndGet(t *testing.T) {
 	ctx := context.Background()
 	store := newTestSQLiteTargetStore(t)
 
-	target, err := store.CreateWithPath(ctx, "t1", "router1", "192.168.1.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	target, err := store.CreateWithPath(ctx, "t1", "router1", "192.168.1.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -56,10 +56,10 @@ func TestSQLiteTargetStore_Create_Duplicate(t *testing.T) {
 	ctx := context.Background()
 	store := newTestSQLiteTargetStore(t)
 
-	if _, err := store.CreateWithPath(ctx, "t1", "r1", "host", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", ""); err != nil {
+	if _, err := store.CreateWithPath(ctx, "t1", "r1", "host", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
-	if _, err := store.CreateWithPath(ctx, "t1", "r2", "host2", 23, ProtocolTelnet, GroupID("g1"), "g1", "", "", "", ""); err != ErrTargetExists {
+	if _, err := store.CreateWithPath(ctx, "t1", "r2", "host2", 23, ProtocolTelnet, GroupID("g1"), "g1", "", "", "", "", false, false, false); err != ErrTargetExists {
 		t.Fatalf("expected ErrTargetExists, got %v", err)
 	}
 }
@@ -68,8 +68,8 @@ func TestSQLiteTargetStore_ListByIDs(t *testing.T) {
 	ctx := context.Background()
 	store := newTestSQLiteTargetStore(t)
 
-	_, _ = store.CreateWithPath(ctx, "t1", "r1", "h1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
-	_, _ = store.CreateWithPath(ctx, "t2", "r2", "h2", 23, ProtocolTelnet, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = store.CreateWithPath(ctx, "t1", "r1", "h1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = store.CreateWithPath(ctx, "t2", "r2", "h2", 23, ProtocolTelnet, GroupID("g1"), "g1", "", "", "", "", false, false, false)
 
 	list, err := store.ListByIDs(ctx, []TargetID{"t1", "t2", "missing", "t1"}, nil)
 	if err != nil {
@@ -84,7 +84,7 @@ func TestSQLiteTargetStore_CreateWithPath_ProtocolVNC(t *testing.T) {
 	ctx := context.Background()
 	store := newTestSQLiteTargetStore(t)
 
-	target, err := store.CreateWithPath(ctx, "vnc1", "VNC Server", "192.168.1.10", 5900, ProtocolVNC, GroupID("g1"), "g1", "", "", "", "")
+	target, err := store.CreateWithPath(ctx, "vnc1", "VNC Server", "192.168.1.10", 5900, ProtocolVNC, GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	if err != nil {
 		t.Fatalf("CreateWithPath: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestSQLiteTargetStore_CreateWithPath_ProtocolTFTP(t *testing.T) {
 	ctx := context.Background()
 	store := newTestSQLiteTargetStore(t)
 
-	target, err := store.CreateWithPath(ctx, "tftp1", "TFTP Server", "192.168.1.20", 69, ProtocolTFTP, GroupID("g1"), "g1", "", "", "", "")
+	target, err := store.CreateWithPath(ctx, "tftp1", "TFTP Server", "192.168.1.20", 69, ProtocolTFTP, GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	if err != nil {
 		t.Fatalf("CreateWithPath: %v", err)
 	}

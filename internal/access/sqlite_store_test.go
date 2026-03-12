@@ -26,17 +26,17 @@ func TestSQLiteTargetStore_CreateWithPath_Validation(t *testing.T) {
 	ctx := context.Background()
 	_, targets := newTestSQLiteStores(t)
 
-	if _, err := targets.CreateWithPath(ctx, "", "n", "h", 22, ProtocolSSH, GroupID("p"), "p", "", "", "", ""); err == nil {
+	if _, err := targets.CreateWithPath(ctx, "", "n", "h", 22, ProtocolSSH, GroupID("p"), "p", "", "", "", "", true, false, false); err == nil {
 		t.Fatalf("expected error for empty id, got nil")
 	}
-	if _, err := targets.CreateWithPath(ctx, "id", "", "h", 22, ProtocolSSH, GroupID("p"), "p", "", "", "", ""); err == nil {
+	if _, err := targets.CreateWithPath(ctx, "id", "", "h", 22, ProtocolSSH, GroupID("p"), "p", "", "", "", "", true, false, false); err == nil {
 		t.Fatalf("expected error for empty name, got nil")
 	}
-	if _, err := targets.CreateWithPath(ctx, "id", "n", "", 22, ProtocolSSH, GroupID("p"), "p", "", "", "", ""); err == nil {
+	if _, err := targets.CreateWithPath(ctx, "id", "n", "", 22, ProtocolSSH, GroupID("p"), "p", "", "", "", "", true, false, false); err == nil {
 		t.Fatalf("expected error for empty host, got nil")
 	}
 	// invalid groupID (when non-empty): invalid characters
-	if _, err := targets.CreateWithPath(ctx, "id", "n", "h", 22, ProtocolSSH, GroupID("g 1"), "g 1", "", "", "", ""); err == nil {
+	if _, err := targets.CreateWithPath(ctx, "id", "n", "h", 22, ProtocolSSH, GroupID("g 1"), "g 1", "", "", "", "", true, false, false); err == nil {
 		t.Fatalf("expected error for invalid group id, got nil")
 	}
 }
@@ -45,9 +45,9 @@ func TestSQLiteTargetStore_Update(t *testing.T) {
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, _ = targets.CreateWithPath(ctx, "t1", "old", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(ctx, "t1", "old", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 
-	updated, err := targets.Update(ctx, "t1", "new", "10.0.0.2", 2222, ProtocolTelnet, "g1/sub", "user", "", "", "")
+	updated, err := targets.Update(ctx, "t1", "new", "10.0.0.2", 2222, ProtocolTelnet, "g1/sub", "user", "", "", "", false, false, false)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestSQLiteTargetStore_Update(t *testing.T) {
 	if got.Name != "new" || got.Host != "10.0.0.2" {
 		t.Fatalf("Get after update: %+v", got)
 	}
-	if _, err := targets.Update(ctx, "missing", "n", "h", 22, ProtocolSSH, "", "", "", "", ""); err != ErrTargetNotFound {
+	if _, err := targets.Update(ctx, "missing", "n", "h", 22, ProtocolSSH, "", "", "", "", "", true, false, false); err != ErrTargetNotFound {
 		t.Fatalf("expected ErrTargetNotFound, got %v", err)
 	}
 }
@@ -67,7 +67,7 @@ func TestSQLiteTargetStore_Delete(t *testing.T) {
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, _ = targets.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 
 	if err := targets.Delete(ctx, "t1"); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -91,7 +91,7 @@ func TestSQLiteTargetStore_Get_NotFoundAndPortBounds(t *testing.T) {
 
 	// happy path within bounds
 	_, _ = groups.Create(ctx, "g1", "G1")
-	if _, err := targets.CreateWithPath(ctx, "t1", "ok", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", ""); err != nil {
+	if _, err := targets.CreateWithPath(ctx, "t1", "ok", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false); err != nil {
 		t.Fatalf("CreateWithPath: %v", err)
 	}
 	got, err := targets.Get(ctx, "t1")
@@ -107,7 +107,7 @@ func TestSQLiteTargetStore_SSHPassword_EncryptionRequiredWithoutKey(t *testing.T
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, err := targets.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "user", "secret", "", "")
+	_, err := targets.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "user", "secret", "", "", true, false, false)
 	if err != ErrEncryptionKeyRequired {
 		t.Fatalf("expected ErrEncryptionKeyRequired when storing password without encKey, got %v", err)
 	}
@@ -122,7 +122,7 @@ func TestSQLiteTargetStore_SSHPassword_EncryptDecryptWithKey(t *testing.T) {
 	}
 	storeWithKey := NewSQLiteTargetStore(targets.db, nil, key)
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, err := storeWithKey.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "root", "mypass", "", "")
+	_, err := storeWithKey.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "root", "mypass", "", "", true, false, false)
 	if err != nil {
 		t.Fatalf("CreateWithPath with encKey: %v", err)
 	}
@@ -145,8 +145,8 @@ func TestSQLiteTargetStore_ListByIDs_SkipsInvalidAndDuplicates(t *testing.T) {
 	groups, targets := newTestSQLiteStores(t)
 
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, _ = targets.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
-	_, _ = targets.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 23, ProtocolTelnet, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = targets.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 23, ProtocolTelnet, GroupID("g1"), "g1", "", "", "", "", false, false, false)
 
 	list, err := targets.ListByIDs(ctx, []TargetID{"", "t1", "t1", "missing", "t2"}, nil)
 	if err != nil {
@@ -204,10 +204,10 @@ func TestSQLiteAccessGroupStore_KeysetPagination(t *testing.T) {
 	groups, targets := newTestSQLiteStores(t)
 
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, _ = targets.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
-	_, _ = targets.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
-	_, _ = targets.CreateWithPath(ctx, "t3", "C", "10.0.0.3", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
-	_, _ = targets.CreateWithPath(ctx, "t4", "D", "10.0.0.4", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = targets.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = targets.CreateWithPath(ctx, "t3", "C", "10.0.0.3", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = targets.CreateWithPath(ctx, "t4", "D", "10.0.0.4", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = groups.AddTargetToGroup(ctx, "g1", "t1")
 	_ = groups.AddTargetToGroup(ctx, "g1", "t2")
 	_ = groups.AddTargetToGroup(ctx, "g1", "t3")
@@ -252,7 +252,7 @@ func TestSQLiteAccessGroupStore_TagBasedAccess(t *testing.T) {
 		t.Fatalf("insert user: %v", err)
 	}
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, _ = targets.CreateWithPath(ctx, "t1", "T1", "h1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(ctx, "t1", "T1", "h1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = groups.AddTargetToGroup(ctx, "g1", "t1")
 	// u1 not in any group -> no access yet
 	ids, err := groups.TargetIDsForUser(ctx, "u1", nil)
@@ -291,7 +291,7 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_ViaTag(t *testing.T) {
 		t.Fatalf("insert user: %v", err)
 	}
 	_, _ = groups.Create(ctx, "g2", "G2")
-	_, _ = targets.CreateWithPath(ctx, "t2", "T2", "h2", 22, ProtocolSSH, GroupID("g2"), "g2", "", "", "", "")
+	_, _ = targets.CreateWithPath(ctx, "t2", "T2", "h2", 22, ProtocolSSH, GroupID("g2"), "g2", "", "", "", "", true, false, false)
 	_ = groups.AddTargetToGroup(ctx, "g2", "t2")
 	// u2 is not a member of g2; give u2 and t2 the same tag so u2 has tag-based access
 	_, _ = db.ExecContext(ctx, `INSERT INTO user_tags (user_id, tag) VALUES ('u2', 'home')`)
@@ -389,17 +389,17 @@ func TestSQLiteTargetStore_CreateWithPath_InvalidProtocolAndHost(t *testing.T) {
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(ctx, "g1", "G1")
 
-	if _, err := targets.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, "invalid", GroupID("g1"), "g1", "", "", "", ""); err == nil {
+	if _, err := targets.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, "invalid", GroupID("g1"), "g1", "", "", "", "", false, false, false); err == nil {
 		t.Fatal("expected error for invalid protocol")
 	}
-	if _, err := targets.CreateWithPath(ctx, "t1", "n", "", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", ""); err == nil {
+	if _, err := targets.CreateWithPath(ctx, "t1", "n", "", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false); err == nil {
 		t.Fatal("expected error for empty host")
 	}
 	// hostname must not start/end with hyphen or dot per pattern
-	if _, err := targets.CreateWithPath(ctx, "t1", "n", "-bad", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", ""); err == nil {
+	if _, err := targets.CreateWithPath(ctx, "t1", "n", "-bad", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false); err == nil {
 		t.Fatal("expected error for invalid hostname (-bad)")
 	}
-	if _, err := targets.CreateWithPath(ctx, "t1", "n", string(make([]byte, 254)), 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", ""); err == nil {
+	if _, err := targets.CreateWithPath(ctx, "t1", "n", string(make([]byte, 254)), 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false); err == nil {
 		t.Fatal("expected error for host too long")
 	}
 }
@@ -409,17 +409,17 @@ func TestSQLiteTargetStore_CreateWithPath_InvalidTargetID(t *testing.T) {
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(ctx, "g1", "G1")
 
-	if _, err := targets.CreateWithPath(ctx, "", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", ""); err == nil {
+	if _, err := targets.CreateWithPath(ctx, "", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false); err == nil {
 		t.Fatal("expected error for empty target id")
 	}
-	if _, err := targets.CreateWithPath(ctx, TargetID(string(make([]byte, 513))), "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", ""); err == nil {
+	if _, err := targets.CreateWithPath(ctx, TargetID(string(make([]byte, 513))), "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false); err == nil {
 		t.Fatal("expected error for target id too long")
 	}
-	if _, err := targets.CreateWithPath(ctx, "bad id!", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", ""); err == nil {
+	if _, err := targets.CreateWithPath(ctx, "bad id!", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false); err == nil {
 		t.Fatal("expected error for invalid target id characters")
 	}
 	// invalid group_id when non-empty
-	if _, err := targets.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("bad!"), "p", "", "", "", ""); err == nil {
+	if _, err := targets.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("bad!"), "p", "", "", "", "", true, false, false); err == nil {
 		t.Fatal("expected error for invalid group id")
 	}
 }
@@ -428,9 +428,9 @@ func TestSQLiteTargetStore_ListByIDs_WithLimitOffset(t *testing.T) {
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, _ = targets.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
-	_, _ = targets.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
-	_, _ = targets.CreateWithPath(ctx, "t3", "C", "10.0.0.3", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = targets.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = targets.CreateWithPath(ctx, "t3", "C", "10.0.0.3", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 
 	list, err := targets.ListByIDs(ctx, []TargetID{"t1", "t2", "t3"}, &ListOpts{Limit: 2, Offset: 1})
 	if err != nil {
@@ -575,7 +575,7 @@ func TestSQLiteTargetStore_TagsForTarget_SetTargetTags(t *testing.T) {
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, _ = targets.CreateWithPath(ctx, "t1", "H1", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(ctx, "t1", "H1", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 
 	tags, err := targets.TagsForTarget(ctx, "t1")
 	if err != nil || len(tags) != 0 {
@@ -679,7 +679,7 @@ func TestSQLiteAccessGroupStore_SetGroupTags_CanceledContext(t *testing.T) {
 func TestSQLiteAccessGroupStore_AddTargetToGroup_CanceledContext(t *testing.T) {
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(context.Background(), "g1", "G1")
-	_, _ = targets.CreateWithPath(context.Background(), "t1", "T", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(context.Background(), "t1", "T", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := groups.AddTargetToGroup(ctx, "g1", "t1")
@@ -709,8 +709,8 @@ func TestSQLiteAccessGroupStore_TargetIDsForUser_AfterIDAndOffset(t *testing.T) 
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, _ = targets.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
-	_, _ = targets.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = targets.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = groups.AddTargetToGroup(ctx, "g1", "t1")
 	_ = groups.AddTargetToGroup(ctx, "g1", "t2")
 	_, _ = groups.db.ExecContext(ctx, `INSERT INTO users (id, username, password_hash) VALUES ('u1','u1','x')`)
@@ -740,21 +740,21 @@ func TestSQLiteTargetStore_Update_Validation(t *testing.T) {
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, _ = targets.CreateWithPath(ctx, "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(ctx, "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 
-	if _, err := targets.Update(ctx, "", "n", "h", 22, ProtocolSSH, "", "", "", "", ""); err == nil {
+	if _, err := targets.Update(ctx, "", "n", "h", 22, ProtocolSSH, "", "", "", "", "", true, false, false); err == nil {
 		t.Fatal("expected error for empty id")
 	}
-	if _, err := targets.Update(ctx, "t1", "", "h", 22, ProtocolSSH, "", "", "", "", ""); err == nil {
+	if _, err := targets.Update(ctx, "t1", "", "h", 22, ProtocolSSH, "", "", "", "", "", true, false, false); err == nil {
 		t.Fatal("expected error for empty name")
 	}
-	if _, err := targets.Update(ctx, "t1", "n", "", 22, ProtocolSSH, "", "", "", "", ""); err == nil {
+	if _, err := targets.Update(ctx, "t1", "n", "", 22, ProtocolSSH, "", "", "", "", "", true, false, false); err == nil {
 		t.Fatal("expected error for empty host")
 	}
-	if _, err := targets.Update(ctx, "t1", "n", "h", 22, Protocol("invalid"), "", "", "", "", ""); err == nil {
+	if _, err := targets.Update(ctx, "t1", "n", "h", 22, Protocol("invalid"), "", "", "", "", "", true, false, false); err == nil {
 		t.Fatal("expected error for invalid protocol")
 	}
-	if _, err := targets.Update(ctx, "t1", "n", "h", 22, ProtocolSSH, "", "", "secret", "", ""); err != ErrEncryptionKeyRequired {
+	if _, err := targets.Update(ctx, "t1", "n", "h", 22, ProtocolSSH, "", "", "secret", "", "", true, false, false); err != ErrEncryptionKeyRequired {
 		t.Fatalf("expected ErrEncryptionKeyRequired when updating with password and no key, got %v", err)
 	}
 }
@@ -763,10 +763,10 @@ func TestSQLiteTargetStore_Update_Validation(t *testing.T) {
 func TestSQLiteTargetStore_Update_CanceledContext(t *testing.T) {
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(context.Background(), "g1", "G1")
-	_, _ = targets.CreateWithPath(context.Background(), "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(context.Background(), "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := targets.Update(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, "", "", "", "", "")
+	_, err := targets.Update(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, "", "", "", "", "", true, false, false)
 	if err == nil {
 		t.Fatal("expected error with canceled context")
 	}
@@ -790,7 +790,7 @@ func TestSQLiteTargetStore_Get_DecryptFailure(t *testing.T) {
 	}
 	storeWithKey := NewSQLiteTargetStore(targets.db, nil, key)
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, err := storeWithKey.CreateWithPath(ctx, "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "u", "pass", "", "")
+	_, err := storeWithKey.CreateWithPath(ctx, "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "u", "pass", "", "", true, false, false)
 	if err != nil {
 		t.Fatalf("CreateWithPath: %v", err)
 	}
@@ -817,8 +817,8 @@ func TestSQLiteTargetStore_ListByIDs_DecryptFailure(t *testing.T) {
 	}
 	storeWithKey := NewSQLiteTargetStore(targets.db, nil, key)
 	_, _ = groups.Create(ctx, "g1", "G1")
-	_, _ = storeWithKey.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "u", "p1", "", "")
-	_, _ = storeWithKey.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 22, ProtocolSSH, GroupID("g1"), "g1", "u", "p2", "", "")
+	_, _ = storeWithKey.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "u", "p1", "", "", true, false, false)
+	_, _ = storeWithKey.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 22, ProtocolSSH, GroupID("g1"), "g1", "u", "p2", "", "", true, false, false)
 	_, _ = targets.db.ExecContext(ctx, `UPDATE targets SET ssh_password = 'v1:invalid' WHERE id = 't2'`)
 	list, err := storeWithKey.ListByIDs(ctx, []TargetID{"t1", "t2"}, nil)
 	if err != nil {
@@ -836,7 +836,7 @@ func TestSQLiteTargetStore_ListByIDs_DecryptFailure(t *testing.T) {
 func TestSQLiteTargetStore_SetTargetTags_CanceledContext(t *testing.T) {
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(context.Background(), "g1", "G1")
-	_, _ = targets.CreateWithPath(context.Background(), "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(context.Background(), "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := targets.SetTargetTags(ctx, "t1", []string{"a"})
@@ -861,7 +861,7 @@ func TestSQLiteAccessGroupStore_TagsForGroup_QueryError(t *testing.T) {
 func TestSQLiteTargetStore_TagsForTarget_QueryError(t *testing.T) {
 	groups, targets := newTestSQLiteStores(t)
 	_, _ = groups.Create(context.Background(), "g1", "G1")
-	_, _ = targets.CreateWithPath(context.Background(), "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "")
+	_, _ = targets.CreateWithPath(context.Background(), "t1", "N", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := targets.TagsForTarget(ctx, "t1")

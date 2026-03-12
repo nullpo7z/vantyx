@@ -81,6 +81,10 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 			writeJSONError(w, "stored credentials (password or SSH key) required for file transfer", http.StatusBadRequest)
 			return nil, nil
 		}
+		if !target.SFTPEnabled {
+			writeJSONError(w, "SFTP file transfer is disabled for this target", http.StatusForbidden)
+			return nil, nil
+		}
 		if target.SSHPrivateKey != "" && strings.HasPrefix(target.SSHPrivateKey, secret.CiphertextVersionPrefix) {
 			writeJSONError(w, "保存された認証情報の復号に失敗しています。VANTYX_ENCRYPTION_KEY を確認してください", http.StatusInternalServerError)
 			return nil, nil

@@ -50,7 +50,7 @@ func TestSQLiteAccessGroupStore_CreateAndMembership(t *testing.T) {
 	}
 	// target1 must exist for group_targets FK; create via TargetStore on same DB
 	targetStore := NewSQLiteTargetStore(store.db, nil, nil)
-	if _, err := targetStore.CreateWithPath(ctx, "target1", "r1", "192.168.1.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", ""); err != nil {
+	if _, err := targetStore.CreateWithPath(ctx, "target1", "r1", "192.168.1.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false); err != nil {
 		t.Fatalf("create target: %v", err)
 	}
 	if err := store.AddTargetToGroup(ctx, "g1", "target1"); err != nil {
@@ -108,10 +108,10 @@ func TestSQLiteAccessGroupStore_TargetIDsForUser_Dedup(t *testing.T) {
 		t.Fatalf("Create g2: %v", err)
 	}
 	targetStore := NewSQLiteTargetStore(store.db, nil, nil)
-	if _, err := targetStore.CreateWithPath(ctx, "t1", "r1", "h1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", ""); err != nil {
+	if _, err := targetStore.CreateWithPath(ctx, "t1", "r1", "h1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false); err != nil {
 		t.Fatalf("create target t1: %v", err)
 	}
-	if _, err := targetStore.CreateWithPath(ctx, "t2", "r2", "h2", 23, ProtocolTelnet, GroupID("g2"), "g2", "", "", "", ""); err != nil {
+	if _, err := targetStore.CreateWithPath(ctx, "t2", "r2", "h2", 23, ProtocolTelnet, GroupID("g2"), "g2", "", "", "", "", false, false, false); err != nil {
 		t.Fatalf("create target t2: %v", err)
 	}
 	_ = store.AddUserToGroup(ctx, "u1", "g1")

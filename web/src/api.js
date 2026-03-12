@@ -115,23 +115,27 @@ const API = {
     return res.json()
   },
 
-  async createTarget({ name, host, port, protocol, group_id, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase }) {
+  async createTarget({ name, host, port, protocol, group_id, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, sftp_enabled, ftp_enabled, tftp_enabled }) {
+    const payload = {
+      name,
+      host,
+      port: port || 22,
+      protocol: protocol || 'ssh',
+      group_id,
+      path: path || '',
+      ssh_username: ssh_username || '',
+      ssh_password: ssh_password || '',
+      ssh_private_key: (ssh_private_key && ssh_private_key.trim()) || '',
+      ssh_private_key_passphrase: ssh_private_key_passphrase || '',
+    }
+    if (typeof sftp_enabled === 'boolean') payload.sftp_enabled = sftp_enabled
+    if (typeof ftp_enabled === 'boolean') payload.ftp_enabled = ftp_enabled
+    if (typeof tftp_enabled === 'boolean') payload.tftp_enabled = tftp_enabled
     const res = await fetch('/api/targets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({
-        name,
-        host,
-        port: port || 22,
-        protocol: protocol || 'ssh',
-        group_id,
-        path: path || '',
-        ssh_username: ssh_username || '',
-        ssh_password: ssh_password || '',
-        ssh_private_key: (ssh_private_key && ssh_private_key.trim()) || '',
-        ssh_private_key_passphrase: ssh_private_key_passphrase || '',
-      }),
+      body: JSON.stringify(payload),
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
@@ -140,7 +144,7 @@ const API = {
     return res.json()
   },
 
-  async updateTarget(targetId, { name, host, port, protocol, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase }) {
+  async updateTarget(targetId, { name, host, port, protocol, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, sftp_enabled, ftp_enabled, tftp_enabled }) {
     const body = {
       name,
       host,
@@ -148,6 +152,15 @@ const API = {
       protocol: protocol || 'ssh',
       path: path || '',
       ssh_username: ssh_username || '',
+    }
+    if (typeof sftp_enabled === 'boolean') {
+      body.sftp_enabled = sftp_enabled
+    }
+    if (typeof ftp_enabled === 'boolean') {
+      body.ftp_enabled = ftp_enabled
+    }
+    if (typeof tftp_enabled === 'boolean') {
+      body.tftp_enabled = tftp_enabled
     }
     if (ssh_password !== undefined && ssh_password !== null) {
       body.ssh_password = ssh_password

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -206,13 +205,17 @@ var (
 func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("vantyx_session")
 	if err != nil || cookie.Value == "" {
-		log.Printf("terminal ws unauthorized err=no session cookie")
+		audit("terminal_ws_unauthorized", auditFields{
+			"reason": "no_session_cookie",
+		})
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	sess, err := a.SessionStore.Get(cookie.Value)
 	if err != nil {
-		log.Printf("terminal ws unauthorized err=invalid session")
+		audit("terminal_ws_unauthorized", auditFields{
+			"reason": "invalid_session",
+		})
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -226,16 +229,20 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		conn, err := wsUpgrader.Upgrade(w, r, nil)
 		if err != nil {
-			// #nosec G706 -- audit log; sessionIDParam from query, err from upgrader
-			log.Printf("terminal ws upgrade_failed attach session_id=%s err=%v", sessionIDParam, err)
+			audit("terminal_ws_upgrade_failed_attach", auditFields{
+				"session_id": sessionIDParam,
+				"error":      err.Error(),
+			})
 			writeJSONError(w, "failed to upgrade connection", http.StatusBadRequest)
 			return
 		}
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(""))
 		select {
 		case termSess.AttachCh <- session.AttachReq{Conn: conn}:
-			// #nosec G706 -- audit log; IDs from session store
-			log.Printf("terminal session attach session_id=%s user_id=%s", sessionIDParam, sess.UserID)
+			audit("terminal_session_attach", auditFields{
+				"session_id": sessionIDParam,
+				"user_id":    sess.UserID,
+			})
 		default:
 			_ = conn.WriteMessage(websocket.TextMessage, []byte("error: session attach slot busy"))
 			_ = conn.Close()
@@ -244,63 +251,48 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	targetID := r.URL.Query().Get("target_id")
-	if targetID == "" {
-		// #nosec G706 -- audit log; sess.UserID from session store
-		log.Printf("terminal ws bad_request user_id=%s err=target_id required", sess.UserID)
-		writeJSONError(w, "target_id required", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
-	target, err := a.TargetStore.Get(ctx, access.TargetID(targetID))
-	if err != nil {
-		// #nosec G706 -- audit log; IDs from store/query
-		log.Printf("terminal ws not_found user_id=%s target_id=%s", sess.UserID, targetID)
-		writeJSONError(w, "target not found", http.StatusNotFound)
-		return
-	}
-
-	allowed, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	allowedSet := make(map[access.TargetID]struct{})
-	for _, id := range allowed {
-		allowedSet[id] = struct{}{}
-	}
-	if _, ok := allowedSet[access.TargetID(targetID)]; !ok {
-		// #nosec G706 -- audit log; IDs from store/query
-		log.Printf("terminal ws forbidden user_id=%s target_id=%s", sess.UserID, targetID)
-		writeJSONError(w, "forbidden", http.StatusForbidden)
+	userID, target, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
+	if !ok {
 		return
 	}
 
 	if target.Protocol != access.ProtocolSSH {
-		// #nosec G706 -- audit log; target from store
-		log.Printf("terminal ws not_implemented user_id=%s target_id=%s protocol=%s", sess.UserID, targetID, target.Protocol)
+		audit("terminal_ws_not_implemented", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+			"protocol":  target.Protocol,
+		})
 		writeJSONError(w, "only SSH targets supported", http.StatusNotImplemented)
 		return
 	}
 
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		// #nosec G706 -- audit log; err from upgrader
-		log.Printf("terminal ws upgrade_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+		audit("terminal_ws_upgrade_failed", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+			"error":     err.Error(),
+		})
 		writeJSONError(w, "failed to upgrade connection", http.StatusBadRequest)
 		return
 	}
 
 	creds, err := readTerminalCredentials(conn, target)
 	if err != nil {
-		// #nosec G706 -- audit log; err from readTerminalCredentials
-		log.Printf("terminal ws credentials_invalid user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+		audit("terminal_ws_credentials_invalid", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+			"error":     err.Error(),
+		})
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+err.Error()))
 		_ = conn.Close()
 		return
 	}
-	// #nosec G706 -- audit log; creds from readTerminalCredentials
-	log.Printf("terminal ws credentials_ok user_id=%s target_id=%s ssh_user=%q", sess.UserID, targetID, creds.Username)
+	audit("terminal_ws_credentials_ok", auditFields{
+		"user_id":   userID,
+		"target_id": targetID,
+		"ssh_user":  creds.Username,
+	})
 
 	// terminalSessionIDGen is overridden in tests to trigger Start id-collision error path.
 	var id session.ID
@@ -310,14 +302,17 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		var err error
 		id, err = newTerminalSessionID()
 		if err != nil {
-			log.Printf("terminal session idgen_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+			audit("terminal_session_idgen_failed", auditFields{
+				"user_id":   sess.UserID,
+				"target_id": targetID,
+				"error":     err.Error(),
+			})
 			_ = conn.Close()
 			http.Error(w, "failed to start terminal session", http.StatusInternalServerError)
 			return
 		}
 	}
 
-	userID := sess.UserID
 	opts := session.StartOptions{
 		UserID:      userID,
 		TargetID:    targetID,
@@ -341,15 +336,22 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		a.runDetachableBridge(ctx, termSess, a.TerminalSessionManager, id, conn, target, creds, cols, rows)
 	})
 	if err != nil {
-		// #nosec G706 -- audit log; err from Start
-		log.Printf("terminal session start_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+		audit("terminal_session_start_failed", auditFields{
+			"user_id":   sess.UserID,
+			"target_id": targetID,
+			"error":     err.Error(),
+		})
 		_ = conn.Close()
 		http.Error(w, "failed to start terminal session", http.StatusInternalServerError)
 		return
 	}
-	// #nosec G706 -- audit log; target from store
-	log.Printf("terminal session start session_id=%s user_id=%s target_id=%s host=%s port=%d",
-		id, sess.UserID, targetID, target.Host, target.Port)
+	audit("terminal_session_start", auditFields{
+		"session_id": id,
+		"user_id":    sess.UserID,
+		"target_id":  targetID,
+		"host":       target.Host,
+		"port":       target.Port,
+	})
 }
 
 // TerminalSessionItem is one entry in GET /api/terminal/sessions response.
@@ -364,13 +366,8 @@ type TerminalSessionItem struct {
 
 // handleTerminalSessions returns the list of active terminal sessions for the current user.
 func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("vantyx_session")
-	if err != nil || cookie.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	authSess, err := a.SessionStore.Get(cookie.Value)
-	if err != nil {
+	userID := strings.TrimSpace(a.currentUserID(r))
+	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -384,7 +381,7 @@ func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 	items := make([]TerminalSessionItem, 0, len(ids))
 	for _, id := range ids {
 		sess, ok := a.TerminalSessionManager.Get(id)
-		if !ok || sess.UserID != authSess.UserID {
+		if !ok || sess.UserID != userID {
 			continue
 		}
 		items = append(items, TerminalSessionItem{
@@ -401,13 +398,8 @@ func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 
 // handleTerminalSessionDelete terminates the given terminal session. Caller must own the session.
 func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("vantyx_session")
-	if err != nil || cookie.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	authSess, err := a.SessionStore.Get(cookie.Value)
-	if err != nil {
+	userID := strings.TrimSpace(a.currentUserID(r))
+	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -418,25 +410,22 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 	}
 	id := session.ID(sessionID)
 	termSess, ok := a.TerminalSessionManager.Get(id)
-	if !ok || termSess.UserID != authSess.UserID {
+	if !ok || termSess.UserID != userID {
 		writeJSONError(w, "session not found or access denied", http.StatusNotFound)
 		return
 	}
 	a.TerminalSessionManager.Stop(id)
-	// #nosec G706 -- audit log; sessionID from URL, authSess from store
-	log.Printf("terminal session stopped session_id=%s user_id=%s", sessionID, authSess.UserID)
+	audit("terminal_session_stop", auditFields{
+		"session_id": sessionID,
+		"user_id":    userID,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleListRecordings returns recordings for the current user (metadata only, no file_path).
 func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("vantyx_session")
-	if err != nil || cookie.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	authSess, err := a.SessionStore.Get(cookie.Value)
-	if err != nil {
+	userID := strings.TrimSpace(a.currentUserID(r))
+	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -448,7 +437,7 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	targetID := q.Get("target_id")
 	query := `SELECT id, user_id, target_id, session_id, channel_type, started_at, ended_at, COALESCE(session_name, ''), COALESCE(session_description, '') FROM recordings WHERE user_id = ?`
-	args := []interface{}{authSess.UserID}
+	args := []interface{}{userID}
 	if targetID != "" {
 		query += ` AND target_id = ?`
 		args = append(args, targetID)
@@ -485,13 +474,8 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 // handleGetRecordingFile serves the recording file. Query format=cast|gif|webm (default cast).
 // cast = asciinema .cast; gif/webm require agg (and ffmpeg for webm) to be installed, else 503.
 func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("vantyx_session")
-	if err != nil || cookie.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	authSess, err := a.SessionStore.Get(cookie.Value)
-	if err != nil {
+	userID := strings.TrimSpace(a.currentUserID(r))
+	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -518,8 +502,11 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "recordings not available", http.StatusServiceUnavailable)
 		return
 	}
-	var filePath string
-	err = a.DB.QueryRowContext(r.Context(), `SELECT file_path FROM recordings WHERE id = ? AND user_id = ?`, recordingID, authSess.UserID).Scan(&filePath)
+	var (
+		filePath string
+		err      error
+	)
+	err = a.DB.QueryRowContext(r.Context(), `SELECT file_path FROM recordings WHERE id = ? AND user_id = ?`, recordingID, userID).Scan(&filePath)
 	if err == sql.ErrNoRows {
 		writeJSONError(w, "recording not found", http.StatusNotFound)
 		return
@@ -587,7 +574,11 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 	// GIF or WebM: convert with agg (and ffmpeg for webm)
 	outPath, contentType, disposition, err := convertCastToVideo(castPath, format)
 	if err != nil {
-		log.Printf("recording convert failed id=%s format=%s err=%v", recordingID, format, err)
+		audit("recording_convert_failed", auditFields{
+			"id":     recordingID,
+			"format": format,
+			"error":  err.Error(),
+		})
 		writeJSONError(w, "video export unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -683,7 +674,11 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		castPath := filepath.Join(recordingDir, safeName+".cast")
 		f, err := os.Create(castPath) // #nosec G703 G304 -- path under recordingDir, safeName sanitized
 		if err != nil {
-			log.Printf("recording create failed session_id=%s path=%s err=%v", id, castPath, err) // #nosec G706 -- log for debugging
+			audit("recording_create_failed", auditFields{
+				"session_id": id,
+				"path":       castPath,
+				"error":      err.Error(),
+			})
 		} else {
 			startedAt := time.Now().UTC()
 			w, h := cols, rows
@@ -701,7 +696,10 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 				sessDesc := termSess.Description
 				if _, err := a.DB.ExecContext(ctx, `INSERT INTO recordings (id, user_id, target_id, session_id, channel_type, file_path, started_at, session_name, session_description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 					string(id), termSess.UserID, termSess.TargetID, string(id), "browser", castPath, startedAt.Format("2006-01-02 15:04:05"), sessName, sessDesc); err != nil {
-					log.Printf("recording insert failed session_id=%s err=%v", id, err)
+					audit("recording_insert_failed", auditFields{
+						"session_id": id,
+						"error":      err.Error(),
+					})
 				}
 			}
 			recordingCloser = func() {
@@ -718,10 +716,16 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 	}
 
 	if err := sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, conn, touch, tee, stdinRecorder, cols, rows); err != nil {
-		log.Printf("terminal bridge ended session_id=%s err=%v", id, err)
+		audit("terminal_bridge_end_error", auditFields{
+			"session_id": id,
+			"error":      err.Error(),
+		})
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+err.Error()))
 	} else {
-		log.Printf("terminal bridge ended session_id=%s (SSH session closed)", id)
+		audit("terminal_bridge_end", auditFields{
+			"session_id": id,
+			"reason":     "ssh_session_closed",
+		})
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("session_ended: SSH session closed"))
 	}
 	_ = conn.Close()

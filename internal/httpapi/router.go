@@ -456,13 +456,17 @@ func writeJSONError(w http.ResponseWriter, message string, code int) {
 
 // writeInternalError logs err and sends a generic message (ASVS V8.1: do not expose internal errors to client).
 func writeInternalError(w http.ResponseWriter, err error) {
-	log.Printf("internal error: %v", err)
+	audit("internal_error", auditFields{
+		"error": err.Error(),
+	})
 	writeJSONError(w, "internal error", http.StatusInternalServerError)
 }
 
 // writeServiceUnavailableError logs err and sends a generic message for 503.
 func writeServiceUnavailableError(w http.ResponseWriter, err error) {
-	log.Printf("service unavailable: %v", err)
+	audit("service_unavailable", auditFields{
+		"error": err.Error(),
+	})
 	writeJSONError(w, "service unavailable", http.StatusServiceUnavailable)
 }
 
@@ -471,8 +475,9 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if a.LoginRateLimiter != nil {
 		ip = a.LoginRateLimiter.clientIP(r)
 		if !a.LoginRateLimiter.allow(ip) {
-			// #nosec G706 -- audit log; ip from client
-			log.Printf("login rate limited ip=%s", ip)
+			audit("login_rate_limited", auditFields{
+				"ip": ip,
+			})
 			writeJSONError(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
 			return
 		}
@@ -480,7 +485,10 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("login failed username=%s err=invalid request body", req.Username)
+		audit("login_failed", auditFields{
+			"username": req.Username,
+			"reason":   "invalid_request_body",
+		})
 		writeJSONError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -489,18 +497,28 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if a.LoginRateLimiter != nil && ip != "" {
 			a.LoginRateLimiter.recordFailure(ip)
 		}
-		log.Printf("login failed username=%s err=invalid credentials", req.Username)
+		audit("login_failed", auditFields{
+			"username": req.Username,
+			"reason":   "invalid_credentials",
+		})
 		writeJSONError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
 	sess, err := a.SessionStore.Create(u.ID)
 	if err != nil {
-		log.Printf("login failed username=%s err=session create %v", req.Username, err)
+		audit("login_failed", auditFields{
+			"username": req.Username,
+			"reason":   "session_create_failed",
+			"error":    err.Error(),
+		})
 		writeJSONError(w, "failed to create session", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("login success user_id=%s username=%s", u.ID, u.Username)
+	audit("login_success", auditFields{
+		"user_id":  u.ID,
+		"username": u.Username,
+	})
 
 	cookie := &http.Cookie{
 		Name:     "vantyx_session",
@@ -564,17 +582,12 @@ func (a *App) sessionMiddleware(next http.Handler) http.Handler {
 
 // handleMe returns information about the currently authenticated user.
 func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie("vantyx_session")
-	if err != nil || c.Value == "" {
+	userID := strings.TrimSpace(a.currentUserID(r))
+	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	sess, err := a.SessionStore.Get(c.Value)
-	if err != nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	u, err := a.UserStore.GetByID(sess.UserID)
+	u, err := a.UserStore.GetByID(userID)
 	if err != nil {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -814,37 +827,6 @@ func (a *App) handleDeleteUserSSHKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // currentUserID returns the authenticated user's ID from the session cookie, or "" if not authenticated.
-func (a *App) currentUserID(r *http.Request) string {
-	c, err := r.Cookie("vantyx_session")
-	if err != nil || c.Value == "" {
-		return ""
-	}
-	sess, err := a.SessionStore.Get(c.Value)
-	if err != nil {
-		return ""
-	}
-	return sess.UserID
-}
-
-// requireAdmin writes 403 JSON and returns false if the current user does not have admin role; otherwise returns true.
-func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	userID := a.currentUserID(r)
-	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return false
-	}
-	u, err := a.UserStore.GetByID(userID)
-	if err != nil || u == nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return false
-	}
-	if u.Role != auth.RoleAdmin {
-		writeJSONError(w, "forbidden: admin only", http.StatusForbidden)
-		return false
-	}
-	return true
-}
-
 func (a *App) handleAPISpec(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
@@ -994,13 +976,8 @@ func listOptsFromRequest(r *http.Request) *access.ListOpts {
 
 // handleGroups returns access groups the current user belongs to, including their targets.
 func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie("vantyx_session")
-	if err != nil || c.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	sess, err := a.SessionStore.Get(c.Value)
-	if err != nil {
+	userID := strings.TrimSpace(a.currentUserID(r))
+	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1013,7 +990,7 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 		pageLimit = opts.Limit
 		opts = &access.ListOpts{Limit: pageLimit + 1, AfterID: opts.AfterID}
 	}
-	groupIDs, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(sess.UserID), opts)
+	groupIDs, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(userID), opts)
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -1024,7 +1001,7 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 		nextCursor = string(groupIDs[pageLimit-1])
 	}
 	// Targets this user is allowed to see (membership or tag-based)
-	allowedTargetIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
+	allowedTargetIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -1082,13 +1059,8 @@ type createGroupRequest struct {
 
 // handleCreateGroup creates a new access group and adds the current user to it.
 func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie("vantyx_session")
-	if err != nil || c.Value == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	sess, err := a.SessionStore.Get(c.Value)
-	if err != nil {
+	userID := strings.TrimSpace(a.currentUserID(r))
+	if userID == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1124,7 +1096,7 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := a.AccessGroupStore.AddUserToGroup(ctx, access.UserID(sess.UserID), access.GroupID(id)); err != nil {
+	if err := a.AccessGroupStore.AddUserToGroup(ctx, access.UserID(userID), access.GroupID(id)); err != nil {
 		writeInternalError(w, err)
 		return
 	}
@@ -1405,34 +1377,9 @@ func (a *App) handleGroupTags(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "group_id required", http.StatusBadRequest)
 		return
 	}
-	userID := a.currentUserID(r)
-	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	ctx := r.Context()
-	u, err := a.UserStore.GetByID(userID)
-	if err != nil || u == nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+	if _, ok := a.requireGroupMemberOrAdmin(w, r, access.GroupID(groupID)); !ok {
 		return
-	}
-	if u.Role != auth.RoleAdmin {
-		gids, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(userID), nil)
-		if err != nil {
-			writeInternalError(w, err)
-			return
-		}
-		allowed := false
-		for _, gid := range gids {
-			if string(gid) == groupID {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			writeJSONError(w, "forbidden", http.StatusForbidden)
-			return
-		}
 	}
 	tags, err := a.AccessGroupStore.TagsForGroup(ctx, access.GroupID(groupID))
 	if err != nil {
@@ -1460,34 +1407,9 @@ func (a *App) handleSetGroupTags(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "group_id required", http.StatusBadRequest)
 		return
 	}
-	userID := a.currentUserID(r)
-	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	ctx := r.Context()
-	u, err := a.UserStore.GetByID(userID)
-	if err != nil || u == nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+	if _, ok := a.requireGroupMemberOrAdmin(w, r, access.GroupID(groupID)); !ok {
 		return
-	}
-	if u.Role != auth.RoleAdmin {
-		gids, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(userID), nil)
-		if err != nil {
-			writeInternalError(w, err)
-			return
-		}
-		allowed := false
-		for _, gid := range gids {
-			if string(gid) == groupID {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			writeJSONError(w, "forbidden", http.StatusForbidden)
-			return
-		}
 	}
 	var req setTagsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1561,13 +1483,8 @@ func (a *App) handleListTags(w http.ResponseWriter, r *http.Request) {
 
 // handleTargets returns the list of targets the current user can access.
 func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie("vantyx_session")
-	if err != nil || c.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	sess, err := a.SessionStore.Get(c.Value)
-	if err != nil {
+	userID := strings.TrimSpace(a.currentUserID(r))
+	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1580,7 +1497,7 @@ func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 		pageLimit = opts.Limit
 		opts = &access.ListOpts{Limit: pageLimit + 1, AfterID: opts.AfterID}
 	}
-	ids, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), opts)
+	ids, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), opts)
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -1688,19 +1605,9 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	if req.Port == 0 {
 		req.Port = 22
 	}
-	protocol := access.ProtocolSSH
-	if req.Protocol == "telnet" {
-		protocol = access.ProtocolTelnet
-	} else if req.Protocol == "vnc" {
-		protocol = access.ProtocolVNC
-	} else if req.Protocol == "tftp" {
-		protocol = access.ProtocolTFTP
-	} else if req.Protocol == "rdp" {
-		protocol = access.ProtocolRDP
-	} else if req.Protocol == "ftp" {
-		protocol = access.ProtocolFTP
-	} else if req.Protocol != "" && req.Protocol != "ssh" {
-		writeJSONError(w, "protocol must be ssh, telnet, vnc, tftp, ftp, or rdp", http.StatusBadRequest)
+	protocol, err := parseProtocolField(req.Protocol)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -1774,37 +1681,11 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	targetID := chi.URLParam(r, "target_id")
-	if targetID == "" {
-		writeJSONError(w, "target_id required", http.StatusBadRequest)
-		return
-	}
-	c, err := r.Cookie("vantyx_session")
-	if err != nil || c.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	sess, err := a.SessionStore.Get(c.Value)
-	if err != nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+	_, cur, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
+	if !ok {
 		return
 	}
 	ctx := r.Context()
-	allowedIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	allowed := false
-	for _, id := range allowedIDs {
-		if id == access.TargetID(targetID) {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		writeJSONError(w, "forbidden", http.StatusForbidden)
-		return
-	}
 	var req updateTargetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, "invalid request body", http.StatusBadRequest)
@@ -1820,28 +1701,15 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	if req.Port == 0 {
 		req.Port = 22
 	}
-	protocol := access.ProtocolSSH
-	if req.Protocol == "telnet" {
-		protocol = access.ProtocolTelnet
-	} else if req.Protocol == "vnc" {
-		protocol = access.ProtocolVNC
-	} else if req.Protocol == "tftp" {
-		protocol = access.ProtocolTFTP
-	} else if req.Protocol == "rdp" {
-		protocol = access.ProtocolRDP
-	} else if req.Protocol == "ftp" {
-		protocol = access.ProtocolFTP
-	} else if req.Protocol != "" && req.Protocol != "ssh" {
-		writeJSONError(w, "protocol must be ssh, telnet, vnc, tftp, ftp, or rdp", http.StatusBadRequest)
+	protocol, err := parseProtocolField(req.Protocol)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	var sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string
-	cur, errCur := a.TargetStore.Get(ctx, access.TargetID(targetID))
-	if errCur == nil {
-		sshPassword = cur.SSHPassword
-		sshPrivateKey = cur.SSHPrivateKey
-		sshPrivateKeyPassphrase = cur.SSHPrivateKeyPassphrase
-	}
+	sshPassword = cur.SSHPassword
+	sshPrivateKey = cur.SSHPrivateKey
+	sshPrivateKeyPassphrase = cur.SSHPrivateKeyPassphrase
 	if req.SSHPassword != nil {
 		sshPassword = *req.SSHPassword
 	}
@@ -1943,26 +1811,8 @@ func (a *App) handleTargetTags(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "target_id required", http.StatusBadRequest)
 		return
 	}
-	userID := a.currentUserID(r)
-	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	ctx := r.Context()
-	allowedIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	allowed := false
-	for _, id := range allowedIDs {
-		if string(id) == targetID {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		writeJSONError(w, "forbidden", http.StatusForbidden)
+	if _, ok := a.requireTargetAccess(w, r, access.TargetID(targetID)); !ok {
 		return
 	}
 	tags, err := a.TargetStore.TagsForTarget(ctx, access.TargetID(targetID))
@@ -1987,26 +1837,8 @@ func (a *App) handleSetTargetTags(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "target_id required", http.StatusBadRequest)
 		return
 	}
-	userID := a.currentUserID(r)
-	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	ctx := r.Context()
-	allowedIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	allowed := false
-	for _, id := range allowedIDs {
-		if string(id) == targetID {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		writeJSONError(w, "forbidden", http.StatusForbidden)
+	if _, ok := a.requireTargetAccess(w, r, access.TargetID(targetID)); !ok {
 		return
 	}
 	var req setTagsRequest

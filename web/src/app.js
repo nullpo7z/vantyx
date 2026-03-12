@@ -1,7 +1,10 @@
 import API from './api.js'
 import { renderLogin } from './login.js'
-import * as AsciinemaPlayer from 'asciinema-player'
-import 'asciinema-player/dist/bundle/asciinema-player.css'
+import { initNav, setActiveNav } from './nav.js'
+import { renderUsersPage } from './users_page.js'
+import { renderRecordingsPage } from './recordings_page.js'
+import { renderUserInfo, showChangePasswordModal } from './account_page.js'
+import { renderGroupTargetsTable } from './targets_page.js'
 
 // TFTP 機能フラグ用の内部タグ名（サーバー管理画面での「TFTP を有効にする」に対応）
 const TFTP_CAPABILITY_TAG = 'tftp_enabled'
@@ -134,6 +137,7 @@ export function renderApp(container) {
       // ignore storage errors
     }
   }
+
   function openPopup(url, title, w = 1280, h = 800) {
     const left = Math.max(0, Math.round((window.screen.width - w) / 2))
     const top = Math.max(0, Math.round((window.screen.height - h) / 2))
@@ -165,321 +169,49 @@ export function renderApp(container) {
 
   function showUserInfo() {
     if (!meData) return
-    const navHidden = meData?.role !== 'admin' ? ' hidden' : ''
-    navTargets.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
-    navGroups.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
-    navUsers.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
-    navRecordings.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
-    mainContent.innerHTML = `
-      <h2 class="text-lg font-medium text-slate-800 mb-4">ユーザー情報</h2>
-      <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
-        <dl class="divide-y divide-slate-200">
-          <div class="px-4 py-3 sm:grid sm:grid-cols-3 sm:gap-4">
-            <dt class="text-sm font-medium text-slate-500">ユーザーID</dt>
-            <dd class="mt-1 text-sm text-slate-800 sm:mt-0 sm:col-span-2">${escapeHtml(meData.user_id)}</dd>
-          </div>
-          <div class="px-4 py-3 sm:grid sm:grid-cols-3 sm:gap-4">
-            <dt class="text-sm font-medium text-slate-500">ユーザー名</dt>
-            <dd class="mt-1 text-sm text-slate-800 sm:mt-0 sm:col-span-2">${escapeHtml(meData.username)}</dd>
-          </div>
-        </dl>
-        <div class="px-4 py-3 border-t border-slate-200">
-          <button type="button" id="btn-change-password" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">パスワードを変更</button>
-        </div>
-      </div>
-    `
-    mainContent.querySelector('#btn-change-password').addEventListener('click', showChangePasswordModal)
+    setActiveNav('recordings')
+    renderUserInfo({
+      mainContent,
+      meData,
+      escapeHtml,
+      onChangePassword: () => showChangePasswordModal(),
+    })
   }
 
   async function showUsersPage() {
-    const navHidden = meData?.role !== 'admin' ? ' hidden' : ''
-    navTargets.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
-    navGroups.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
-    navUsers.className = 'text-sm font-semibold border-b-2 border-white pb-1 transition-opacity' + navHidden
-    navRecordings.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
-    mainContent.innerHTML = '<p class="text-slate-500">読み込み中…</p>'
-    try {
-      const users = await API.users()
-      const rows = (users || []).map((u) => {
-        const userTags = Array.isArray(u.tags) ? u.tags : []
-        return `
-        <tr class="border-b border-slate-200 hover:bg-slate-50">
-          <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(u.id)}</td>
-          <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(u.username)}</td>
-          <td class="px-4 py-2 text-sm text-slate-600">${escapeHtml(u.role || 'user')}</td>
-          <td class="px-4 py-2"><div class="flex flex-wrap items-center gap-2">${userTags.length ? renderTagPills(userTags) : '<span class="text-xs text-slate-400">—</span>'} <button type="button" class="edit-user-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" data-user-role="${escapeHtml(u.role || 'user')}" data-user-tags="${escapeHtml((userTags || []).join(','))}">編集</button> <button type="button" class="user-ssh-keys-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-user-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}">公開鍵</button></div></td>
-        </tr>
-      `
-      }).join('')
-      mainContent.innerHTML = `
-        <div class="w-full flex flex-col">
-          <div class="flex items-center justify-between mb-4">
-            <h2 class="text-lg font-medium text-slate-800">ユーザー管理</h2>
-            <button type="button" id="btn-add-user" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">ユーザーを追加</button>
-          </div>
-          <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
-            <div class="overflow-x-auto">
-              <table class="min-w-full text-left text-sm">
-                <thead class="bg-slate-50 border-b border-slate-200">
-                  <tr>
-                    <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザーID</th>
-                    <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザー名</th>
-                    <th class="px-4 py-2 text-xs font-semibold text-slate-700">ロール</th>
-                    <th class="px-4 py-2 text-xs font-semibold text-slate-700">タグ</th>
-                  </tr>
-                </thead>
-                <tbody>${rows || '<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">ユーザーがありません</td></tr>'}</tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      `
-      mainContent.querySelector('#btn-add-user').addEventListener('click', showAddUserModal)
-      mainContent.querySelectorAll('.edit-user-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const user = {
-            id: btn.dataset.userId || '',
-            username: btn.dataset.username || '',
-            role: btn.dataset.userRole || 'user',
-            tags: (btn.dataset.userTags || '').split(',').map((s) => s.trim()).filter(Boolean),
-          }
-          if (user.id) showEditUserModal(user)
-        })
-      })
-      mainContent.querySelectorAll('.user-ssh-keys-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          showUserSSHKeysModal(btn.dataset.userId || '', btn.dataset.username || '')
-        })
-      })
-    } catch (e) {
-      mainContent.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(e.message || '取得に失敗しました')}</p>`
-    }
-  }
-
-  function showRecordingPlayerModal(recordingId, label, userId, sessionId) {
-    const modal = document.getElementById('recording-player-modal')
-    modal.classList.remove('hidden')
-    const fileUrl = `/api/recordings/${encodeURIComponent(recordingId)}/file`
-    const watermarkText = [userId, sessionId].filter(Boolean).length
-      ? [userId && `User: ${userId}`, sessionId && `Session: ${sessionId}`].filter(Boolean).join(' · ')
-      : ''
-    modal.innerHTML = `
-      <div id="recording-player-backdrop" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-        <div class="bg-slate-900 rounded-lg shadow-xl w-full max-w-4xl mx-4 overflow-hidden border border-slate-700 flex flex-col max-h-[90vh]">
-          <div class="px-5 py-3 border-b border-slate-700 flex items-center justify-between bg-slate-800 shrink-0">
-            <h3 class="font-semibold text-slate-200">録画再生 — ${escapeHtml(label || recordingId)}</h3>
-            <button id="recording-player-close" class="text-slate-400 hover:text-white text-2xl leading-none transition-colors">&times;</button>
-          </div>
-          <div id="recording-player-wrapper" class="p-4 overflow-auto flex-1 min-h-0 relative">
-            <div id="recording-player-container"></div>
-            ${watermarkText ? `<div id="recording-watermark" class="absolute inset-0 pointer-events-none flex items-end justify-center pb-2 text-slate-500/70 text-xs font-mono select-none" aria-hidden="true">${escapeHtml(watermarkText)}</div>` : ''}
-          </div>
-        </div>
-      </div>
-    `
-    const container = modal.querySelector('#recording-player-container')
-    let player = null
-    try {
-      // 録画ファイルの width/height のまま表示（fit 指定なし＝崩れ防止）
-      player = AsciinemaPlayer.create(fileUrl, container, {})
-    } catch (err) {
-      container.innerHTML = `<p class="text-sm text-red-400">再生の読み込みに失敗しました: ${escapeHtml(err.message || String(err))}</p>`
-    }
-    const close = () => {
-      if (player && typeof player.dispose === 'function') {
-        try { player.dispose() } catch { /* ignore */ }
-      }
-      modal.classList.add('hidden')
-      modal.innerHTML = ''
-    }
-    modal.querySelector('#recording-player-close').addEventListener('click', close)
-    modal.querySelector('#recording-player-backdrop').addEventListener('click', (e) => { if (e.target.id === 'recording-player-backdrop') close() })
+    setActiveNav('users')
+    await renderUsersPage({
+      mainContent,
+      escapeHtml,
+      renderTagPills,
+      fillExistingTagsPicker,
+    })
   }
 
   async function showRecordingsPage() {
-    const navHidden = meData?.role !== 'admin' ? ' hidden' : ''
-    navTargets.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
-    navGroups.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
-    navUsers.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
-    navRecordings.className = 'text-sm font-semibold border-b-2 border-white pb-1 transition-opacity'
-    mainContent.innerHTML = '<div class="flex gap-6 w-full h-full"><p class="text-slate-500">読み込み中…</p></div>'
-    try {
-      if (!groupsCache) {
-        groupsCache = await API.groups()
-      }
-      const groups = groupsCache
-      const treeRoot = buildGroupTree(groups || [])
-      const treeHtml = renderGroupTree(treeRoot, 0, selectedRecordingsGroupId)
-      const selectedGroup = (groups || []).find((g) => g.id === selectedRecordingsGroupId)
-      const targets = selectedGroup ? (selectedGroup.targets || []) : []
-
-      let sectionContent = ''
-      let sectionHeader = ''
-
-      if (selectedRecordingsTargetId) {
-        const res = await API.recordings({ target_id: selectedRecordingsTargetId })
-        const items = (res && res.items) || []
-        const rows = items.map((r) => {
-          const label = [r.started_at || '', r.target_id || ''].filter(Boolean).join(' — ') || r.id
-          return `
-          <tr class="border-b border-slate-200 hover:bg-slate-50">
-            <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(r.started_at || '')}</td>
-            <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(r.ended_at || '—')}</td>
-            <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(r.session_name || '—')}</td>
-            <td class="px-4 py-2 text-sm text-slate-600 max-w-[12rem] truncate" title="${escapeHtml(r.session_description || '')}">${escapeHtml(r.session_description || '—')}</td>
-            <td class="px-4 py-2 text-sm text-slate-600">${escapeHtml(r.channel_type || '')}</td>
-            <td class="px-4 py-2">
-              <div class="flex items-center gap-2 flex-wrap">
-                <button type="button" class="recording-play-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-id="${escapeHtml(r.id)}" data-label="${escapeHtml(label)}" data-user-id="${escapeHtml(r.user_id || '')}" data-session-id="${escapeHtml(r.session_id || '')}">再生</button>
-                <a href="/api/recordings/${encodeURIComponent(r.id)}/file?format=cast" download="${escapeHtml(r.id)}.cast" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">.cast</a>
-                <a href="/api/recordings/${encodeURIComponent(r.id)}/file?format=gif" download="${escapeHtml(r.id)}.gif" class="recording-download-video rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-format="gif">GIF</a>
-                <a href="/api/recordings/${encodeURIComponent(r.id)}/file?format=webm" download="${escapeHtml(r.id)}.webm" class="recording-download-video rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-format="webm">WebM</a>
-              </div>
-            </td>
-          </tr>
-        `
-        }).join('')
-        sectionHeader = `
-          <div class="flex items-center gap-3 flex-wrap">
-            <button type="button" id="recordings-back-to-servers" class="text-xs text-sky-600 hover:text-sky-800 hover:underline">← サーバー一覧</button>
-            <h2 class="text-sm font-semibold text-slate-800">${escapeHtml(selectedRecordingsTargetName || selectedRecordingsTargetId)} — 録画一覧</h2>
-            <span class="text-xs text-slate-500">${items.length} 件</span>
-          </div>
-        `
-        sectionContent = `
-          <div class="overflow-x-auto flex-1 min-h-0">
-            <table class="min-w-full text-left text-sm">
-              <thead class="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">開始</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">終了</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">セッション名</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">説明</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">チャネル</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">操作</th>
-                </tr>
-              </thead>
-              <tbody>${rows || '<tr><td colspan="6" class="px-4 py-6 text-center text-slate-500">このサーバーの録画はありません</td></tr>'}</tbody>
-            </table>
-          </div>
-        `
-      } else if (selectedRecordingsGroupId && targets.length > 0) {
-        const targetRows = targets.map((t) => `
-          <tr class="border-b border-slate-200 hover:bg-slate-50">
-            <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(t.name || t.id || '')}</td>
-            <td class="px-4 py-2 text-sm text-slate-600 font-mono">${escapeHtml(t.host || '')}</td>
-            <td class="px-4 py-2">
-              <button type="button" class="recordings-view-target-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name || t.id || '')}">録画を見る</button>
-            </td>
-          </tr>
-        `).join('')
-        sectionHeader = `
-          <h2 class="text-sm font-semibold text-slate-800">${escapeHtml(selectedRecordingsGroupId)} — サーバー一覧</h2>
-          <span class="text-xs text-slate-500">${targets.length} サーバー</span>
-        `
-        sectionContent = `
-          <div class="overflow-x-auto flex-1 min-h-0">
-            <table class="min-w-full text-left text-sm">
-              <thead class="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">サーバー名</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">ホスト</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">操作</th>
-                </tr>
-              </thead>
-              <tbody>${targetRows}</tbody>
-            </table>
-          </div>
-        `
-      } else if (selectedRecordingsGroupId && targets.length === 0) {
-        sectionHeader = `<h2 class="text-sm font-semibold text-slate-800">${escapeHtml(selectedRecordingsGroupId)}</h2>`
-        sectionContent = '<div class="px-5 py-8 text-center text-sm text-slate-500">このグループにサーバーがありません。</div>'
-      } else {
-        sectionHeader = '<h2 class="text-sm font-semibold text-slate-800">録画</h2>'
-        sectionContent = '<div class="px-5 py-8 text-center text-sm text-slate-500">左のグループを選択し、サーバー一覧から「録画を見る」でそのサーバーの録画を表示します。</div>'
-      }
-
-      mainContent.innerHTML = `
-        <div class="flex gap-6 w-full h-full">
-          <aside class="w-64 flex-col border-r border-slate-200 bg-white shadow-sm shrink-0 rounded-lg overflow-hidden flex">
-            <div class="px-4 py-3 border-b border-slate-200 text-sm font-semibold text-slate-700">アクセスグループ</div>
-            <div class="px-3 py-3 text-xs text-slate-800 overflow-y-auto flex-1 min-h-0" id="recordings-tree-container">
-              ${treeHtml || '<p class="text-slate-500 p-2">グループがありません。</p>'}
-            </div>
-          </aside>
-          <section class="flex-1 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col min-h-0">
-            <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50 flex-wrap gap-2">
-              ${sectionHeader}
-            </div>
-            ${sectionContent}
-          </section>
-        </div>
-      `
-
-      mainContent.querySelector('#recordings-back-to-servers')?.addEventListener('click', () => {
-        selectedRecordingsTargetId = ''
-        selectedRecordingsTargetName = ''
-        showRecordingsPage()
-      })
-      mainContent.querySelectorAll('.recordings-view-target-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          selectedRecordingsTargetId = btn.dataset.targetId || ''
-          selectedRecordingsTargetName = btn.dataset.targetName || ''
-          showRecordingsPage()
-        })
-      })
-      mainContent.querySelectorAll('.recording-play-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          showRecordingPlayerModal(btn.dataset.id || '', btn.dataset.label || '', btn.dataset.userId || '', btn.dataset.sessionId || '')
-        })
-      })
-      mainContent.querySelectorAll('.recording-download-video').forEach((a) => {
-        a.addEventListener('click', async (e) => {
-          e.preventDefault()
-          const url = a.getAttribute('href')
-          const format = a.dataset.format || 'gif'
-          const filename = a.getAttribute('download') || `recording.${format}`
-          try {
-            const res = await fetch(url, { credentials: 'include' })
-            if (!res.ok) {
-              const err = await res.json().catch(() => ({ message: res.statusText }))
-              alert(err.message || '動画のダウンロードに失敗しました。サーバーに agg（および WebM の場合は ffmpeg）がインストールされている必要があります。')
-              return
-            }
-            const blob = await res.blob()
-            const x = document.createElement('a')
-            x.href = URL.createObjectURL(blob)
-            x.download = filename
-            x.click()
-            URL.revokeObjectURL(x.href)
-          } catch (err) {
-            alert(err.message || 'ダウンロードに失敗しました')
-          }
-        })
-      })
-
-      mainContent.querySelectorAll('[data-group-toggle="1"]').forEach((el) => {
-        el.addEventListener('click', (e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          const gid = el.getAttribute('data-group-id') || ''
-          if (!gid) return
-          expandedGroups.has(gid) ? expandedGroups.delete(gid) : expandedGroups.add(gid)
-          showRecordingsPage()
-        })
-      })
-      mainContent.querySelectorAll('[data-group-select="1"]').forEach((el) => {
-        el.addEventListener('click', () => {
-          const gid = el.getAttribute('data-group-id') || ''
-          selectedRecordingsGroupId = gid
-          selectedRecordingsTargetId = ''
-          selectedRecordingsTargetName = ''
-          showRecordingsPage()
-        })
-      })
-    } catch (e) {
-      mainContent.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(e.message || '取得に失敗しました')}</p>`
-    }
+    setActiveNav('recordings')
+    await renderRecordingsPage({
+      mainContent,
+      escapeHtml,
+      buildGroupTree,
+      renderGroupTree,
+      getGroupsCache: () => groupsCache,
+      setGroupsCache: (v) => {
+        groupsCache = v
+      },
+      expandedGroups,
+      getState: () => ({
+        groupId: selectedRecordingsGroupId,
+        targetId: selectedRecordingsTargetId,
+        targetName: selectedRecordingsTargetName,
+      }),
+      setState: (partial) => {
+        if ('groupId' in partial) selectedRecordingsGroupId = partial.groupId
+        if ('targetId' in partial) selectedRecordingsTargetId = partial.targetId
+        if ('targetName' in partial) selectedRecordingsTargetName = partial.targetName
+      },
+      refresh: () => showRecordingsPage(),
+    })
   }
 
   function showAddUserModal() {
@@ -1450,7 +1182,7 @@ export function renderApp(container) {
               </div>
             </div>
             <div class="px-5 py-4">
-              ${renderGroupTargetsTable(targets, mode)}
+              ${renderGroupTargetsTable(targets, mode, escapeHtml, renderTagPills)}
               ${showMembersSection ? '<div id="group-members-container" class="mt-6 border-t border-slate-200 pt-4"><p class="text-slate-500">読み込み中…</p></div>' : ''}
             </div>
           </section>
@@ -2456,143 +2188,6 @@ export function renderApp(container) {
     })
   }
 
-  function renderGroupTargetsTable(targets, mode = 'manage') {
-    const isManageMode = mode === 'manage'
-    if (!targets || targets.length === 0) {
-      return '<p class="text-sm text-slate-500">このグループに登録されているサーバーはありません。</p>'
-    }
-    const targetTags = (t) => Array.isArray(t.tags) ? t.tags : []
-    // ホスト単位で TFTP/FTP ターゲット有無と、SSH/Telnet の機能フラグを管理する。
-    const tftpActiveByHost = {}
-    const ftpActiveByHost = {}
-    const tftpCapableByTargetId = {}
-    targets.forEach((t) => {
-      if (t.protocol === 'tftp' && t.host) {
-        tftpActiveByHost[t.host] = t
-      }
-      if (t.protocol === 'ftp' && t.host) {
-        ftpActiveByHost[t.host] = t
-      }
-    })
-    targets.forEach((t) => {
-      if ((t.protocol === 'ssh' || t.protocol === 'telnet') && t.tftp_enabled) {
-        tftpCapableByTargetId[t.id] = true
-      }
-    })
-    const visibleTargets = targets.filter((t) => isManageMode || t.protocol !== 'tftp')
-    const rows = visibleTargets
-      .slice()
-      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-      .map(
-        (t) => {
-          const tags = targetTags(t)
-          const isTftpCapableHost = !!tftpCapableByTargetId[t.id]
-          const activeTftp = (t.protocol === 'ssh' || t.protocol === 'telnet') ? (tftpActiveByHost[t.host] || null) : null
-          const activeFtp = (t.protocol === 'ssh' || t.protocol === 'telnet') ? (ftpActiveByHost[t.host] || null) : null
-          // SFTP 有効判定は DB の sftp_enabled のみを使用する（タグには依存しない）。
-          const hasSftpEnabled = t.protocol !== 'ssh'
-            ? true
-            : (t.sftp_enabled !== false)
-          const showFileBtn = (t.protocol === 'ssh' && ((hasSftpEnabled && (t.has_stored_credentials || t.has_ssh_key)) || activeFtp || activeTftp)) || t.protocol === 'ftp'
-          // ホーム画面では、「TFTP を使用するホスト」（サーバー管理で機能フラグ ON のホスト）のみトグルを表示する。
-          // トグルがない行でも同じ幅のプレースホルダを表示しておき、横幅のガタつきを防ぐ。
-          const tftpToggleHtml = (!isManageMode && (t.protocol === 'ssh' || t.protocol === 'telnet') && isTftpCapableHost)
-            ? `<label class="group inline-flex items-center justify-end gap-2 text-[11px] text-slate-600 mr-2 cursor-pointer w-[96px]">
-                <input
-                  type="checkbox"
-                  class="tftp-toggle sr-only"
-                  data-tftp-base-id="${escapeHtml(t.id)}"
-                  data-tftp-host="${escapeHtml(t.host)}"
-                  data-tftp-existing-id="${activeTftp ? escapeHtml(activeTftp.id) : ''}"
-                  ${activeTftp ? 'checked' : ''} />
-                <span class="inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-slate-300 bg-slate-200 transition-colors duration-200 group-has-[:checked]:border-sky-500 group-has-[:checked]:bg-sky-600">
-                  <span class="pointer-events-none inline-block h-4 w-4 shrink-0 translate-x-0.5 rounded-full bg-white shadow transition-transform duration-200 group-has-[:checked]:translate-x-4"></span>
-                </span>
-                <span>TFTP</span>
-              </label>`
-            : '<span class="inline-block w-[96px] mr-2"></span>'
-          return `
-        <tr class="border-b border-slate-200 hover:bg-slate-50">
-          <td class="px-4 py-2 text-sm text-slate-900 font-medium">${escapeHtml(t.name)}</td>
-          <td class="px-4 py-2 text-sm text-slate-500">${escapeHtml(t.host)}:${t.port}</td>
-          <td class="px-4 py-2 text-sm text-slate-500">${escapeHtml(t.protocol)}</td>
-          ${isManageMode ? `<td class="px-4 py-2"><div class="flex flex-wrap items-center gap-2">${tags.length ? renderTagPills(tags) : '<span class="text-xs text-slate-400">—</span>'}</div></td>` : ''}
-          <td class="px-4 py-2 text-right">
-            ${isManageMode ? `
-            <div class="flex items-center justify-end gap-2">
-              <button type="button" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-target-host="${escapeHtml(t.host)}" data-target-port="${t.port}" data-target-protocol="${escapeHtml(t.protocol || 'ssh')}" data-target-path="${escapeHtml(t.path || '')}" data-target-ssh-username="${escapeHtml(t.ssh_username || '')}" data-target-tags="${escapeHtml((tags || []).join(','))}" data-target-has-ssh-key="${t.has_ssh_key ? '1' : '0'}" data-target-needs-passphrase="${t.needs_passphrase ? '1' : '0'}" data-target-has-tftp-for-host="${activeTftp ? '1' : '0'}" data-target-tftp-id="${activeTftp ? escapeHtml(activeTftp.id) : ''}" data-target-has-ftp-for-host="${activeFtp ? '1' : '0'}" data-target-ftp-id="${activeFtp ? escapeHtml(activeFtp.id) : ''}" data-target-sftp-enabled="${hasSftpEnabled ? '1' : '0'}" data-target-ftp-enabled="${t.ftp_enabled ? '1' : '0'}" data-target-tftp-enabled="${t.tftp_enabled ? '1' : '0'}"
-                class="edit-btn-in-group rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 border border-slate-300 shadow-sm transition-colors w-[96px] text-center whitespace-nowrap">
-              編集
-            </button>
-              <button type="button" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}"
-                class="delete-btn-in-group rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 shadow-sm transition-colors w-[96px] text-center whitespace-nowrap">
-                削除
-              </button>
-            </div>
-            ` : `
-            <div class="flex items-center justify-end gap-2">
-              ${tftpToggleHtml}
-              <button
-                type="button"
-                class="files-open-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition-colors w-[104px] text-center whitespace-nowrap ${showFileBtn ? 'hover:bg-slate-50' : 'opacity-40 cursor-default'}"
-                ${showFileBtn ? '' : 'disabled'}
-                data-files-target-id="${escapeHtml(t.id)}"
-                data-files-target-name="${escapeHtml(t.name || '')}"
-                data-files-protocol="${escapeHtml(t.protocol)}"
-                data-files-host="${escapeHtml(t.host)}"
-                data-files-sftp-enabled="${hasSftpEnabled ? '1' : '0'}"
-                data-files-disabled="${showFileBtn ? '0' : '1'}"
-              >ファイル</button>
-              ${t.protocol === 'ssh'
-            ? `<button type="button" data-terminal-target-id="${escapeHtml(t.id)}" data-terminal-target-name="${escapeHtml(t.name || '')}" data-has-stored-credentials="${t.has_stored_credentials ? '1' : ''}" data-needs-password="${t.needs_password ? '1' : ''}" data-needs-passphrase="${t.needs_passphrase ? '1' : ''}"
-              class="connect-btn-in-group terminal-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50 w-[96px] text-center whitespace-nowrap">
-              接続
-            </button>`
-            : t.protocol === 'vnc'
-            ? `<button type="button" data-popup-protocol="vnc" data-popup-target-id="${escapeHtml(t.id)}" data-popup-target-name="${escapeHtml(t.name || '')}"
-              class="connect-btn-in-group vnc-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block w-[96px] text-center whitespace-nowrap">
-              接続
-            </button>`
-            : t.protocol === 'rdp'
-            ? `<a href="/rdp?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(t.name || '')}"
-              target="_blank" rel="noopener noreferrer"
-              data-rdp-target-id="${escapeHtml(t.id)}" data-rdp-target-name="${escapeHtml(t.name || '')}"
-              class="connect-btn-in-group rdp-open-link rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block w-[96px] text-center whitespace-nowrap">
-              接続
-            </a>`
-            : `<button data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}" data-protocol="${escapeHtml(t.protocol)}"
-              class="connect-btn-in-group rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50 w-[96px] text-center whitespace-nowrap">
-              接続
-            </button>`}
-              <button type="button" class="active-sessions-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors w-[200px] text-center whitespace-nowrap" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name || '')}">アクティブなセッション (0)</button>
-            </div>
-            `}
-          </td>
-        </tr>
-      `
-        }
-      )
-      .join('')
-    const theadTags = isManageMode ? '<th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[22%]">タグ</th>' : ''
-    return `
-      <div class="overflow-x-auto">
-        <table class="min-w-full text-left text-sm table-fixed">
-          <thead class="bg-slate-50 border-b border-slate-200">
-            <tr>
-              <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[26%]">名前</th>
-              <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[28%]">ホスト</th>
-              <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[12%]">プロトコル</th>
-              ${theadTags}
-              <th class="px-4 py-2 w-[34%]"></th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows}
-          </tbody>
-        </table>
-      </div>
-    `
-  }
 
   function buildGroupTree(groups) {
     const root = { id: '', name: 'root', children: {}, group: null }
@@ -2704,33 +2299,22 @@ export function renderApp(container) {
     showTreeView('home')
   })()
 
-  navTargets.addEventListener('click', (e) => {
-    e.preventDefault()
-    if (!meData) return
-    showTreeView('home')
-  })
-
-  navRecordings.addEventListener('click', (e) => {
-    e.preventDefault()
-    if (!meData) return
-    showRecordingsPage()
+  initNav({
+    navTargets,
+    navRecordings,
+    navGroups,
+    navUsers,
+    getMe: () => meData,
+    onHome: () => showTreeView('home'),
+    onRecordings: () => showRecordingsPage(),
+    onGroups: () => showTreeView('manage'),
+    onUsers: () => showUsersPage(),
   })
 
   userNameEl.addEventListener('click', (e) => {
     e.preventDefault()
     if (!meData) return
     showUserInfo()
-  })
-
-  navGroups.addEventListener('click', (e) => {
-    e.preventDefault()
-    showTreeView('manage')
-  })
-
-  navUsers?.addEventListener('click', (e) => {
-    e.preventDefault()
-    if (!meData || meData.role !== 'admin') return
-    showUsersPage()
   })
 
   logoutBtn.addEventListener('click', async () => {

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"path"
 	"strconv"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/ftp"
+	"github.com/nullpo7z/vantyx/internal/protocols"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/sftp"
 	"github.com/nullpo7z/vantyx/internal/tftp"
@@ -31,47 +31,25 @@ type fileEntry struct {
 // getTargetAndFileClient checks auth, loads target, verifies user has access, and returns an SFTP or TFTP client.
 // The caller must call client.Close(). Returns (nil, nil) if the response was already written (error case).
 func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*access.Target, FileTransferClient) {
-	c, err := r.Cookie("vantyx_session")
-	if err != nil || c.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return nil, nil
-	}
-	sess, err := a.SessionStore.Get(c.Value)
-	if err != nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return nil, nil
-	}
 	targetID := chi.URLParam(r, "target_id")
-	if targetID == "" {
-		writeJSONError(w, "target_id required", http.StatusBadRequest)
+	userID, target, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
+	if !ok {
+		return nil, nil
+	}
+	if !protocols.SupportsFileTransfer(target.Protocol) {
+		writeJSONError(w, "file transfer only for SSH, FTP, or TFTP targets", http.StatusBadRequest)
 		return nil, nil
 	}
 	ctx := r.Context()
-	target, err := a.TargetStore.Get(ctx, access.TargetID(targetID))
-	if err != nil {
-		log.Printf("files target not_found user_id=%s target_id=%s", sess.UserID, targetID)
-		writeJSONError(w, "target not found", http.StatusNotFound)
-		return nil, nil
-	}
-	allowed, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return nil, nil
-	}
-	allowedSet := make(map[access.TargetID]struct{})
-	for _, id := range allowed {
-		allowedSet[id] = struct{}{}
-	}
-	if _, ok := allowedSet[access.TargetID(targetID)]; !ok {
-		log.Printf("files forbidden user_id=%s target_id=%s", sess.UserID, targetID)
-		writeJSONError(w, "forbidden", http.StatusForbidden)
-		return nil, nil
-	}
 	switch target.Protocol {
 	case access.ProtocolTFTP:
 		tftpClient, err := tftp.NewClient(ctx, target.Host, target.Port)
 		if err != nil {
-			log.Printf("files tftp connect failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+			audit("files_tftp_connect_failed", auditFields{
+				"user_id":   userID,
+				"target_id": targetID,
+				"error":     err.Error(),
+			})
 			writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
 			return nil, nil
 		}
@@ -92,7 +70,11 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 		if a.SFTPClientFactory != nil {
 			client, err := a.SFTPClientFactory(ctx, target)
 			if err != nil {
-				log.Printf("files sftp connect failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+				audit("files_sftp_connect_failed", auditFields{
+					"user_id":   userID,
+					"target_id": targetID,
+					"error":     err.Error(),
+				})
 				writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
 				return nil, nil
 			}
@@ -100,7 +82,11 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 		}
 		client, err := sftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase)
 		if err != nil {
-			log.Printf("files sftp connect failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+			audit("files_sftp_connect_failed", auditFields{
+				"user_id":   userID,
+				"target_id": targetID,
+				"error":     err.Error(),
+			})
 			writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
 			return nil, nil
 		}
@@ -112,7 +98,11 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 		}
 		client, err := ftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword)
 		if err != nil {
-			log.Printf("files ftp connect failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+			audit("files_ftp_connect_failed", auditFields{
+				"user_id":   userID,
+				"target_id": targetID,
+				"error":     err.Error(),
+			})
 			writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
 			return nil, nil
 		}
@@ -180,7 +170,11 @@ func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	dirPath := remotePath(r)
 	entries, err := client.ReadDir(dirPath)
 	if err != nil {
-		log.Printf("files list failed target_id=%s path=%s err=%v", target.ID, dirPath, err)
+		audit("files_list_failed", auditFields{
+			"target_id": target.ID,
+			"path":      dirPath,
+			"error":     err.Error(),
+		})
 		writeJSONError(w, "list failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -217,7 +211,11 @@ func (a *App) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	filePath := remotePath(r)
 	f, err := client.Open(filePath)
 	if err != nil {
-		log.Printf("files open failed target_id=%s path=%s err=%v", target.ID, filePath, err)
+		audit("files_open_failed", auditFields{
+			"target_id": target.ID,
+			"path":      filePath,
+			"error":     err.Error(),
+		})
 		writeJSONError(w, "open failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -280,13 +278,21 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 
 	remoteFile, err := client.Create(pathParam)
 	if err != nil {
-		log.Printf("files create failed target_id=%s path=%s err=%v", target.ID, pathParam, err)
+		audit("files_create_failed", auditFields{
+			"target_id": target.ID,
+			"path":      pathParam,
+			"error":     err.Error(),
+		})
 		writeJSONError(w, "create failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer remoteFile.Close()
 	if _, err := io.Copy(remoteFile, file); err != nil {
-		log.Printf("files upload write failed target_id=%s path=%s err=%v", target.ID, pathParam, err)
+		audit("files_upload_failed", auditFields{
+			"target_id": target.ID,
+			"path":      pathParam,
+			"error":     err.Error(),
+		})
 		writeJSONError(w, "upload failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -317,7 +323,11 @@ func (a *App) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, "TFTP does not support delete", http.StatusNotImplemented)
 			return
 		}
-		log.Printf("files remove failed target_id=%s path=%s err=%v", target.ID, filePath, err)
+		audit("files_remove_failed", auditFields{
+			"target_id": target.ID,
+			"path":      filePath,
+			"error":     err.Error(),
+		})
 		writeJSONError(w, "remove failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}

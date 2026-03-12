@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/protocols"
 )
 
 // tftpServerRoot returns the absolute filesystem root for TFTP server data.
@@ -34,42 +35,13 @@ func tftpServerTargetRoot(targetID access.TargetID) string {
 
 // getTFTPServerTarget checks auth and permissions, and returns the TFTP target.
 func (a *App) getTFTPServerTarget(w http.ResponseWriter, r *http.Request) *access.Target {
-	c, err := r.Cookie("vantyx_session")
-	if err != nil || c.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return nil
-	}
-	sess, err := a.SessionStore.Get(c.Value)
-	if err != nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return nil
-	}
 	targetID := chi.URLParam(r, "target_id")
-	if targetID == "" {
-		writeJSONError(w, "target_id required", http.StatusBadRequest)
+	_, target, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
+	if !ok {
 		return nil
 	}
-	ctx := r.Context()
-	target, err := a.TargetStore.Get(ctx, access.TargetID(targetID))
-	if err != nil {
-		writeJSONError(w, "target not found", http.StatusNotFound)
-		return nil
-	}
-	if target.Protocol != access.ProtocolTFTP {
+	if !protocols.Supports(target.Protocol, protocols.CapabilityTFTPServer) {
 		writeJSONError(w, "target is not a TFTP server", http.StatusBadRequest)
-		return nil
-	}
-	allowed, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return nil
-	}
-	allowedSet := make(map[access.TargetID]struct{}, len(allowed))
-	for _, id := range allowed {
-		allowedSet[id] = struct{}{}
-	}
-	if _, ok := allowedSet[access.TargetID(targetID)]; !ok {
-		writeJSONError(w, "forbidden", http.StatusForbidden)
 		return nil
 	}
 	return target

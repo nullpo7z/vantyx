@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"log"
 	"net/http"
 	"strconv"
 
@@ -25,55 +24,46 @@ func (a *App) handleVNCWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	targetID := r.URL.Query().Get("target_id")
 	if targetID == "" {
-		// #nosec G706 -- audit log; sess.UserID from session store
-		log.Printf("vnc ws bad_request user_id=%s err=target_id required", sess.UserID)
+		audit("vnc_ws_bad_request", auditFields{
+			"user_id": sess.UserID,
+			"reason":  "target_id_required",
+		})
 		writeJSONError(w, "target_id required", http.StatusBadRequest)
 		return
 	}
 
-	ctx := r.Context()
-	target, err := a.TargetStore.Get(ctx, access.TargetID(targetID))
-	if err != nil {
-		// #nosec G706 -- audit log; IDs from store/query
-		log.Printf("vnc ws not_found user_id=%s target_id=%s", sess.UserID, targetID)
-		writeJSONError(w, "target not found", http.StatusNotFound)
-		return
-	}
-
-	allowed, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	allowedSet := make(map[access.TargetID]struct{})
-	for _, id := range allowed {
-		allowedSet[id] = struct{}{}
-	}
-	if _, ok := allowedSet[access.TargetID(targetID)]; !ok {
-		// #nosec G706 -- audit log; IDs from store/query
-		log.Printf("vnc ws forbidden user_id=%s target_id=%s", sess.UserID, targetID)
-		writeJSONError(w, "forbidden", http.StatusForbidden)
+	userID, target, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
+	if !ok {
 		return
 	}
 
 	if target.Protocol != access.ProtocolVNC {
-		// #nosec G706 -- audit log; target from store
-		log.Printf("vnc ws not_vnc user_id=%s target_id=%s protocol=%s", sess.UserID, targetID, target.Protocol)
+		audit("vnc_ws_not_vnc", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+			"protocol":  target.Protocol,
+		})
 		writeJSONError(w, "target is not a VNC server", http.StatusBadRequest)
 		return
 	}
 
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		// #nosec G706 -- audit log; err from upgrader
-		log.Printf("vnc ws upgrade_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+		audit("vnc_ws_upgrade_failed", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+			"error":     err.Error(),
+		})
 		writeJSONError(w, "failed to upgrade connection", http.StatusBadRequest)
 		return
 	}
 	defer conn.Close()
 
 	targetAddr := target.Host + ":" + strconv.Itoa(int(target.Port))
-	// #nosec G706 -- audit log; target from store
-	log.Printf("vnc ws start user_id=%s target_id=%s addr=%s", sess.UserID, targetID, targetAddr)
+	audit("vnc_ws_start", auditFields{
+		"user_id":   userID,
+		"target_id": targetID,
+		"addr":      targetAddr,
+	})
 	_ = vncproxy.Bridge(conn, targetAddr)
 }

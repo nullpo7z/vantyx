@@ -5,9 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -34,58 +34,46 @@ func (a *App) handleRDPWebSocket(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	sess, err := a.SessionStore.Get(cookie.Value)
+	_, err = a.SessionStore.Get(cookie.Value)
 	if err != nil {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
 	targetID := r.URL.Query().Get("target_id")
-	if targetID == "" {
-		log.Printf("rdp ws bad_request user_id=%s err=target_id required", sess.UserID)
-		writeJSONError(w, "target_id required", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
-	target, err := a.TargetStore.Get(ctx, access.TargetID(targetID))
-	if err != nil {
-		log.Printf("rdp ws not_found user_id=%s target_id=%s", sess.UserID, targetID)
-		writeJSONError(w, "target not found", http.StatusNotFound)
-		return
-	}
-
-	allowed, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	allowedSet := make(map[access.TargetID]struct{})
-	for _, id := range allowed {
-		allowedSet[id] = struct{}{}
-	}
-	if _, ok := allowedSet[access.TargetID(targetID)]; !ok {
-		log.Printf("rdp ws forbidden user_id=%s target_id=%s", sess.UserID, targetID)
-		writeJSONError(w, "forbidden", http.StatusForbidden)
+	userID, target, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
+	if !ok {
 		return
 	}
 
 	if target.Protocol != access.ProtocolRDP {
-		log.Printf("rdp ws not_rdp user_id=%s target_id=%s protocol=%s", sess.UserID, targetID, target.Protocol)
+		audit("rdp_ws_not_rdp", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+			"protocol":  target.Protocol,
+		})
 		writeJSONError(w, "target is not an RDP server", http.StatusBadRequest)
 		return
 	}
 
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("rdp ws upgrade_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+		audit("rdp_ws_upgrade_failed", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+			"error":     err.Error(),
+		})
 		writeJSONError(w, "failed to upgrade connection", http.StatusBadRequest)
 		return
 	}
 	defer conn.Close()
 
 	targetAddr := target.Host + ":" + strconv.Itoa(int(target.Port))
-	log.Printf("rdp ws start user_id=%s target_id=%s addr=%s", sess.UserID, targetID, targetAddr)
+	audit("rdp_ws_start", auditFields{
+		"user_id":   userID,
+		"target_id": targetID,
+		"addr":      targetAddr,
+	})
 	_ = rdpproxy.Bridge(conn, targetAddr)
 }
 
@@ -99,13 +87,8 @@ type RDPSessionItem struct {
 
 // handleRDPSessions returns the list of active RDP (browser) sessions for the current user.
 func (a *App) handleRDPSessions(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("vantyx_session")
-	if err != nil || cookie.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	sess, err := a.SessionStore.Get(cookie.Value)
-	if err != nil {
+	userID := strings.TrimSpace(a.currentUserID(r))
+	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -114,7 +97,7 @@ func (a *App) handleRDPSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	allowed, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
+	allowed, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -123,7 +106,7 @@ func (a *App) handleRDPSessions(w http.ResponseWriter, r *http.Request) {
 	for _, id := range allowed {
 		allowedSet[id] = struct{}{}
 	}
-	active := a.RDPVNCManager.ActiveSessionsForUser(sess.UserID)
+	active := a.RDPVNCManager.ActiveSessionsForUser(userID)
 	items := make([]RDPSessionItem, 0, len(active))
 	for _, s := range active {
 		targetID := s.TargetID
@@ -149,13 +132,8 @@ func (a *App) handleRDPSessions(w http.ResponseWriter, r *http.Request) {
 
 // handleRDPSessionDelete terminates the given RDP (browser) session. Caller must own the session.
 func (a *App) handleRDPSessionDelete(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("vantyx_session")
-	if err != nil || cookie.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	authSess, err := a.SessionStore.Get(cookie.Value)
-	if err != nil {
+	userID := strings.TrimSpace(a.currentUserID(r))
+	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -169,53 +147,24 @@ func (a *App) handleRDPSessionDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s, ok := a.RDPVNCManager.GetSession(sessionID)
-	if !ok || s.UserID != authSess.UserID {
+	if !ok || s.UserID != userID {
 		writeJSONError(w, "session not found or access denied", http.StatusNotFound)
 		return
 	}
 	a.RDPVNCManager.RemoveSession(sessionID)
-	log.Printf("rdp session stopped session_id=%s user_id=%s", sessionID, authSess.UserID)
+	audit("rdp_session_stop", auditFields{
+		"session_id": sessionID,
+		"user_id":    userID,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleRDPBrowserWebSocket launches xfreerdp→Xvfb→x11vnc, then proxies the
 // resulting VNC stream over WebSocket so noVNC in the browser can display it.
 func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("vantyx_session")
-	if err != nil || cookie.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	sess, err := a.SessionStore.Get(cookie.Value)
-	if err != nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	targetID := r.URL.Query().Get("target_id")
-	if targetID == "" {
-		writeJSONError(w, "target_id required", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
-	target, err := a.TargetStore.Get(ctx, access.TargetID(targetID))
-	if err != nil {
-		writeJSONError(w, "target not found", http.StatusNotFound)
-		return
-	}
-
-	allowed, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	allowedSet := make(map[access.TargetID]struct{})
-	for _, id := range allowed {
-		allowedSet[id] = struct{}{}
-	}
-	if _, ok := allowedSet[access.TargetID(targetID)]; !ok {
-		writeJSONError(w, "forbidden", http.StatusForbidden)
+	userID, target, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
+	if !ok {
 		return
 	}
 
@@ -234,7 +183,7 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 		height = v
 	}
 
-	bridgeKey := fmt.Sprintf("%s:%s", sess.UserID, targetID)
+	bridgeKey := fmt.Sprintf("%s:%s", userID, targetID)
 	var bridge *rdpvnc.Bridge
 	var targetAddr string
 	if a.RDPVNCManager != nil {
@@ -242,7 +191,12 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 			ew, eh := existingSess.Bridge.Size()
 			if ew == width && eh == height {
 				targetAddr = fmt.Sprintf("127.0.0.1:%d", existingSess.Bridge.VNCPort())
-				log.Printf("rdp browser reconnect user_id=%s target_id=%s session_id=%s vnc_port=%d", sess.UserID, targetID, existingSess.ID, existingSess.Bridge.VNCPort())
+				audit("rdp_browser_reconnect", auditFields{
+					"user_id":    userID,
+					"target_id":  targetID,
+					"session_id": existingSess.ID,
+					"vnc_port":   existingSess.Bridge.VNCPort(),
+				})
 			} else {
 				// Screen size changed; recreate bridge to match new window size.
 				a.RDPVNCManager.RemoveSession(existingSess.ID)
@@ -260,7 +214,11 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 		// is instead tied to the RDP process and explicit session delete.
 		bridge, err = rdpvnc.Start(context.Background(), target.Host, int(target.Port), rdpUser, rdpPass, width, height)
 		if err != nil {
-			log.Printf("rdp browser bridge_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+			audit("rdp_browser_bridge_failed", auditFields{
+				"user_id":   userID,
+				"target_id": targetID,
+				"error":     err.Error(),
+			})
 			writeJSONError(w, "failed to start RDP bridge: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -271,15 +229,23 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 				writeJSONError(w, "failed to start RDP session", http.StatusInternalServerError)
 				return
 			}
-			a.RDPVNCManager.RegisterSession(bridgeKey, sid, sess.UserID, targetID, target.Name, width, height, bridge)
+			a.RDPVNCManager.RegisterSession(bridgeKey, sid, userID, targetID, target.Name, width, height, bridge)
 		}
 		targetAddr = fmt.Sprintf("127.0.0.1:%d", bridge.VNCPort())
-		log.Printf("rdp browser start user_id=%s target_id=%s vnc_port=%d", sess.UserID, targetID, bridge.VNCPort())
+		audit("rdp_browser_start", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+			"vnc_port":  bridge.VNCPort(),
+		})
 	}
 
 	wsConn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("rdp browser upgrade_failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+		audit("rdp_browser_upgrade_failed", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+			"error":     err.Error(),
+		})
 		if bridge != nil {
 			bridge.Stop()
 		}

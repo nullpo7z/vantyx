@@ -939,6 +939,43 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 	return out, nil
 }
 
+// ListByProtocol returns targets for the given protocol. Credentials are not populated.
+func (s *SQLiteTargetStore) ListByProtocol(ctx context.Context, protocol Protocol) ([]*Target, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, host, port, protocol, path
+		FROM targets
+		WHERE protocol = ?
+	`, string(protocol))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*Target
+	for rows.Next() {
+		var t Target
+		var idStr string
+		var port int
+		var proto string
+		if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path); err != nil {
+			return nil, err
+		}
+		if port >= 0 && port <= 65535 {
+			t.ID = TargetID(idStr)
+			t.Port = uint16(port)
+			t.Protocol = Protocol(proto)
+			out = append(out, &t)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TagsForTarget returns tags assigned to the target.
 func (s *SQLiteTargetStore) TagsForTarget(ctx context.Context, targetID TargetID) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)

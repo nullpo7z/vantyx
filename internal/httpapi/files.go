@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/ftp"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/sftp"
 	"github.com/nullpo7z/vantyx/internal/tftp"
@@ -100,8 +101,20 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 			return nil, nil
 		}
 		return target, &sftpClientAdapter{Client: client}
+	case access.ProtocolFTP:
+		if target.SSHUsername == "" || target.SSHPassword == "" {
+			writeJSONError(w, "stored username and password are required for FTP file transfer", http.StatusBadRequest)
+			return nil, nil
+		}
+		client, err := ftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword)
+		if err != nil {
+			log.Printf("files ftp connect failed user_id=%s target_id=%s err=%v", sess.UserID, targetID, err)
+			writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
+			return nil, nil
+		}
+		return target, &ftpClientAdapter{Client: client}
 	default:
-		writeJSONError(w, "file transfer only for SSH or TFTP targets", http.StatusBadRequest)
+		writeJSONError(w, "file transfer only for SSH, FTP, or TFTP targets", http.StatusBadRequest)
 		return nil, nil
 	}
 }
@@ -118,6 +131,24 @@ func (a *sftpClientAdapter) Open(path string) (FileTransferFile, error) {
 func (a *sftpClientAdapter) Create(path string) (io.WriteCloser, error) {
 	return a.Client.Create(path)
 }
+
+// ftpClientAdapter adapts *ftp.Client to FileTransferClient.
+type ftpClientAdapter struct {
+	*ftp.Client
+}
+
+func (a *ftpClientAdapter) Open(path string) (FileTransferFile, error) {
+	rc, err := a.Client.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	f, ok := rc.(FileTransferFile)
+	if !ok {
+		return nil, errors.New("ftp Open did not return a FileTransferFile")
+	}
+	return f, nil
+}
+
 
 // remotePath returns the path query parameter, defaulting to "/". No local filesystem use.
 func remotePath(r *http.Request) string {

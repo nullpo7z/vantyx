@@ -12,6 +12,7 @@ const (
 	ProtocolSSH    Protocol = "ssh"
 	ProtocolTelnet Protocol = "telnet"
 	ProtocolVNC    Protocol = "vnc"
+	ProtocolFTP    Protocol = "ftp"
 	ProtocolTFTP   Protocol = "tftp"
 	ProtocolRDP    Protocol = "rdp"
 )
@@ -42,6 +43,8 @@ type TargetStore interface {
 	Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (*Target, error)
 	Delete(ctx context.Context, id TargetID) error
 	ListByIDs(ctx context.Context, ids []TargetID, opts *ListOpts) ([]*Target, error)
+	// ListByProtocol returns targets for the given protocol (e.g. TFTP). Credentials are not populated.
+	ListByProtocol(ctx context.Context, protocol Protocol) ([]*Target, error)
 	// Tags: ターゲットに付与されたタグ。ユーザーが同じタグを持つとアクセス可能。
 	TagsForTarget(ctx context.Context, targetID TargetID) ([]string, error)
 	SetTargetTags(ctx context.Context, targetID TargetID, tags []string) error

@@ -26,6 +26,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
+	"github.com/nullpo7z/vantyx/internal/tftp"
 )
 
 const (
@@ -381,11 +382,17 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/api/recordings", a.handleListRecordings)
 	r.Get("/api/recordings/{recording_id}/file", a.handleGetRecordingFile)
 
-	// File transfer (SFTP): list, download, upload, delete (requires auth + target access + stored credentials)
+	// File transfer (SFTP/FTP): list, download, upload, delete (requires auth + target access + stored credentials)
 	r.Get("/api/targets/{target_id}/files/download", a.handleDownloadFile)
 	r.Post("/api/targets/{target_id}/files/upload", a.handleUploadFile)
 	r.Get("/api/targets/{target_id}/files", a.handleListFiles)
 	r.Delete("/api/targets/{target_id}/files", a.handleDeleteFile)
+
+	// TFTP server (Vantyx as TFTP server): list/download/upload/delete files under per-target TFTP directory.
+	r.Get("/api/tftp/targets/{target_id}/files", a.handleTFTPServerListFiles)
+	r.Delete("/api/tftp/targets/{target_id}/files", a.handleTFTPServerDeleteFile)
+	r.Get("/api/tftp/targets/{target_id}/files/download", a.handleTFTPServerDownloadFile)
+	r.Post("/api/tftp/targets/{target_id}/files/upload", a.handleTFTPServerUploadFile)
 
 	// Admin-only: API spec and reference (Swagger UI)
 	r.Get("/api/spec", a.handleAPISpec)
@@ -1681,8 +1688,10 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		protocol = access.ProtocolTFTP
 	} else if req.Protocol == "rdp" {
 		protocol = access.ProtocolRDP
+	} else if req.Protocol == "ftp" {
+		protocol = access.ProtocolFTP
 	} else if req.Protocol != "" && req.Protocol != "ssh" {
-		writeJSONError(w, "protocol must be ssh, telnet, vnc, tftp, or rdp", http.StatusBadRequest)
+		writeJSONError(w, "protocol must be ssh, telnet, vnc, tftp, ftp, or rdp", http.StatusBadRequest)
 		return
 	}
 
@@ -1713,6 +1722,7 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "failed to assign target to group", http.StatusInternalServerError)
 		return
 	}
+	tftp.NotifyTargetCreated(ctx, a.TargetStore, protocol)
 
 	t, _ := a.TargetStore.Get(ctx, access.TargetID(id))
 	tags, _ := a.TargetStore.TagsForTarget(ctx, access.TargetID(id))
@@ -1795,8 +1805,10 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 		protocol = access.ProtocolTFTP
 	} else if req.Protocol == "rdp" {
 		protocol = access.ProtocolRDP
+	} else if req.Protocol == "ftp" {
+		protocol = access.ProtocolFTP
 	} else if req.Protocol != "" && req.Protocol != "ssh" {
-		writeJSONError(w, "protocol must be ssh, telnet, vnc, tftp, or rdp", http.StatusBadRequest)
+		writeJSONError(w, "protocol must be ssh, telnet, vnc, tftp, ftp, or rdp", http.StatusBadRequest)
 		return
 	}
 	var sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string
@@ -1872,6 +1884,7 @@ func (a *App) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	cur, _ := a.TargetStore.Get(ctx, access.TargetID(targetID))
 	if err := a.TargetStore.Delete(ctx, access.TargetID(targetID)); err != nil {
 		if errors.Is(err, access.ErrTargetNotFound) {
 			writeJSONError(w, "target not found", http.StatusNotFound)
@@ -1879,6 +1892,9 @@ func (a *App) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 		}
 		writeInternalError(w, err)
 		return
+	}
+	if cur != nil {
+		tftp.NotifyTargetDeleted(cur.Protocol)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

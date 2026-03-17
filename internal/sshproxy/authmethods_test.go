@@ -21,4 +21,3 @@ func TestAuthMethods_NoCredentials(t *testing.T) {
 		t.Fatalf("expected 0 methods, got %d", len(m))
 	}
 }
-

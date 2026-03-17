@@ -10,7 +10,7 @@ import (
 type auditForwarderSettingsResponse struct {
 	// Saved config (admin-configured). When not configured, returns env-based defaults.
 	Config auditForwarderConfig `json:"config"`
-	Source string             `json:"source"` // "db" | "env"
+	Source string               `json:"source"` // "db" | "env"
 }
 
 func (a *App) handleGetAuditForwarderSettings(w http.ResponseWriter, r *http.Request) {
@@ -78,4 +78,3 @@ func (a *App) handlePutAuditForwarderSettings(w http.ResponseWriter, r *http.Req
 	})
 	writeJSON(w, auditForwarderSettingsResponse{Config: cfg, Source: "db"})
 }
-

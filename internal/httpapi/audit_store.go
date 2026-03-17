@@ -57,4 +57,3 @@ func (s *auditStore) listNewestFirst(limit int, filter func(AuditEntry) bool) []
 	}
 	return out
 }
-

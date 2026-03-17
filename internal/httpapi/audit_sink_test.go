@@ -26,4 +26,3 @@ func TestAuditSink_FileMode0600(t *testing.T) {
 		t.Fatalf("expected 0600, got %o", st.Mode().Perm())
 	}
 }
-

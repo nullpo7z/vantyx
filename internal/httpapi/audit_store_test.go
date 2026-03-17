@@ -18,4 +18,3 @@ func TestAuditStore_ListNewestFirstFilters(t *testing.T) {
 		t.Fatalf("unexpected order: %+v", items)
 	}
 }
-

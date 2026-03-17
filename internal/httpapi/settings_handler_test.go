@@ -43,7 +43,7 @@ func TestSettings_AuditForwarder_GetAndPut_Admin(t *testing.T) {
 	}
 	var out struct {
 		Config auditForwarderConfig `json:"config"`
-		Source string              `json:"source"`
+		Source string               `json:"source"`
 	}
 	if err := json.NewDecoder(w2.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -70,4 +70,3 @@ func TestSettings_AuditForwarder_PutRejectsInvalidProto(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
 	}
 }
-

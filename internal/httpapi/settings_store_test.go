@@ -17,4 +17,3 @@ func TestSettingsStore_SaveAndLoadAuditForwarderConfig(t *testing.T) {
 		t.Fatalf("unexpected config: got=%+v want=%+v", got, want)
 	}
 }
-

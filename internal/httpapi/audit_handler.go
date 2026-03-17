@@ -81,4 +81,3 @@ func (a *App) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
 	})
 	writeJSON(w, map[string]interface{}{"items": items})
 }
-

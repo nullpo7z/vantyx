@@ -44,4 +44,3 @@ func saveAuditForwarderConfigToDB(db *sql.DB, cfg auditForwarderConfig) error {
 	)
 	return err
 }
-

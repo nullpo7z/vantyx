@@ -45,4 +45,3 @@ func TestAuditLogs_Admin_DBQueryFilters(t *testing.T) {
 		t.Fatalf("unexpected event: %q", out.Items[0].Event)
 	}
 }
-

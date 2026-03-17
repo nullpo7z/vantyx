@@ -190,4 +190,3 @@ func closeAuditSink() error {
 	}
 	return nil
 }
-

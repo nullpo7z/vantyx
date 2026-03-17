@@ -23,4 +23,3 @@ func TestSession_DoneClosesOnCancel(t *testing.T) {
 		t.Fatal("expected Done() to close")
 	}
 }
-

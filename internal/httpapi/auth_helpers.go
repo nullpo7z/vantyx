@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -8,24 +9,41 @@ import (
 	"github.com/nullpo7z/vantyx/internal/auth"
 )
 
-// currentUserID returns the authenticated user ID from the session cookie, or empty string if unauthenticated.
-// 認証状態の判定はこの関数経由に集約し、ハンドラ側では userID が空かどうかのみを見るようにする。
-func (a *App) currentUserID(r *http.Request) string {
+// currentUserIDWithError returns the authenticated user ID and nil, or ("", nil) when not authenticated,
+// or ("", err) when a storage error (e.g. database locked) occurs. Callers that need to return 500 on
+// storage errors should use this and call writeInternalError(w, err) when err != nil.
+func (a *App) currentUserIDWithError(r *http.Request) (string, error) {
 	c, err := r.Cookie("vantyx_session")
 	if err != nil || c.Value == "" {
-		return ""
+		return "", nil
 	}
 	sess, err := a.SessionStore.Get(c.Value)
 	if err != nil {
-		return ""
+		if errors.Is(err, auth.ErrSessionNotFound) {
+			return "", nil
+		}
+		return "", err
 	}
-	return sess.UserID
+	return sess.UserID, nil
+}
+
+// currentUserID returns the authenticated user ID from the session cookie, or empty string if unauthenticated.
+// 認証状態の判定はこの関数経由に集約し、ハンドラ側では userID が空かどうかのみを見るようにする。
+// ストレージエラー時も空を返すため、admin/グループ認可では currentUserIDWithError を使い 500 を出し分ける。
+func (a *App) currentUserID(r *http.Request) string {
+	userID, _ := a.currentUserIDWithError(r)
+	return userID
 }
 
 // requireAdmin writes JSON error and returns false if the current user is not an admin.
 // Admin 権限が必要なエンドポイントは、この関数を最初に呼び出して早期 return するだけにする。
+// セッション取得時の DB エラー（例: database is locked）の場合は 500 を返す。
 func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	userID := a.currentUserID(r)
+	userID, err := a.currentUserIDWithError(r)
+	if err != nil {
+		writeInternalError(w, err)
+		return false
+	}
 	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return false
@@ -44,8 +62,15 @@ func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 
 // requireGroupMemberOrAdmin enforces that the current user is either admin or a member of the given group.
 // グループ単位の権限チェックを行う場所で再利用するためのヘルパー。
+// セッション取得時の DB エラー（例: database is locked）の場合は 500 を返す。
 func (a *App) requireGroupMemberOrAdmin(w http.ResponseWriter, r *http.Request, groupID access.GroupID) (userID string, ok bool) {
-	userID = strings.TrimSpace(a.currentUserID(r))
+	var err error
+	userID, err = a.currentUserIDWithError(r)
+	if err != nil {
+		writeInternalError(w, err)
+		return "", false
+	}
+	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return "", false

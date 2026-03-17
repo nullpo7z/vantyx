@@ -230,6 +230,30 @@ const API = {
     return res.json()
   },
 
+  /**
+   * セッション作成・削除のリアルタイム通知を購読する（SSE）。
+   * 返すオブジェクトの close() を呼ぶと購読を解除する。
+   * @param {function(object): void} onMessage - イベント受信時（data: { type: 'session_change' }）
+   */
+  subscribeSessionEvents(onMessage) {
+    const url = new URL('/api/events/sessions', window.location.origin).toString()
+    const es = new EventSource(url)
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data || '{}')
+        if (data && typeof onMessage === 'function') onMessage(data)
+      } catch (_) {}
+    }
+    es.onerror = () => {
+      es.close()
+    }
+    return {
+      close() {
+        es.close()
+      },
+    }
+  },
+
   /** アクティブな RDP（ブラウザ）セッション一覧（再接続用） */
   async rdpSessions() {
     const res = await fetch('/api/rdp/sessions', { credentials: 'include' })

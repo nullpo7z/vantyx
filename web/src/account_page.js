@@ -85,7 +85,7 @@ export function showChangePasswordModal() {
     }
     submitBtn.disabled = true
     try {
-      await API.changePassword({ current_password: current, new_password: newPass })
+      await API.changePassword(current, newPass)
       close()
       alert('パスワードを変更しました')
     } catch (err) {

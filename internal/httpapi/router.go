@@ -47,10 +47,16 @@ type loginRateLimiter struct {
 }
 
 func newLoginRateLimiter() *loginRateLimiter {
+	maxTry := loginRateLimitN
+	if n := strings.TrimSpace(os.Getenv("VANTYX_LOGIN_RATE_LIMIT_N")); n != "" {
+		if v, err := strconv.Atoi(n); err == nil && v > 0 {
+			maxTry = v
+		}
+	}
 	return &loginRateLimiter{
 		byIP:   make(map[string][]time.Time),
 		window: loginRateLimitWindow,
-		maxTry: loginRateLimitN,
+		maxTry: maxTry,
 	}
 }
 
@@ -189,6 +195,9 @@ type App struct {
 
 	// RDPVNCManager tracks active RDP-to-VNC bridges (xfreerdp→Xvfb→x11vnc).
 	RDPVNCManager *rdpvnc.Manager
+
+	// SessionEventBroker broadcasts session lifecycle events for SSE (GET /api/events/sessions).
+	SessionEventBroker *SessionEventBroker
 }
 
 // newAppDBOpen, newAppMigrate, and newAppUserStore are set in tests to inject failures for coverage.
@@ -270,6 +279,7 @@ func NewApp() *App {
 		LoginRateLimiter:       newLoginRateLimiter(),
 		DB:                     db,
 		RDPVNCManager:          rdpvnc.NewManager(),
+		SessionEventBroker:     NewSessionEventBroker(),
 	}
 }
 
@@ -363,6 +373,9 @@ func (a *App) NewRouter() http.Handler {
 	r.Delete("/api/targets/{target_id}", a.handleDeleteTarget)
 	r.Get("/api/targets/{target_id}/tags", a.handleTargetTags)
 	r.Put("/api/targets/{target_id}/tags", a.handleSetTargetTags)
+
+	// Session lifecycle events (SSE); frontend subscribes instead of polling.
+	r.Get("/api/events/sessions", a.handleSessionEvents)
 
 	// SSH/WebSocket terminal and session list (Phase 2: resume)
 	r.Route("/api/terminal/sessions", func(r chi.Router) {
@@ -470,6 +483,15 @@ func writeServiceUnavailableError(w http.ResponseWriter, err error) {
 	writeJSONError(w, "service unavailable", http.StatusServiceUnavailable)
 }
 
+// isLoopbackHost returns true if host is 127.0.0.1, localhost, or [::1] (with optional port).
+func isLoopbackHost(host string) bool {
+	hostname, _, err := net.SplitHostPort(host)
+	if err != nil {
+		hostname = host
+	}
+	return hostname == "127.0.0.1" || hostname == "localhost" || hostname == "::1"
+}
+
 func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ip := ""
 	if a.LoginRateLimiter != nil {
@@ -528,7 +550,8 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}
-	if r.TLS != nil {
+	// E2E/ローカルでは Secure を付けない（自己署名証明書等で Cookie が保存されない事象を避ける）
+	if r.TLS != nil && !isLoopbackHost(r.Host) {
 		cookie.Secure = true
 	}
 	http.SetCookie(w, cookie)
@@ -561,7 +584,7 @@ func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}
-	if r.TLS != nil {
+	if r.TLS != nil && !isLoopbackHost(r.Host) {
 		clearCookie.Secure = true
 	}
 	http.SetCookie(w, clearCookie)

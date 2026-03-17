@@ -31,12 +31,15 @@ type Config struct {
 	ConnMaxLifetime time.Duration
 }
 
-// dsn returns the SQLite DSN with foreign_keys enabled for all connections.
+// dsn returns the SQLite DSN with WAL, foreign_keys and busy_timeout for all connections.
+// journal_mode=WAL improves concurrency (readers do not block writers). busy_timeout makes
+// SQLite wait up to 5s on lock instead of returning SQLITE_BUSY immediately.
 func dsn(path string) string {
+	const pragmas = "_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)"
 	if path == "" || path == ":memory:" {
-		return "file::memory:?_pragma=foreign_keys(on)"
+		return "file::memory:?" + pragmas
 	}
-	return "file:" + path + "?_pragma=foreign_keys(on)"
+	return "file:" + path + "?" + pragmas
 }
 
 // DefaultPath is the default SQLite file path when VANTYX_SQLITE_PATH is not set.

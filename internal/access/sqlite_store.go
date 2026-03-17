@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log"
 	"net"
 	"regexp"
 	"sort"
@@ -28,7 +29,7 @@ const (
 )
 
 var (
-	idPattern       = regexp.MustCompile(`^[a-zA-Z0-9_\-./]+$`)
+	idPattern       = regexp.MustCompile(`^[a-zA-Z0-9_\-]+$`)
 	hostnamePattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$`)
 )
 
@@ -40,8 +41,15 @@ func validateGroupID(id GroupID) error {
 	if len(s) > maxIDLen {
 		return errors.New("group id too long")
 	}
-	if !idPattern.MatchString(s) {
-		return errors.New("group id contains invalid characters")
+	// Access group IDs may contain a hierarchical path (e.g. "parent/child").
+	// Each path segment must match idPattern to keep IDs predictable and safe.
+	for _, seg := range strings.Split(s, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return errors.New("group id contains invalid characters")
+		}
+		if !idPattern.MatchString(seg) {
+			return errors.New("group id contains invalid characters")
+		}
 	}
 	return nil
 }
@@ -125,10 +133,10 @@ type SQLiteAccessGroupStore struct {
 }
 
 // NewSQLiteAccessGroupStore creates a new SQLite-backed access group store.
-// If cfg is nil, QueryTimeout 5s and DefaultListLimit (see group.go defaultListLimit) are used.
+// If cfg is nil, QueryTimeout 5s and DefaultListLimit (see group.go) are used.
 func NewSQLiteAccessGroupStore(db *sql.DB, cfg *StoreConfig) *SQLiteAccessGroupStore {
 	timeout := 5 * time.Second
-	limit := defaultListLimit // defined in group.go
+	limit := DefaultListLimit
 	if cfg != nil {
 		if cfg.QueryTimeout > 0 {
 			timeout = cfg.QueryTimeout
@@ -183,6 +191,26 @@ func (s *SQLiteAccessGroupStore) Get(ctx context.Context, id GroupID) (*AccessGr
 		return nil, err
 	}
 	return &g, nil
+}
+
+// Delete removes an access group. Related rows (e.g. user_groups, group_tags, group_targets)
+// are expected to be removed by foreign key cascades if configured.
+func (s *SQLiteAccessGroupStore) Delete(ctx context.Context, id GroupID) error {
+	if err := validateGroupID(id); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	res, err := s.db.ExecContext(ctx, `DELETE FROM access_groups WHERE id = ?`, string(id))
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrGroupNotFound
+	}
+	return nil
 }
 
 // AddUserToGroup adds a user to an access group (within a transaction to avoid TOCTOU).
@@ -318,22 +346,28 @@ func (s *SQLiteAccessGroupStore) SetGroupTags(ctx context.Context, groupID Group
 			return err
 		}
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var exists int
-	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM access_groups WHERE id = ?`, string(groupID)).Scan(&exists); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM access_groups WHERE id = ?`, string(groupID)).Scan(&exists); err != nil {
 		if err == sql.ErrNoRows {
 			return ErrGroupNotFound
 		}
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM group_tags WHERE group_id = ?`, string(groupID)); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM group_tags WHERE group_id = ?`, string(groupID)); err != nil {
 		return err
 	}
 	for _, tag := range tags {
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO group_tags (group_id, tag) VALUES (?, ?)`, string(groupID), tag); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO group_tags (group_id, tag) VALUES (?, ?)`, string(groupID), tag); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // AddTargetToGroup grants the group access to the target (within a transaction to avoid TOCTOU).
@@ -363,6 +397,25 @@ func (s *SQLiteAccessGroupStore) AddTargetToGroup(ctx context.Context, groupID G
 		return err
 	}
 	return tx.Commit()
+}
+
+// RemoveTargetFromGroup revokes the group's access to the target.
+func (s *SQLiteAccessGroupStore) RemoveTargetFromGroup(ctx context.Context, groupID GroupID, targetID TargetID) error {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM access_groups WHERE id = ?`, string(groupID)).Scan(&exists); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrGroupNotFound
+		}
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM group_targets
+		WHERE group_id = ? AND target_id = ?
+	`, string(groupID), string(targetID))
+	return err
 }
 
 // GroupIDsForUser returns the set of access group IDs the user can see: direct membership (user_groups)
@@ -627,11 +680,11 @@ type SQLiteTargetStore struct {
 }
 
 // NewSQLiteTargetStore creates a new SQLite-backed target store.
-// If cfg is nil, QueryTimeout 5s and DefaultListLimit (see group.go defaultListLimit) are used.
+// If cfg is nil, QueryTimeout 5s and DefaultListLimit (see group.go) are used.
 // encKey is the 32-byte key for encrypting ssh_password at rest (ASVS 7.12); if nil, storing a non-empty SSH password will return ErrEncryptionKeyRequired.
 func NewSQLiteTargetStore(db *sql.DB, cfg *StoreConfig, encKey []byte) *SQLiteTargetStore {
 	timeout := 5 * time.Second
-	limit := defaultListLimit
+	limit := DefaultListLimit
 	if cfg != nil {
 		if cfg.QueryTimeout > 0 {
 			timeout = cfg.QueryTimeout
@@ -641,6 +694,38 @@ func NewSQLiteTargetStore(db *sql.DB, cfg *StoreConfig, encKey []byte) *SQLiteTa
 		}
 	}
 	return &SQLiteTargetStore{db: db, queryTimeout: timeout, defaultListLimit: limit, encKey: encKey}
+}
+
+func (s *SQLiteTargetStore) encryptCredentials(sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (storedPassword, storedKey, storedKeyPass string, err error) {
+	if (sshPassword != "" || sshPrivateKey != "") && (s.encKey == nil || len(s.encKey) != secret.KeySize) {
+		return "", "", "", ErrEncryptionKeyRequired
+	}
+
+	storedPassword = sshPassword
+	if sshPassword != "" {
+		storedPassword, err = secret.Encrypt(s.encKey, sshPassword)
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+
+	storedKey = sshPrivateKey
+	if sshPrivateKey != "" {
+		storedKey, err = secret.Encrypt(s.encKey, sshPrivateKey)
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+
+	storedKeyPass = sshPrivateKeyPassphrase
+	if sshPrivateKeyPassphrase != "" {
+		storedKeyPass, err = secret.Encrypt(s.encKey, sshPrivateKeyPassphrase)
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+
+	return storedPassword, storedKey, storedKeyPass, nil
 }
 
 // Create inserts a new target without path (group_id and path empty; may fail if FK requires a group).
@@ -667,32 +752,9 @@ func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, nam
 			return nil, err
 		}
 	}
-	if (sshPassword != "" || sshPrivateKey != "") && (s.encKey == nil || len(s.encKey) != secret.KeySize) {
-		return nil, ErrEncryptionKeyRequired
-	}
-	storedPassword := sshPassword
-	if sshPassword != "" {
-		var errEnc error
-		storedPassword, errEnc = secret.Encrypt(s.encKey, sshPassword)
-		if errEnc != nil {
-			return nil, errEnc
-		}
-	}
-	storedKey := sshPrivateKey
-	if sshPrivateKey != "" {
-		var errEnc error
-		storedKey, errEnc = secret.Encrypt(s.encKey, sshPrivateKey)
-		if errEnc != nil {
-			return nil, errEnc
-		}
-	}
-	storedKeyPass := sshPrivateKeyPassphrase
-	if sshPrivateKeyPassphrase != "" {
-		var errEnc error
-		storedKeyPass, errEnc = secret.Encrypt(s.encKey, sshPrivateKeyPassphrase)
-		if errEnc != nil {
-			return nil, errEnc
-		}
+	storedPassword, storedKey, storedKeyPass, err := s.encryptCredentials(sshPassword, sshPrivateKey, sshPrivateKeyPassphrase)
+	if err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
@@ -707,7 +769,7 @@ func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, nam
 	if tftpEnabled {
 		tftpVal = 1
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO targets (id, name, host, port, protocol, group_id, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, sftp_enabled, ftp_enabled, tftp_enabled)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, string(id), name, host, int(port), string(protocol), string(groupID), path, sshUsername, storedPassword, storedKey, storedKeyPass, sftpVal, ftpVal, tftpVal)
@@ -746,32 +808,9 @@ func (s *SQLiteTargetStore) Update(ctx context.Context, id TargetID, name, host 
 	if err := validateProtocol(protocol); err != nil {
 		return nil, err
 	}
-	if (sshPassword != "" || sshPrivateKey != "") && (s.encKey == nil || len(s.encKey) != secret.KeySize) {
-		return nil, ErrEncryptionKeyRequired
-	}
-	storedPassword := sshPassword
-	if sshPassword != "" {
-		var errEnc error
-		storedPassword, errEnc = secret.Encrypt(s.encKey, sshPassword)
-		if errEnc != nil {
-			return nil, errEnc
-		}
-	}
-	storedKey := sshPrivateKey
-	if sshPrivateKey != "" {
-		var errEnc error
-		storedKey, errEnc = secret.Encrypt(s.encKey, sshPrivateKey)
-		if errEnc != nil {
-			return nil, errEnc
-		}
-	}
-	storedKeyPass := sshPrivateKeyPassphrase
-	if sshPrivateKeyPassphrase != "" {
-		var errEnc error
-		storedKeyPass, errEnc = secret.Encrypt(s.encKey, sshPrivateKeyPassphrase)
-		if errEnc != nil {
-			return nil, errEnc
-		}
+	storedPassword, storedKey, storedKeyPass, err := s.encryptCredentials(sshPassword, sshPrivateKey, sshPrivateKeyPassphrase)
+	if err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
@@ -863,13 +902,20 @@ func decryptOrPlain(encKey []byte, stored string) string {
 	if stored == "" {
 		return ""
 	}
-	if encKey != nil && len(encKey) == secret.KeySize {
-		dec, err := secret.Decrypt(encKey, stored)
-		if err == nil {
-			return dec
-		}
+	if !strings.HasPrefix(stored, secret.CiphertextVersionPrefix) {
+		// Legacy plaintext or non-versioned data; return as-is.
+		return stored
 	}
-	return stored
+	if len(encKey) != secret.KeySize {
+		log.Printf("access: encrypted credential present but encryption key is not configured correctly")
+		return ""
+	}
+	dec, err := secret.Decrypt(encKey, stored)
+	if err != nil {
+		log.Printf("access: failed to decrypt stored credential: %v", err)
+		return ""
+	}
+	return dec
 }
 
 // ListByIDs returns targets for the given IDs in one query (preserves order, skips missing).
@@ -1036,20 +1082,26 @@ func (s *SQLiteTargetStore) SetTargetTags(ctx context.Context, targetID TargetID
 			return err
 		}
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var exists int
-	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM targets WHERE id = ?`, string(targetID)).Scan(&exists); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM targets WHERE id = ?`, string(targetID)).Scan(&exists); err != nil {
 		if err == sql.ErrNoRows {
 			return ErrTargetNotFound
 		}
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM target_tags WHERE target_id = ?`, string(targetID)); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM target_tags WHERE target_id = ?`, string(targetID)); err != nil {
 		return err
 	}
 	for _, tag := range tags {
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO target_tags (target_id, tag) VALUES (?, ?)`, string(targetID), tag); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO target_tags (target_id, tag) VALUES (?, ?)`, string(targetID), tag); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }

@@ -306,6 +306,80 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_ViaTag(t *testing.T) {
 	}
 }
 
+// GroupIDsForUser: ユーザーがグループのメンバーでなくても、ユーザータグとグループタグが一致すればそのグループが見える。
+func TestSQLiteAccessGroupStore_GroupIDsForUser_ViaGroupTagOnly(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	db := groups.db
+	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO users (id, username, password_hash) VALUES ('u3', 'u3', 'hash')`); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	_, _ = groups.Create(ctx, "g3", "G3")
+	_ = groups.SetGroupTags(ctx, GroupID("g3"), []string{"alpha"})
+	_, _ = targets.CreateWithPath(ctx, "t3", "T3", "h3", 22, ProtocolSSH, GroupID("g3"), "g3", "", "", "", "", true, false, false)
+	_ = groups.AddTargetToGroup(ctx, "g3", "t3")
+	// u3 は g3 のメンバーではない。ユーザータグとグループタグのみ一致
+	_, _ = db.ExecContext(ctx, `INSERT INTO user_tags (user_id, tag) VALUES ('u3', 'alpha')`)
+	gids, err := groups.GroupIDsForUser(ctx, "u3", nil)
+	if err != nil {
+		t.Fatalf("GroupIDsForUser: %v", err)
+	}
+	if len(gids) != 1 || gids[0] != "g3" {
+		t.Fatalf("expected [g3] via group tag only, got %v", gids)
+	}
+}
+
+// TargetIDsForUser: メンバーでないユーザーが、グループタグ一致のみでターゲットにアクセスできる。
+func TestSQLiteAccessGroupStore_TargetIDsForUser_ViaGroupTagOnly(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	db := groups.db
+	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO users (id, username, password_hash) VALUES ('u4', 'u4', 'hash')`); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	_, _ = groups.Create(ctx, "g4", "G4")
+	_ = groups.SetGroupTags(ctx, GroupID("g4"), []string{"beta"})
+	_, _ = targets.CreateWithPath(ctx, "t4", "T4", "h4", 22, ProtocolSSH, GroupID("g4"), "g4", "", "", "", "", true, false, false)
+	_ = groups.AddTargetToGroup(ctx, "g4", "t4")
+	_, _ = db.ExecContext(ctx, `INSERT INTO user_tags (user_id, tag) VALUES ('u4', 'beta')`)
+	tids, err := groups.TargetIDsForUser(ctx, "u4", nil)
+	if err != nil {
+		t.Fatalf("TargetIDsForUser: %v", err)
+	}
+	if len(tids) != 1 || tids[0] != "t4" {
+		t.Fatalf("expected [t4] via group tag only, got %v", tids)
+	}
+}
+
+// ユーザータグがどのグループ・ターゲットとも一致しない場合は何も見えない。
+func TestSQLiteAccessGroupStore_TagBasedAccess_NoMatch(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	db := groups.db
+	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO users (id, username, password_hash) VALUES ('u5', 'u5', 'hash')`); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	_, _ = groups.Create(ctx, "g5", "G5")
+	_, _ = targets.CreateWithPath(ctx, "t5", "T5", "h5", 22, ProtocolSSH, GroupID("g5"), "g5", "", "", "", "", true, false, false)
+	_ = groups.AddTargetToGroup(ctx, "g5", "t5")
+	// u5 は g5 のメンバーではなく、タグも一致しない
+	_, _ = db.ExecContext(ctx, `INSERT INTO user_tags (user_id, tag) VALUES ('u5', 'other')`)
+	gids, err := groups.GroupIDsForUser(ctx, "u5", nil)
+	if err != nil {
+		t.Fatalf("GroupIDsForUser: %v", err)
+	}
+	if len(gids) != 0 {
+		t.Fatalf("expected no groups when tag does not match, got %v", gids)
+	}
+	tids, err := groups.TargetIDsForUser(ctx, "u5", nil)
+	if err != nil {
+		t.Fatalf("TargetIDsForUser: %v", err)
+	}
+	if len(tids) != 0 {
+		t.Fatalf("expected no targets when tag does not match, got %v", tids)
+	}
+}
+
 func TestSQLiteAccessGroupStore_Get_FoundAndNotFound(t *testing.T) {
 	ctx := context.Background()
 	groups, _ := newTestSQLiteStores(t)
@@ -802,8 +876,8 @@ func TestSQLiteTargetStore_Get_DecryptFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.SSHPassword != "v1:!!!" {
-		t.Fatalf("expected stored ciphertext when decrypt fails, got %q", got.SSHPassword)
+	if got.SSHPassword != "" {
+		t.Fatalf("expected empty password when decrypt fails, got %q", got.SSHPassword)
 	}
 }
 
@@ -827,8 +901,8 @@ func TestSQLiteTargetStore_ListByIDs_DecryptFailure(t *testing.T) {
 	if len(list) != 2 {
 		t.Fatalf("expected 2 targets, got %d", len(list))
 	}
-	if list[1].SSHPassword != "v1:invalid" {
-		t.Fatalf("expected ciphertext when decrypt fails for t2, got %q", list[1].SSHPassword)
+	if list[1].SSHPassword != "" {
+		t.Fatalf("expected empty password when decrypt fails for t2, got %q", list[1].SSHPassword)
 	}
 }
 

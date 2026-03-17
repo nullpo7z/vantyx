@@ -334,6 +334,9 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err = a.TerminalSessionManager.Start(id, opts, func(ctx context.Context, termSess *session.Session) {
 		a.runDetachableBridge(ctx, termSess, a.TerminalSessionManager, id, conn, target, creds, cols, rows)
+		if a.SessionEventBroker != nil {
+			a.SessionEventBroker.Broadcast()
+		}
 	})
 	if err != nil {
 		audit("terminal_session_start_failed", auditFields{
@@ -352,6 +355,9 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		"host":       target.Host,
 		"port":       target.Port,
 	})
+	if a.SessionEventBroker != nil {
+		a.SessionEventBroker.Broadcast()
+	}
 }
 
 // TerminalSessionItem is one entry in GET /api/terminal/sessions response.
@@ -419,6 +425,9 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 		"session_id": sessionID,
 		"user_id":    userID,
 	})
+	if a.SessionEventBroker != nil {
+		a.SessionEventBroker.Broadcast()
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

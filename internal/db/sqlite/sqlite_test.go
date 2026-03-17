@@ -126,13 +126,14 @@ func TestOpen_DriverError(t *testing.T) {
 }
 
 func TestDSN(t *testing.T) {
+	const pragmas = "_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)"
 	tests := []struct {
 		path string
 		want string
 	}{
-		{"", "file::memory:?_pragma=foreign_keys(on)"},
-		{":memory:", "file::memory:?_pragma=foreign_keys(on)"},
-		{"/tmp/db.db", "file:/tmp/db.db?_pragma=foreign_keys(on)"},
+		{"", "file::memory:?" + pragmas},
+		{":memory:", "file::memory:?" + pragmas},
+		{"/tmp/db.db", "file:/tmp/db.db?" + pragmas},
 	}
 	for _, tt := range tests {
 		got := dsn(tt.path)

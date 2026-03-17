@@ -1,5 +1,16 @@
 import API from './api.js'
 
+const ID_MAX_LENGTH = 512
+const ID_PATTERN = /^[A-Za-z0-9_-]+$/
+
+function validateOptionalUserId(rawId) {
+  if (!rawId) return null
+  if (rawId.length > ID_MAX_LENGTH || !ID_PATTERN.test(rawId)) {
+    return 'ユーザーIDは英数字・ハイフン・アンダースコアのみ、最大512文字で入力してください'
+  }
+  return null
+}
+
 // ユーザー管理ページ全体を描画する
 export async function renderUsersPage({
   mainContent,
@@ -174,7 +185,14 @@ function showAddUserModal({ reload }) {
     const username = modal.querySelector('#add-user-username').value.trim()
     const password = modal.querySelector('#add-user-password').value
     const role = modal.querySelector('#add-user-role').value || 'user'
-    const id = modal.querySelector('#add-user-id').value.trim() || undefined
+    const rawId = modal.querySelector('#add-user-id').value.trim()
+    const idValidationError = validateOptionalUserId(rawId)
+    if (idValidationError) {
+      errorEl.textContent = idValidationError
+      errorEl.classList.remove('hidden')
+      return
+    }
+    const id = rawId || undefined
     if (!username || !password) {
       errorEl.textContent = 'ユーザー名とパスワードを入力してください'
       errorEl.classList.remove('hidden')

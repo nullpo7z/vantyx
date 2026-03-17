@@ -156,6 +156,9 @@ func (a *App) handleRDPSessionDelete(w http.ResponseWriter, r *http.Request) {
 		"session_id": sessionID,
 		"user_id":    userID,
 	})
+	if a.SessionEventBroker != nil {
+		a.SessionEventBroker.Broadcast()
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -200,6 +203,9 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 			} else {
 				// Screen size changed; recreate bridge to match new window size.
 				a.RDPVNCManager.RemoveSession(existingSess.ID)
+				if a.SessionEventBroker != nil {
+					a.SessionEventBroker.Broadcast()
+				}
 			}
 		}
 	}
@@ -230,6 +236,9 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			a.RDPVNCManager.RegisterSession(bridgeKey, sid, userID, targetID, target.Name, width, height, bridge)
+			if a.SessionEventBroker != nil {
+				a.SessionEventBroker.Broadcast()
+			}
 		}
 		targetAddr = fmt.Sprintf("127.0.0.1:%d", bridge.VNCPort())
 		audit("rdp_browser_start", auditFields{

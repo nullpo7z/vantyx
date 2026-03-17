@@ -161,7 +161,7 @@ func TestSQLiteAccessGroupStore_UserIDsForGroup_QueryError(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("query failed")
-	mock.ExpectQuery("SELECT user_id").WithArgs("g1", 10000, 0).WillReturnError(wantErr)
+	mock.ExpectQuery("SELECT user_id").WithArgs("g1", DefaultListLimit, 0).WillReturnError(wantErr)
 
 	_, err = store.UserIDsForGroup(ctx, "g1", nil)
 	if err != wantErr {
@@ -183,7 +183,7 @@ func TestSQLiteAccessGroupStore_UserIDsForGroup_ScanErr(t *testing.T) {
 	ctx := context.Background()
 
 	rows := sqlmock.NewRows([]string{"user_id"}).AddRow(nil)
-	mock.ExpectQuery("SELECT user_id").WithArgs("g1", 10000, 0).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT user_id").WithArgs("g1", DefaultListLimit, 0).WillReturnRows(rows)
 
 	_, err = store.UserIDsForGroup(ctx, "g1", nil)
 	if err == nil {
@@ -206,7 +206,7 @@ func TestSQLiteAccessGroupStore_UserIDsForGroup_RowsErr(t *testing.T) {
 
 	wantErr := errors.New("rows error")
 	rows := sqlmock.NewRows([]string{"user_id"}).AddRow("u1").RowError(0, wantErr)
-	mock.ExpectQuery("SELECT user_id").WithArgs("g1", 10000, 0).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT user_id").WithArgs("g1", DefaultListLimit, 0).WillReturnRows(rows)
 
 	_, err = store.UserIDsForGroup(ctx, "g1", nil)
 	if err != wantErr {
@@ -295,7 +295,9 @@ func TestSQLiteAccessGroupStore_SetGroupTags_QueryRowError_Mock(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("select failed")
+	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT 1 FROM access_groups WHERE id = \\?").WithArgs("g1").WillReturnError(wantErr)
+	mock.ExpectRollback()
 
 	err = store.SetGroupTags(ctx, "g1", []string{"a"})
 	if err != wantErr {
@@ -317,8 +319,10 @@ func TestSQLiteAccessGroupStore_SetGroupTags_DeleteError(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("delete failed")
+	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT 1 FROM access_groups WHERE id = \\?").WithArgs("g1").WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 	mock.ExpectExec("DELETE FROM group_tags").WithArgs("g1").WillReturnError(wantErr)
+	mock.ExpectRollback()
 
 	err = store.SetGroupTags(ctx, "g1", []string{"a"})
 	if err != wantErr {
@@ -340,9 +344,11 @@ func TestSQLiteAccessGroupStore_SetGroupTags_InsertError(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("insert failed")
+	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT 1 FROM access_groups WHERE id = \\?").WithArgs("g1").WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 	mock.ExpectExec("DELETE FROM group_tags").WithArgs("g1").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO group_tags").WithArgs("g1", "a").WillReturnError(wantErr)
+	mock.ExpectRollback()
 
 	err = store.SetGroupTags(ctx, "g1", []string{"a"})
 	if err != wantErr {
@@ -691,7 +697,7 @@ func TestSQLiteAccessGroupStore_TargetIDsForGroup_QueryError(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("query failed")
-	mock.ExpectQuery("SELECT target_id").WithArgs("g1", 10000, 0).WillReturnError(wantErr)
+	mock.ExpectQuery("SELECT target_id").WithArgs("g1", DefaultListLimit, 0).WillReturnError(wantErr)
 
 	_, err = store.TargetIDsForGroup(ctx, "g1", nil)
 	if err != wantErr {
@@ -713,7 +719,7 @@ func TestSQLiteAccessGroupStore_TargetIDsForGroup_ScanErr(t *testing.T) {
 	ctx := context.Background()
 
 	rows := sqlmock.NewRows([]string{"target_id"}).AddRow(nil)
-	mock.ExpectQuery("SELECT target_id").WithArgs("g1", 10000, 0).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT target_id").WithArgs("g1", DefaultListLimit, 0).WillReturnRows(rows)
 
 	_, err = store.TargetIDsForGroup(ctx, "g1", nil)
 	if err == nil {
@@ -736,7 +742,7 @@ func TestSQLiteAccessGroupStore_TargetIDsForGroup_RowsErr(t *testing.T) {
 
 	wantErr := errors.New("rows err")
 	rows := sqlmock.NewRows([]string{"target_id"}).AddRow("t1").RowError(0, wantErr)
-	mock.ExpectQuery("SELECT target_id").WithArgs("g1", 10000, 0).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT target_id").WithArgs("g1", DefaultListLimit, 0).WillReturnRows(rows)
 
 	_, err = store.TargetIDsForGroup(ctx, "g1", nil)
 	if err != wantErr {
@@ -1129,7 +1135,9 @@ func TestSQLiteTargetStore_SetTargetTags_QueryRowError_Mock(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("select failed")
+	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT 1 FROM targets WHERE id = \\?").WithArgs("t1").WillReturnError(wantErr)
+	mock.ExpectRollback()
 
 	err = store.SetTargetTags(ctx, "t1", []string{"a"})
 	if err != wantErr {
@@ -1151,8 +1159,10 @@ func TestSQLiteTargetStore_SetTargetTags_DeleteError(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("delete failed")
+	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT 1 FROM targets WHERE id = \\?").WithArgs("t1").WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 	mock.ExpectExec("DELETE FROM target_tags").WithArgs("t1").WillReturnError(wantErr)
+	mock.ExpectRollback()
 
 	err = store.SetTargetTags(ctx, "t1", []string{"a"})
 	if err != wantErr {
@@ -1174,9 +1184,11 @@ func TestSQLiteTargetStore_SetTargetTags_InsertError(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("insert failed")
+	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT 1 FROM targets WHERE id = \\?").WithArgs("t1").WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 	mock.ExpectExec("DELETE FROM target_tags").WithArgs("t1").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO target_tags").WithArgs("t1", "a").WillReturnError(wantErr)
+	mock.ExpectRollback()
 
 	err = store.SetTargetTags(ctx, "t1", []string{"a"})
 	if err != wantErr {

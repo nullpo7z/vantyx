@@ -10,6 +10,17 @@ import { renderGroupTargetsTable } from './targets_page.js'
 const TFTP_CAPABILITY_TAG = 'tftp_enabled'
 // SFTP 無効化用の内部タグ（SSH ターゲットで「ファイル転送で使用するプロトコル」の SFTP をオフにした場合に付与）
 const SFTP_DISABLED_TAG = 'no-sftp'
+// バックエンドの ID バリデーション (^[a-zA-Z0-9_\\-]+$, 長さ上限) に合わせた制約
+const ID_MAX_LENGTH = 512
+const ID_PATTERN = /^[A-Za-z0-9_-]+$/
+
+function validateOptionalUserId(rawId) {
+  if (!rawId) return null
+  if (rawId.length > ID_MAX_LENGTH || !ID_PATTERN.test(rawId)) {
+    return 'ユーザーIDは英数字・ハイフン・アンダースコアのみ、最大512文字で入力してください'
+  }
+  return null
+}
 
 export function renderApp(container) {
   container.innerHTML = `
@@ -179,6 +190,10 @@ export function renderApp(container) {
   }
 
   async function showUsersPage() {
+    if (window.vantyxSessionEventSource) {
+      window.vantyxSessionEventSource.close()
+      window.vantyxSessionEventSource = null
+    }
     setActiveNav('users')
     await renderUsersPage({
       mainContent,
@@ -189,6 +204,10 @@ export function renderApp(container) {
   }
 
   async function showRecordingsPage() {
+    if (window.vantyxSessionEventSource) {
+      window.vantyxSessionEventSource.close()
+      window.vantyxSessionEventSource = null
+    }
     setActiveNav('recordings')
     await renderRecordingsPage({
       mainContent,
@@ -269,7 +288,14 @@ export function renderApp(container) {
       const username = modal.querySelector('#add-user-username').value.trim()
       const password = modal.querySelector('#add-user-password').value
       const role = modal.querySelector('#add-user-role').value || 'user'
-      const id = modal.querySelector('#add-user-id').value.trim() || undefined
+      const rawId = modal.querySelector('#add-user-id').value.trim()
+      const idValidationError = validateOptionalUserId(rawId)
+      if (idValidationError) {
+        errorEl.textContent = idValidationError
+        errorEl.classList.remove('hidden')
+        return
+      }
+      const id = rawId || undefined
       if (!username || !password) {
         errorEl.textContent = 'ユーザー名とパスワードを入力してください'
         errorEl.classList.remove('hidden')
@@ -564,6 +590,15 @@ export function renderApp(container) {
       const raw = modal.querySelector('#edit-tags-input').value.trim()
       const tags = raw ? raw.split(',').map((t) => t.trim()).filter(Boolean) : []
       errorEl.classList.add('hidden')
+      // バックエンドの validateTag (1–64 文字、英数字・ハイフン・アンダースコア) と同等のチェック
+      const tagPattern = /^[A-Za-z0-9_-]+$/
+      for (const tag of tags) {
+        if (!tag || tag.length > 64 || !tagPattern.test(tag)) {
+          errorEl.textContent = 'タグは英数字・ハイフン・アンダースコアのみ、1〜64文字で入力してください'
+          errorEl.classList.remove('hidden')
+          return
+        }
+      }
       submitBtn.disabled = true
       try {
         if (type === 'group') await API.setGroupTags(id, tags)
@@ -669,7 +704,7 @@ export function renderApp(container) {
           <form id="add-group-form">
             <div class="px-6 py-5 space-y-5">
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">名前</label>
+                <label for="add-group-name" class="block text-xs font-medium text-slate-600 mb-1.5">名前</label>
                 <input type="text" id="add-group-name" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="例: Network" />
               </div>
               <div>
@@ -1146,6 +1181,10 @@ export function renderApp(container) {
     }
 
     try {
+      if (mode === 'manage' && window.vantyxSessionEventSource) {
+        window.vantyxSessionEventSource.close()
+        window.vantyxSessionEventSource = null
+      }
       if (!useCache || !groupsCache) {
         groupsCache = await API.groups()
       }
@@ -1203,8 +1242,13 @@ export function renderApp(container) {
       if (showMembersSection) {
         const membersContainer = mainContent.querySelector('#group-members-container')
         if (membersContainer) {
-          Promise.all([API.groupMembers(selectedGroupId), API.groupTags(selectedGroupId).catch(() => ({ tags: [] }))])
+          const thisGroupId = selectedGroupId
+          Promise.all([API.groupMembers(thisGroupId), API.groupTags(thisGroupId).catch(() => ({ tags: [] }))])
             .then(([members, tagsRes]) => {
+              // 別のグループに切り替わっていれば、この結果は破棄する
+              if (thisGroupId !== selectedGroupId) {
+                return
+              }
               const memberIds = (members || []).map((m) => m.id)
               const groupTags = (tagsRes && tagsRes.tags) ? tagsRes.tags : []
               const tagsHtml = `
@@ -1274,7 +1318,13 @@ export function renderApp(container) {
                 })
               })
             })
-            .catch(() => {
+            .catch((err) => {
+              // 既に別のグループを表示している場合、このエラーは無視する
+              if (thisGroupId !== selectedGroupId) {
+                return
+              }
+              // 認証エラーや一時的な通信エラーなどはコンソールにのみ出し、画面には控えめに表示
+              console.error('Failed to load group members', err)
               membersContainer.innerHTML = '<p class="text-sm text-red-600">メンバー一覧の取得に失敗しました</p>'
             })
         }
@@ -1327,7 +1377,7 @@ export function renderApp(container) {
           })
         })
       } else {
-        // アクティブなセッション数を定期的に取得して、ボタンのラベルにリアルタイム反映する。
+        // アクティブなセッション数は SSE でサーバーから通知を受けて更新（ポーリングなし）。
         const updateActiveSessionCounts = async () => {
           try {
             const [sessionsRes, rdpRes] = await Promise.all([API.terminalSessions(), API.rdpSessions()])
@@ -1350,19 +1400,27 @@ export function renderApp(container) {
               const n = targetId ? (counts[targetId] || 0) : 0
               btn.textContent = `${baseLabel} (${n})`
             })
+            // アクティブセッション modal が開いていれば中身も更新
+            const m = document.getElementById('active-sessions-modal')
+            if (m && !m.classList.contains('hidden') && typeof m._vantyxRefreshActiveSessions === 'function') {
+              m._vantyxRefreshActiveSessions()
+            }
           } catch (e) {
-            console.error('Failed to load active session counts', e)
+            if (e && e.message !== 'Unauthorized' && e.message !== 'unauthorized') {
+              console.error('Failed to load active session counts', e)
+            }
           }
         }
-        // グローバルからも呼べるようにする（ターミナルタブからの戻り時など）。
         window.vantyxUpdateActiveSessionCounts = updateActiveSessionCounts
-        // 初回即時反映
-        updateActiveSessionCounts()
-        // 既存のポーリングがあればクリアしてから開始（タブ内での再描画に対応）
-        if (window.vantyxActiveSessionPoll) {
-          window.clearInterval(window.vantyxActiveSessionPoll)
+        // 既存の SSE 購読があれば解除してから新規購読
+        if (window.vantyxSessionEventSource) {
+          window.vantyxSessionEventSource.close()
+          window.vantyxSessionEventSource = null
         }
-        window.vantyxActiveSessionPoll = window.setInterval(updateActiveSessionCounts, 5000)
+        updateActiveSessionCounts()
+        window.vantyxSessionEventSource = API.subscribeSessionEvents(() => {
+          updateActiveSessionCounts()
+        })
         mainContent.querySelectorAll('.active-sessions-btn').forEach((btn) => {
           btn.addEventListener('click', (e) => {
             e.preventDefault()

@@ -35,4 +35,3 @@ func TestHandleCommandLogs_AdminQuery(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Result().StatusCode)
 	}
 }
-

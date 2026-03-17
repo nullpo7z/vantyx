@@ -72,4 +72,3 @@ func (r *commandLogRecorder) RecordInput(p []byte) {
 		r.buf = append(r.buf, b)
 	}
 }
-

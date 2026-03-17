@@ -34,33 +34,48 @@ func (a *App) handleCommandLogs(w http.ResponseWriter, r *http.Request) {
 		limit = 200
 	}
 
-	conds := []string{"1=1"}
-	args := []interface{}{}
-	if query != "" {
-		conds = append(conds, "line_text LIKE ?")
-		args = append(args, "%"+query+"%")
-	}
-	if userID != "" {
-		conds = append(conds, "user_id = ?")
-		args = append(args, userID)
-	}
-	if targetID != "" {
-		conds = append(conds, "target_id = ?")
-		args = append(args, targetID)
-	}
-	// For now, limit to recent 30 days to keep the table small in practice.
-	conds = append(conds, "time >= ?")
-	args = append(args, time.Now().Add(-30*24*time.Hour).UTC())
+	// For gosec (G202) and to keep the query string static, enumerate
+	// all combinations of optional filters instead of concatenating fragments.
+	baseSQL := `SELECT time,session_id,user_id,target_id,line_text FROM command_logs`
+	now := time.Now().Add(-30 * 24 * time.Hour).UTC()
 
-	args = append(args, limit)
-	rows, err := a.DB.Query(
-		`SELECT time,session_id,user_id,target_id,line_text
-		 FROM command_logs
-		 WHERE `+strings.Join(conds, " AND ")+`
-		 ORDER BY time DESC
-		 LIMIT ?`,
-		args...,
+	hasQuery := query != ""
+	hasUser := userID != ""
+	hasTarget := targetID != ""
+
+	var (
+		sqlStr string
+		args   []interface{}
 	)
+
+	switch {
+	case !hasQuery && !hasUser && !hasTarget:
+		sqlStr = baseSQL + ` WHERE time >= ? ORDER BY time DESC LIMIT ?`
+		args = []interface{}{now, limit}
+	case hasQuery && !hasUser && !hasTarget:
+		sqlStr = baseSQL + ` WHERE line_text LIKE ? AND time >= ? ORDER BY time DESC LIMIT ?`
+		args = []interface{}{"%" + query + "%", now, limit}
+	case !hasQuery && hasUser && !hasTarget:
+		sqlStr = baseSQL + ` WHERE user_id = ? AND time >= ? ORDER BY time DESC LIMIT ?`
+		args = []interface{}{userID, now, limit}
+	case !hasQuery && !hasUser && hasTarget:
+		sqlStr = baseSQL + ` WHERE target_id = ? AND time >= ? ORDER BY time DESC LIMIT ?`
+		args = []interface{}{targetID, now, limit}
+	case hasQuery && hasUser && !hasTarget:
+		sqlStr = baseSQL + ` WHERE line_text LIKE ? AND user_id = ? AND time >= ? ORDER BY time DESC LIMIT ?`
+		args = []interface{}{"%" + query + "%", userID, now, limit}
+	case hasQuery && !hasUser && hasTarget:
+		sqlStr = baseSQL + ` WHERE line_text LIKE ? AND target_id = ? AND time >= ? ORDER BY time DESC LIMIT ?`
+		args = []interface{}{"%" + query + "%", targetID, now, limit}
+	case !hasQuery && hasUser && hasTarget:
+		sqlStr = baseSQL + ` WHERE user_id = ? AND target_id = ? AND time >= ? ORDER BY time DESC LIMIT ?`
+		args = []interface{}{userID, targetID, now, limit}
+	case hasQuery && hasUser && hasTarget:
+		sqlStr = baseSQL + ` WHERE line_text LIKE ? AND user_id = ? AND target_id = ? AND time >= ? ORDER BY time DESC LIMIT ?`
+		args = []interface{}{"%" + query + "%", userID, targetID, now, limit}
+	}
+
+	rows, err := a.DB.Query(sqlStr, args...)
 	if err != nil && err != sql.ErrNoRows {
 		writeJSONError(w, "failed to query command logs", http.StatusInternalServerError)
 		return
@@ -78,4 +93,3 @@ func (a *App) handleCommandLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]interface{}{"items": items})
 }
-

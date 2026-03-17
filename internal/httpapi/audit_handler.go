@@ -26,21 +26,21 @@ func (a *App) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
 		if limit <= 0 || limit > 1000 {
 			limit = 200
 		}
-		conds := []string{"1=1"}
-		args := []interface{}{}
-		if eventQ != "" {
-			conds = append(conds, "event LIKE ?")
-			args = append(args, "%"+eventQ+"%")
+		// Avoid dynamic SQL concatenation (gosec G202): select from a small set of fixed queries.
+		query := `SELECT time,event,fields_json FROM audit_logs ORDER BY time DESC LIMIT ?`
+		args := []interface{}{limit}
+		if eventQ != "" && userQ != "" {
+			query = `SELECT time,event,fields_json FROM audit_logs WHERE event LIKE ? AND user_id = ? ORDER BY time DESC LIMIT ?`
+			args = []interface{}{"%" + eventQ + "%", userQ, limit}
+		} else if eventQ != "" {
+			query = `SELECT time,event,fields_json FROM audit_logs WHERE event LIKE ? ORDER BY time DESC LIMIT ?`
+			args = []interface{}{"%" + eventQ + "%", limit}
+		} else if userQ != "" {
+			query = `SELECT time,event,fields_json FROM audit_logs WHERE user_id = ? ORDER BY time DESC LIMIT ?`
+			args = []interface{}{userQ, limit}
 		}
-		if userQ != "" {
-			conds = append(conds, "user_id = ?")
-			args = append(args, userQ)
-		}
-		args = append(args, limit)
-		rows, err := a.DB.Query(
-			`SELECT time,event,fields_json FROM audit_logs WHERE `+strings.Join(conds, " AND ")+` ORDER BY time DESC LIMIT ?`,
-			args...,
-		)
+
+		rows, err := a.DB.Query(query, args...)
 		if err == nil {
 			defer rows.Close()
 			items := make([]AuditEntry, 0, limit)

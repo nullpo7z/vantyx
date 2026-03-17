@@ -358,6 +358,9 @@ func TestHandleSSHWebSocket_InvalidCredentialsReturnsError(t *testing.T) {
 	}
 	_ = conn.Close()
 	srv.CloseClientConnections()
+
+	// Give server goroutines a moment to release any temp files (SQLite WAL/shm) before TempDir cleanup.
+	time.Sleep(50 * time.Millisecond)
 }
 
 func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
@@ -458,6 +461,9 @@ func TestHandleSSHWebSocket_StartFailsReturns500(t *testing.T) {
 	_, _, _ = conn.ReadMessage()
 	_ = conn.Close()
 	srv.CloseClientConnections()
+
+	// Allow server-side goroutines to unwind before TempDir cleanup.
+	time.Sleep(50 * time.Millisecond)
 }
 
 func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {

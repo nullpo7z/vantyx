@@ -80,6 +80,36 @@ func TestSQLiteTargetStore_Delete(t *testing.T) {
 	}
 }
 
+func TestSQLiteAccessGroupStore_RemoveTargetFromGroup(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, _ = targets.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
+
+	if err := groups.AddTargetToGroup(ctx, "g1", "t1"); err != nil {
+		t.Fatalf("AddTargetToGroup: %v", err)
+	}
+	if err := groups.RemoveTargetFromGroup(ctx, "g1", "t1"); err != nil {
+		t.Fatalf("RemoveTargetFromGroup: %v", err)
+	}
+}
+
+func TestSQLiteTargetStore_ListByProtocol(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, _ = targets.CreateWithPath(ctx, "t1", "ssh", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = targets.CreateWithPath(ctx, "t2", "tel", "127.0.0.1", 23, ProtocolTelnet, GroupID("g1"), "g1", "", "", "", "", false, false, false)
+
+	list, err := targets.ListByProtocol(ctx, ProtocolSSH)
+	if err != nil {
+		t.Fatalf("ListByProtocol: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != "t1" {
+		t.Fatalf("unexpected list: %+v", list)
+	}
+}
+
 func TestSQLiteTargetStore_Get_NotFoundAndPortBounds(t *testing.T) {
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)

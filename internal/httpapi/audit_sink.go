@@ -30,7 +30,7 @@ func newAuditSink(db *sql.DB, filePath string, forwarder *auditForwarder) (*audi
 			return nil, err
 		}
 	}
-	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
+	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return nil, err
 	}

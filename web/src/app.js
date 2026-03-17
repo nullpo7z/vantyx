@@ -4,6 +4,8 @@ import { initNav, setActiveNav } from './nav.js'
 import { renderUsersPage } from './users_page.js'
 import { renderRecordingsPage } from './recordings_page.js'
 import { renderUserInfo } from './account_page.js'
+import { renderAuditPage } from './audit_page.js'
+import { renderSettingsPage } from './settings_page.js'
 import { renderGroupTargetsTable } from './targets_page.js'
 
 // TFTP 機能フラグ用の内部タグ名（サーバー管理画面での「TFTP を有効にする」に対応）
@@ -33,6 +35,8 @@ export function renderApp(container) {
             <a href="#" id="nav-recordings" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">録画</a>
             <a href="#" id="nav-groups" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">サーバー管理</a>
             <a href="#" id="nav-users" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">ユーザー管理</a>
+            <a href="#" id="nav-audit" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">監査ログ</a>
+            <a href="#" id="nav-settings" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">設定</a>
             <a href="/docs" id="nav-api-ref" target="_blank" rel="noopener noreferrer" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">API リファレンス</a>
           </nav>
         </div>
@@ -67,6 +71,8 @@ export function renderApp(container) {
   const navRecordings = document.getElementById('nav-recordings')
   const navGroups = document.getElementById('nav-groups')
   const navUsers = document.getElementById('nav-users')
+  const navAudit = document.getElementById('nav-audit')
+  const navSettings = document.getElementById('nav-settings')
 
   let meData = null
   let groupsCache = null
@@ -231,6 +237,22 @@ export function renderApp(container) {
       },
       refresh: () => showRecordingsPage(),
     })
+  }
+
+  async function showAuditLogs() {
+    if (window.vantyxSessionEventSource) {
+      window.vantyxSessionEventSource.close()
+      window.vantyxSessionEventSource = null
+    }
+    await renderAuditPage({ mainContent, meData, setActiveNav })
+  }
+
+  async function showSettings() {
+    if (window.vantyxSessionEventSource) {
+      window.vantyxSessionEventSource.close()
+      window.vantyxSessionEventSource = null
+    }
+    await renderSettingsPage(mainContent)
   }
 
   function showAddUserModal() {
@@ -2345,10 +2367,14 @@ export function renderApp(container) {
         navApiRef?.classList.remove('hidden')
         navUsers?.classList.remove('hidden')
         navGroups?.classList.remove('hidden')
+        navAudit?.classList.remove('hidden')
+        navSettings?.classList.remove('hidden')
       } else {
         navApiRef?.classList.add('hidden')
         navUsers?.classList.add('hidden')
         navGroups?.classList.add('hidden')
+        navAudit?.classList.add('hidden')
+        navSettings?.classList.add('hidden')
       }
     } catch {
       renderLogin(container)
@@ -2369,11 +2395,15 @@ export function renderApp(container) {
     navRecordings,
     navGroups,
     navUsers,
+    navAudit,
+    navSettings,
     getMe: () => meData,
     onHome: () => showTreeView('home'),
     onRecordings: () => showRecordingsPage(),
     onGroups: () => showTreeView('manage'),
     onUsers: () => showUsersPage(),
+    onAudit: () => showAuditLogs(),
+    onSettings: () => showSettings(),
   })
 
   userNameEl.addEventListener('click', (e) => {

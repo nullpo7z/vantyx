@@ -256,6 +256,46 @@ const API = {
     }
   },
 
+  /** 監査ログ（管理者のみ） */
+  async auditLogs({ limit = 200, event = '', user_id = '' } = {}) {
+    const q = new URLSearchParams()
+    if (limit) q.set('limit', String(limit))
+    if (event) q.set('event', event)
+    if (user_id) q.set('user_id', user_id)
+    const url = '/api/audit' + (q.toString() ? `?${q.toString()}` : '')
+    const res = await fetch(url, { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load audit logs')
+    }
+    return res.json()
+  },
+
+  /** 監査ログ転送（syslog/SIEM）設定（管理者のみ） */
+  async auditForwarderSettingsGet() {
+    const res = await fetch('/api/settings/audit-forwarder', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load settings')
+    }
+    return res.json()
+  },
+
+  /** 監査ログ転送（syslog/SIEM）設定を保存（管理者のみ） */
+  async auditForwarderSettingsPut({ config }) {
+    const res = await fetch('/api/settings/audit-forwarder', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ config }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to save settings')
+    }
+    return res.json()
+  },
+
   /** アクティブな RDP（ブラウザ）セッション一覧（再接続用） */
   async rdpSessions() {
     const res = await fetch('/api/rdp/sessions', { credentials: 'include' })

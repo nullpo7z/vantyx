@@ -253,6 +253,8 @@ func NewApp() *App {
 	if err := migrate(db); err != nil {
 		panic(err)
 	}
+	// Initialize persistent audit sink after schema is ready.
+	initAuditSink(db)
 
 	var userStore auth.UserStore = auth.NewSQLiteUserStore(db)
 	if newAppUserStore != nil {
@@ -302,7 +304,7 @@ func (w *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, errors.New("responseWriter: underlying ResponseWriter does not implement http.Hijacker")
 }
 
-func requestLog(next http.Handler) http.Handler {
+func (a *App) requestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		wrap := &responseWriter{ResponseWriter: w, status: http.StatusOK}
@@ -315,9 +317,29 @@ func requestLog(next http.Handler) http.Handler {
 				remote = strings.TrimSpace(xff)
 			}
 		}
+		dur := time.Since(start).Round(time.Millisecond)
 		// #nosec G706 -- audit log; path/remote from request
 		log.Printf("http method=%s path=%s status=%d remote=%s duration=%s",
-			r.Method, r.URL.Path, wrap.status, remote, time.Since(start).Round(time.Millisecond))
+			r.Method, r.URL.Path, wrap.status, remote, dur)
+
+		// Persistent audit log for all API operations (GUI/CUI/API share these endpoints).
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws/") {
+			userID := ""
+			if a != nil {
+				userID = strings.TrimSpace(a.currentUserID(r))
+			}
+			audit("http_request", auditFields{
+				"user_id":      userID,
+				"method":       r.Method,
+				"path":         r.URL.Path,
+				"status":       wrap.status,
+				"remote":       remote,
+				"duration_ms":  dur.Milliseconds(),
+				"query":        r.URL.RawQuery,
+				"user_agent":   r.UserAgent(),
+				"content_type": r.Header.Get("Content-Type"),
+			})
+		}
 	})
 }
 
@@ -325,7 +347,7 @@ func requestLog(next http.Handler) http.Handler {
 func (a *App) NewRouter() http.Handler {
 	r := chi.NewRouter()
 
-	r.Use(requestLog)
+	r.Use(a.requestLog)
 	r.Use(maxBodyBytesMiddleware(2 << 20))
 	r.Use(csrfOriginMiddleware)
 	r.Use(a.sessionMiddleware)
@@ -362,6 +384,12 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/api/users/{user_id}/ssh-keys", a.handleListUserSSHKeys)
 	r.Post("/api/users/{user_id}/ssh-keys", a.handleAddUserSSHKey)
 	r.Delete("/api/users/{user_id}/ssh-keys/{key_id}", a.handleDeleteUserSSHKey)
+
+	// Audit logs (admin only; in-memory recent events)
+	r.Get("/api/audit", a.handleAuditLogs)
+	// App settings (admin only)
+	r.Get("/api/settings/audit-forwarder", a.handleGetAuditForwarderSettings)
+	r.Put("/api/settings/audit-forwarder", a.handlePutAuditForwarderSettings)
 
 	// Tags: list all tags registered in the system (user/target/group) for tag picker (requires auth)
 	r.Get("/api/tags", a.handleListTags)

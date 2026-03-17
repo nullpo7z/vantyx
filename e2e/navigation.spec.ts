@@ -35,6 +35,14 @@ test.describe('ナビゲーション（Web操作）', () => {
     ).toBeVisible({ timeout: 5000 });
   });
 
+  test('設定を表示できる', async ({ page }) => {
+    await expect(page.locator('#nav-settings')).toBeVisible({ timeout: 20000 });
+    await forceClick(page.locator('#nav-settings'));
+    const main = page.locator('#main-content');
+    await expect(main.getByText('設定')).toBeVisible({ timeout: 10000 });
+    await expect(main.getByText('監査ログを syslog / SIEM に転送する')).toBeVisible({ timeout: 10000 });
+  });
+
   test('API リファレンスリンクで /docs が開く', async ({ page }) => {
     const link = page.locator('#nav-api-ref');
     await expect(link).toBeVisible();

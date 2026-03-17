@@ -10,6 +10,7 @@ const slowMo = process.env.E2E_VIDEO ? 300 : 0;
 const testOrder = [
   'auth.spec.ts',
   'navigation.spec.ts',
+  'settings_audit_forwarder.spec.ts',
   'account.spec.ts',
   'change_password_modal.spec.ts',
   'active_sessions_modal.spec.ts',

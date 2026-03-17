@@ -91,6 +91,25 @@ func Migrate(db *sql.DB) error {
 			ended_at TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		);`,
+		// Audit logs (best-effort; used by audit log UI and exports).
+		`CREATE TABLE IF NOT EXISTS audit_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			time TIMESTAMP NOT NULL,
+			event TEXT NOT NULL,
+			user_id TEXT NOT NULL DEFAULT '',
+			method TEXT NOT NULL DEFAULT '',
+			path TEXT NOT NULL DEFAULT '',
+			status INTEGER NOT NULL DEFAULT 0,
+			remote TEXT NOT NULL DEFAULT '',
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			fields_json TEXT NOT NULL DEFAULT ''
+		);`,
+		// App settings (admin-configurable, persisted).
+		`CREATE TABLE IF NOT EXISTS app_settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL DEFAULT '',
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`,
 	}
 
 	for _, stmt := range stmts {

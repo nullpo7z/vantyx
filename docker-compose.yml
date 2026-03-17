@@ -24,6 +24,16 @@ services:
       - VANTYX_SSH_PASSWORD_ENCRYPTION_KEY=${VANTYX_SSH_PASSWORD_ENCRYPTION_KEY:-}
       # TFTP: コンテナは nonroot のため 69 不可。6969 で listen し、上記 69:6969/udp でホスト 69 に届く。
       - VANTYX_TFTP_LISTEN=0.0.0.0:6969
+      # 監査ログ（永続化 + 外部転送）
+      # - VANTYX_AUDIT_LOG_FILE=/app/data/audit.log
+      # SIEM(Syslog)へ転送する場合:
+      # - VANTYX_AUDIT_FORWARD_ADDR=siem.example.com:514
+      # - VANTYX_AUDIT_FORWARD_PROTO=udp   # udp|tcp|unix|unixgram
+      # - VANTYX_AUDIT_FORWARD_APP=vantyx
+      # - VANTYX_AUDIT_FORWARD_BUFFER=2000
+      # ローカル syslog(/dev/log) に流す場合:
+      # - VANTYX_AUDIT_FORWARD_PROTO=unixgram
+      # - VANTYX_AUDIT_FORWARD_ADDR=/dev/log
     env_file:
       - .env
     volumes:

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,7 +30,16 @@ func newTestAppForTerminal(t *testing.T) *App {
 	if err := os.Setenv("VANTYX_SQLITE_PATH", dbPath); err != nil {
 		t.Fatalf("set env: %v", err)
 	}
-	return NewApp()
+	app := NewApp()
+	t.Cleanup(func() {
+		_ = closeAuditSink()
+		// Ensure SQLite closes before TempDir cleanup (WAL/shm files, etc.).
+		if app != nil && app.DB != nil {
+			_ = app.DB.Close()
+		}
+		_ = os.Unsetenv("VANTYX_SQLITE_PATH")
+	})
+	return app
 }
 
 // --- allowedWebSocketOrigin ---
@@ -148,6 +158,7 @@ func TestHandleSSHWebSocket_UnauthorizedWithoutCookie(t *testing.T) {
 
 	srv := httptest.NewServer(router)
 	defer srv.Close()
+	defer srv.CloseClientConnections()
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
 	header := http.Header{}
@@ -320,6 +331,7 @@ func TestHandleSSHWebSocket_InvalidCredentialsReturnsError(t *testing.T) {
 
 	srv := httptest.NewServer(router)
 	defer srv.Close()
+	defer srv.CloseClientConnections()
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
 	header := http.Header{}
@@ -336,6 +348,7 @@ func TestHandleSSHWebSocket_InvalidCredentialsReturnsError(t *testing.T) {
 		t.Fatalf("WriteMessage: %v", err)
 	}
 
+	_ = conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("ReadMessage: %v", err)
@@ -343,6 +356,8 @@ func TestHandleSSHWebSocket_InvalidCredentialsReturnsError(t *testing.T) {
 	if !strings.Contains(string(msg), "error") {
 		t.Fatalf("expected error message, got %q", string(msg))
 	}
+	_ = conn.Close()
+	srv.CloseClientConnections()
 }
 
 func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
@@ -363,6 +378,7 @@ func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
 
 	srv := httptest.NewServer(router)
 	defer srv.Close()
+	defer srv.CloseClientConnections()
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
 	header := http.Header{}
@@ -382,12 +398,16 @@ func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
 	}
 
 	// Server will try SSH dial to demo (127.0.0.1:22); no server => connection closes.
+	_ = conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 	_, _, err = conn.ReadMessage()
 	if err == nil {
 		// Might get one message (e.g. SSH banner) before close; read until close
+		_ = conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 		_, _, _ = conn.ReadMessage()
 	}
 	// Expect connection to close (dial failure or eventual close)
+	_ = conn.Close()
+	srv.CloseClientConnections()
 }
 
 // startFailingStub implements terminalSessionStarter and makes Start return an error.
@@ -418,6 +438,7 @@ func TestHandleSSHWebSocket_StartFailsReturns500(t *testing.T) {
 
 	srv := httptest.NewServer(router)
 	defer srv.Close()
+	defer srv.CloseClientConnections()
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
 	header := http.Header{}
@@ -433,7 +454,10 @@ func TestHandleSSHWebSocket_StartFailsReturns500(t *testing.T) {
 	// #nosec G101 -- test-only credentials
 	_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"username":"u","password":"p"}`))
 	// After Start fails, server closes connection
+	_ = conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 	_, _, _ = conn.ReadMessage()
+	_ = conn.Close()
+	srv.CloseClientConnections()
 }
 
 func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {
@@ -458,6 +482,7 @@ func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {
 
 	srv := httptest.NewServer(router)
 	defer srv.Close()
+	defer srv.CloseClientConnections()
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
 	header := http.Header{}
@@ -469,11 +494,19 @@ func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first dial: %v", err)
 	}
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		// #nosec G101 -- test-only credentials
 		_ = conn1.WriteMessage(websocket.TextMessage, []byte(`{"username":"u","password":"p"}`))
+		_ = conn1.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 		_, _, _ = conn1.ReadMessage()
 		_ = conn1.Close()
+	}()
+	defer func() {
+		// Ensure the first goroutine is done before TempDir cleanup.
+		wg.Wait()
 	}()
 
 	// Give first connection time to call Start
@@ -487,11 +520,17 @@ func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {
 	defer conn2.Close()
 	// #nosec G101 -- test-only credentials
 	_ = conn2.WriteMessage(websocket.TextMessage, []byte(`{"username":"u2","password":"p2"}`))
+	_ = conn2.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 	_, _, err = conn2.ReadMessage()
 	// Connection closed by server after Start failed
 	if err == nil {
+		_ = conn2.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 		_, _, _ = conn2.ReadMessage()
 	}
+	_ = conn2.Close()
+	// Ensure background session/bridge goroutines are stopped before DB/tempdir cleanup.
+	app.TerminalSessionManager.Stop(session.ID(fixedID))
+	srv.CloseClientConnections()
 }
 
 // TestHandleTerminalSessions_ListEmpty covers handleTerminalSessions and writeJSON (empty list).

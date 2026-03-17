@@ -47,6 +47,78 @@ components:
           type: string
       required:
         - message
+    AuditEntry:
+      type: object
+      description: 監査ログ 1 件（サーバー内部イベント + HTTP API 操作ログ）。fields はイベントごとに異なる任意フィールド。
+      properties:
+        time:
+          type: string
+          format: date-time
+        event:
+          type: string
+        fields:
+          type: object
+          additionalProperties: true
+      required:
+        - time
+        - event
+        - fields
+    AuditLogsResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+      required:
+        - items
+    AuditForwarderConfig:
+      type: object
+      description: 監査ログの syslog/SIEM 転送設定（管理者のみ変更可能）。
+      properties:
+        enabled:
+          type: boolean
+          description: true のとき転送を有効化
+        proto:
+          type: string
+          enum: [udp, tcp, unix, unixgram]
+          description: syslog 転送プロトコル
+        addr:
+          type: string
+          description: 宛先（udp/tcp: host:port、unix/unixgram: /dev/log 等）。unix/unixgram で空の場合は /dev/log を既定にする。
+        app:
+          type: string
+          description: syslog の app-name
+        buffer:
+          type: integer
+          minimum: 0
+          maximum: 200000
+          description: 非同期送信バッファ（満杯時はドロップ）
+      required:
+        - enabled
+        - proto
+        - addr
+        - app
+        - buffer
+    AuditForwarderSettingsResponse:
+      type: object
+      properties:
+        config:
+          $ref: '#/components/schemas/AuditForwarderConfig'
+        source:
+          type: string
+          enum: [db, env]
+          description: 現在の設定ソース（db: 設定画面で保存済み、env: 環境変数のフォールバック）
+      required:
+        - config
+        - source
+    AuditForwarderSettingsPutRequest:
+      type: object
+      properties:
+        config:
+          $ref: '#/components/schemas/AuditForwarderConfig'
+      required:
+        - config
     LoginRequest:
       type: object
       properties:
@@ -1515,6 +1587,122 @@ paths:
         '401':
         '403':
         '404':
+
+  /api/audit:
+    get:
+      summary: 監査ログ取得（管理者のみ）
+      description: |
+        監査ログを新しい順に返します。`limit`/`event`/`user_id` でフィルタできます。
+        実装は DB 永続ログ（audit_logs）を優先し、DB が使えない場合はメモリ上の直近分にフォールバックします。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+        - name: event
+          in: query
+          required: false
+          schema:
+            type: string
+          description: event の部分一致（LIKE）
+        - name: user_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: user_id の完全一致
+      responses:
+        '200':
+          description: 監査ログ一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogsResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/settings/audit-forwarder:
+    get:
+      summary: 監査ログ転送（syslog/SIEM）設定取得（管理者のみ）
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: 現在の設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditForwarderSettingsResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      summary: 監査ログ転送（syslog/SIEM）設定更新（管理者のみ）
+      description: 保存後、サーバー内 forwarder を再初期化して即時反映します。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuditForwarderSettingsPutRequest'
+      responses:
+        '200':
+          description: 保存後の設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditForwarderSettingsResponse'
+        '400':
+          description: リクエスト不正（proto/buffer/addr など）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 保存失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/tags:
     get:

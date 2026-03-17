@@ -5,6 +5,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"time"
 )
 
 // auditFields は監査・操作ログ用のキー/値ペアです。
@@ -46,6 +47,35 @@ func audit(event string, fields auditFields) {
 	if fields == nil {
 		fields = auditFields{}
 	}
+	// Keep a best-effort structured buffer for UI/debugging.
+	if auditBuffer != nil {
+		copied := auditFields{}
+		for k, v := range fields {
+			copied[k] = v
+		}
+		copied["event"] = event
+		auditBuffer.add(AuditEntry{
+			Time:   time.Now().UTC(),
+			Event:  event,
+			Fields: copied,
+		})
+	}
+	// Persist (DB + log file) if configured.
+	if sink := getGlobalAuditSink(); sink != nil {
+		copied := auditFields{}
+		for k, v := range fields {
+			copied[k] = v
+		}
+		copied["event"] = event
+		sink.write(AuditEntry{
+			Time:   time.Now().UTC(),
+			Event:  event,
+			Fields: copied,
+		})
+	}
 	fields["event"] = event
 	log.Printf("audit %s", formatFields(fields))
 }
+
+// auditBuffer stores recent audit events for the audit log UI (in-memory, bounded).
+var auditBuffer = newAuditStore(2000)

@@ -29,7 +29,15 @@ func newTestApp(t *testing.T) *App {
 	if err := os.Setenv("VANTYX_SQLITE_PATH", dbPath); err != nil {
 		t.Fatalf("set env: %v", err)
 	}
-	return NewApp()
+	app := NewApp()
+	t.Cleanup(func() {
+		_ = closeAuditSink()
+		if app != nil && app.DB != nil {
+			_ = app.DB.Close()
+		}
+		_ = os.Unsetenv("VANTYX_SQLITE_PATH")
+	})
+	return app
 }
 
 func TestApp_LoginSuccess(t *testing.T) {

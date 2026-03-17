@@ -28,6 +28,7 @@ test.describe('一般ユーザー: ユーザー管理が表示されない（Web
     await forceClick(page.locator('#login-btn'));
     await expect(page.locator('#logout-btn')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('#nav-users')).not.toBeVisible();
+    await expect(page.locator('#nav-settings')).not.toBeVisible();
     await expect(page.locator('#nav-targets')).toBeVisible();
   });
 });

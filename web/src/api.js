@@ -296,6 +296,21 @@ const API = {
     return res.json()
   },
 
+  /** コマンドログ検索（管理者のみ） */
+  async commandLogs({ query = '', user_id = '', target_id = '', limit = 200 } = {}) {
+    const q = new URLSearchParams()
+    if (query) q.set('query', query)
+    if (user_id) q.set('user_id', user_id)
+    if (target_id) q.set('target_id', target_id)
+    if (limit) q.set('limit', String(limit))
+    const res = await fetch('/api/commands' + (q.toString() ? `?${q.toString()}` : ''), { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load command logs')
+    }
+    return res.json()
+  },
+
   /** アクティブな RDP（ブラウザ）セッション一覧（再接続用） */
   async rdpSessions() {
     const res = await fetch('/api/rdp/sessions', { credentials: 'include' })

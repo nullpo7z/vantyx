@@ -724,6 +724,18 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		}
 	}
 
+	// Command log recorder: records stdin lines into command_logs for search.
+	cmdRec := newCommandLogRecorder(a.CommandLogStore, string(id), termSess.UserID, termSess.TargetID)
+	if cmdRec != nil {
+		prev := stdinRecorder
+		stdinRecorder = sshproxy.StdinRecorderFunc(func(p []byte) {
+			if prev != nil {
+				prev.RecordInput(p)
+			}
+			cmdRec.RecordInput(p)
+		})
+	}
+
 	if err := sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, conn, touch, tee, stdinRecorder, cols, rows); err != nil {
 		audit("terminal_bridge_end_error", auditFields{
 			"session_id": id,

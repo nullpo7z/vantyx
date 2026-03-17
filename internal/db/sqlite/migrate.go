@@ -110,6 +110,15 @@ func Migrate(db *sql.DB) error {
 			value TEXT NOT NULL DEFAULT '',
 			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
+		// Command logs: user input lines (best-effort, from terminal stdin).
+		`CREATE TABLE IF NOT EXISTS command_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			target_id TEXT NOT NULL,
+			time TIMESTAMP NOT NULL,
+			line_text TEXT NOT NULL
+		);`,
 	}
 
 	for _, stmt := range stmts {

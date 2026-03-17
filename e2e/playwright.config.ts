@@ -11,6 +11,7 @@ const testOrder = [
   'auth.spec.ts',
   'navigation.spec.ts',
   'settings_audit_forwarder.spec.ts',
+  'command_log_search.spec.ts',
   'account.spec.ts',
   'change_password_modal.spec.ts',
   'active_sessions_modal.spec.ts',

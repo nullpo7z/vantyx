@@ -136,6 +136,13 @@ type StdinRecorder interface {
 	RecordInput(p []byte)
 }
 
+// StdinRecorderFunc adapts a function to StdinRecorder.
+type StdinRecorderFunc func(p []byte)
+
+func (f StdinRecorderFunc) RecordInput(p []byte) {
+	f(p)
+}
+
 // AuthMethods builds SSH auth methods from password and/or PEM private key (with optional passphrase).
 // Key is tried first when present. Used by bridge and by internal/sftp.
 func AuthMethods(password, privateKeyPEM, keyPassphrase string) ([]ssh.AuthMethod, error) {

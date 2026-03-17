@@ -198,6 +198,9 @@ type App struct {
 
 	// SessionEventBroker broadcasts session lifecycle events for SSE (GET /api/events/sessions).
 	SessionEventBroker *SessionEventBroker
+
+	// CommandLogStore persists terminal stdin lines for search.
+	CommandLogStore *commandLogStore
 }
 
 // newAppDBOpen, newAppMigrate, and newAppUserStore are set in tests to inject failures for coverage.
@@ -282,6 +285,7 @@ func NewApp() *App {
 		DB:                     db,
 		RDPVNCManager:          rdpvnc.NewManager(),
 		SessionEventBroker:     NewSessionEventBroker(),
+		CommandLogStore:        newCommandLogStore(db),
 	}
 }
 
@@ -390,6 +394,8 @@ func (a *App) NewRouter() http.Handler {
 	// App settings (admin only)
 	r.Get("/api/settings/audit-forwarder", a.handleGetAuditForwarderSettings)
 	r.Put("/api/settings/audit-forwarder", a.handlePutAuditForwarderSettings)
+	// Command logs (admin only)
+	r.Get("/api/commands", a.handleCommandLogs)
 
 	// Tags: list all tags registered in the system (user/target/group) for tag picker (requires auth)
 	r.Get("/api/tags", a.handleListTags)

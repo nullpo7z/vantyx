@@ -237,12 +237,14 @@ const API = {
    */
   subscribeSessionEvents(onMessage) {
     const url = new URL('/api/events/sessions', window.location.origin).toString()
-    const es = new EventSource(url)
+    const es = new window.EventSource(url)
     es.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data || '{}')
         if (data && typeof onMessage === 'function') onMessage(data)
-      } catch (_) {}
+      } catch {
+        // ignore invalid JSON
+      }
     }
     es.onerror = () => {
       es.close()

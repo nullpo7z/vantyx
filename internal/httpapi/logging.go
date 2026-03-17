@@ -49,4 +49,3 @@ func audit(event string, fields auditFields) {
 	fields["event"] = event
 	log.Printf("audit %s", formatFields(fields))
 }
-

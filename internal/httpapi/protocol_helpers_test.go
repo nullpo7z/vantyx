@@ -57,4 +57,3 @@ func TestParseProtocolField_Invalid(t *testing.T) {
 		})
 	}
 }
-

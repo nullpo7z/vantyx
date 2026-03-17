@@ -222,15 +222,15 @@ func TestApp_Targets_WithTargets(t *testing.T) {
 
 func TestTargetToResponse_BoolFlags(t *testing.T) {
 	tgt := &access.Target{
-		ID:           access.TargetID("t1"),
-		Name:         "name",
-		Host:         "host",
-		Port:         22,
-		Protocol:     access.ProtocolSSH,
-		Path:         "path",
-		SFTPEnabled:  false,
-		FTPEnabled:   true,
-		TFTPEnabled:  true,
+		ID:          access.TargetID("t1"),
+		Name:        "name",
+		Host:        "host",
+		Port:        22,
+		Protocol:    access.ProtocolSSH,
+		Path:        "path",
+		SFTPEnabled: false,
+		FTPEnabled:  true,
+		TFTPEnabled: true,
 	}
 	resp := targetToResponse(tgt, nil)
 	if resp.ID != "t1" || resp.Name != "name" || resp.Host != "host" || resp.Port != 22 || resp.Protocol != "ssh" || resp.Path != "path" {

@@ -26,6 +26,7 @@
 ### SSH/Telnet・セッション永続化・CLI アクセス（Phase 2）
 - ブラウザターミナル（xterm.js + WebSocket `/ws/ssh`）— **SSH と Telnet** ターゲットに対応
 - SSH プロキシ（`internal/sshproxy`）、Telnet プロキシ（`internal/telnetproxy`）、セッション管理（`internal/session`）
+- Telnet: NAWS（端末リサイズ）、保存認証による自動ログイン、接続失敗時の日本語診断メッセージ
 - セッション永続化・レジューム（再接続で同一セッションにアタッチ）
 - ターミナルセッション一覧・削除 API
 - **CLI アクセス**: Vantyx が SSH サーバーとして待ち受け（`internal/sshd`）、Tera Term 等から `ssh user@vantyx` でログインし、ターゲットへプロキシ接続
@@ -104,7 +105,7 @@
 |--------------------|------------------------------------|------------------------------------------|
 | 認証・セッション   | ローカル認証、Cookie セッション、レート制限 | OIDC、TOTP、RADIUS/TACACS+/LDAP          |
 | アクセス制御       | グループ・ターゲット・タグ、水平/垂直制御   | （特になし）                             |
-| ターミナル         | SSH/Telnet プロキシ、ブラウザ+CLI、永続化・レジューム | —                                        |
+| ターミナル         | SSH/Telnet プロキシ、ブラウザ+CLI、永続化・レジューム、Telnet NAWS/自動ログイン | —                                        |
 | 録画・証跡         | Asciinema 録画、一覧・再生・ダウンロード   | 高度な検索 UI、監査ログ永続化            |
 | ファイル転送       | SFTP、ファイルマネージャー UI              | TFTP                                     |
 | リモートデスクトップ | VNC（noVNC + WebSocket プロキシ）          | RDP ブリッジ                             |

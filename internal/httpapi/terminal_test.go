@@ -270,6 +270,7 @@ func TestHandleSSHWebSocket_NonTerminalTargetReturns501(t *testing.T) {
 }
 
 func TestHandleSSHWebSocket_TelnetTargetUpgrades(t *testing.T) {
+	t.Setenv("VANTYX_TELNET_WAKE_ON_CONNECT", "0")
 	echoSrv := mock.NewTelnetEchoServer()
 	if err := echoSrv.Start(); err != nil {
 		t.Fatalf("telnet echo start: %v", err)
@@ -328,15 +329,23 @@ func TestHandleSSHWebSocket_TelnetTargetUpgrades(t *testing.T) {
 	if !ready {
 		t.Fatal("did not receive session_id after telnet upgrade")
 	}
-	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("x")); err != nil {
-		t.Fatalf("write: %v", err)
+	deadline := time.Now().Add(5 * time.Second)
+	var gotEcho bool
+	for time.Now().Before(deadline) && !gotEcho {
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte("x")); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, echo, err := conn.ReadMessage()
+		if err != nil {
+			continue
+		}
+		if string(echo) == "x" {
+			gotEcho = true
+		}
 	}
-	_, echo, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read echo: %v", err)
-	}
-	if string(echo) != "x" {
-		t.Fatalf("expected echo x, got %q", echo)
+	if !gotEcho {
+		t.Fatal("expected echo x from telnet server")
 	}
 	_ = conn.Close()
 	srv.CloseClientConnections()

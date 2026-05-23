@@ -353,6 +353,28 @@ func isCLITerminalProtocol(p access.Protocol) bool {
 	return p == access.ProtocolSSH || p == access.ProtocolTelnet
 }
 
+// prepareCLIFrame draws the session status bar and starts resize forwarding for a target session.
+func (s *Server) prepareCLIFrame(wr io.Writer, screenCols, ptyRows int, targetName string, protocol access.Protocol, stopCh <-chan struct{}, resizeChan <-chan sshproxy.TerminalSize) (*cliSessionFrame, chan sshproxy.TerminalSize, error) {
+	frame := newCLISessionFrame(wr, screenCols, ptyRows)
+	bar := cliSessionBarState{
+		TargetName: targetName,
+		Protocol:   protocol,
+		Cols:       screenCols,
+	}
+	if err := frame.Enter(bar); err != nil {
+		return nil, nil, err
+	}
+	bridgeResize := make(chan sshproxy.TerminalSize, 8)
+	frame.SetOnResize(func(c, r int) {
+		select {
+		case bridgeResize <- sshproxy.TerminalSize{Cols: c, Rows: r}:
+		default:
+		}
+	})
+	go watchCLIResize(stopCh, resizeChan, frame)
+	return frame, bridgeResize, nil
+}
+
 // newCLIStreamAttach builds an attach handle for SSH or Telnet detachable bridges.
 func (s *Server) newCLIStreamAttach(protocol access.Protocol, wr io.Writer, inputCh <-chan byte, stopCh <-chan struct{}, readStarted *bool, readDone chan struct{}, closeFn func() error) interface{} {
 	writeFn := func(p []byte) error { _, e := wr.Write(p); return e }
@@ -445,9 +467,7 @@ func (s *Server) loadGroupsWithTerminalTargets(ctx context.Context, userID strin
 				terminalOnly = append(terminalOnly, t)
 			}
 		}
-		if len(terminalOnly) > 0 {
-			out = append(out, cliGroupEntry{Group: g, Targets: terminalOnly})
-		}
+		out = append(out, cliGroupEntry{Group: g, Targets: terminalOnly})
 	}
 	return out, nil
 }
@@ -567,10 +587,38 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 		}
 	}
 
-	// lastList: result of last "list" for connect indices (1-based)
+	// lastList: cached groups/targets for connect indices (1-based)
 	var lastList []cliGroupEntry
 	// currentGroupIndex: 1-based group index; 0 = root (no group selected)
 	var currentGroupIndex int
+	screenCols := ptyCols
+	if screenCols < 40 {
+		screenCols = 80
+	}
+	var pendingExtra []string
+	setStatus := func(lines ...string) {
+		pendingExtra = append(pendingExtra, lines...)
+	}
+
+	loadLastList := func() error {
+		ctxList, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		entries, err := s.loadGroupsWithTerminalTargets(ctxList, userID)
+		if err != nil {
+			return err
+		}
+		lastList = entries
+		return nil
+	}
+
+	redrawScreen := func(extraLines []string) {
+		_, _ = wr.Write([]byte(cliClearScreen))
+		_ = writeCLIScreen(wr, cliScreenState{
+			Entries:           lastList,
+			CurrentGroupIndex: currentGroupIndex,
+			Cols:              screenCols,
+		}, extraLines)
+	}
 
 	// activeSessionsForTargetIDs returns user's active sessions whose TargetID is in the set.
 	activeSessionsForTargetIDs := func(targetIDSet map[string]bool) []*session.Session {
@@ -589,6 +637,25 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 		return out
 	}
 
+	activeSessionsForScope := func() []*session.Session {
+		if currentGroupIndex >= 1 && currentGroupIndex <= len(lastList) {
+			tidSet := make(map[string]bool)
+			for _, t := range lastList[currentGroupIndex-1].Targets {
+				tidSet[string(t.ID)] = true
+			}
+			return activeSessionsForTargetIDs(tidSet)
+		}
+		var out []*session.Session
+		if lister, ok := s.sessionManager.(SessionLister); ok {
+			for _, id := range lister.ActiveIDs() {
+				if sess, ok := s.sessionManager.Get(id); ok && sess.UserID == userID {
+					out = append(out, sess)
+				}
+			}
+		}
+		return out
+	}
+
 	getPrompt := func() string {
 		if currentGroupIndex >= 1 && currentGroupIndex <= len(lastList) {
 			return "vantyx:/" + lastList[currentGroupIndex-1].Group.Name + "> "
@@ -596,24 +663,44 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 		return "vantyx:/> "
 	}
 
-	printHelp := func() {
-		prompt("Commands:\r\n")
-		prompt("  ls               List names only (at root: groups; in group: servers)\r\n")
-		prompt("  list             Show groups and servers with indices and active sessions\r\n")
-		prompt("  cd [n]           Move to group n (1-based); cd .. or cd 0 = root\r\n")
-		prompt("  pwd              Show current group\r\n")
-		prompt("  connect <t>      Connect to server index t in current group (after cd)\r\n")
-		prompt("  connect <g> <t>  Connect to group g, server t (when at root)\r\n")
-		prompt("  resume [n]      List active sessions; resume n to attach\r\n")
-		prompt("  sessions         List active sessions for current group (or all if root)\r\n")
-		prompt("  help             Show this help\r\n")
-		prompt("  exit, quit       Disconnect\r\n\r\n")
+	helpLines := func() []string {
+		return []string{
+			"=== Vantyx CLI ===",
+			"The top of the screen shows PWD, Groups, and Hosts (after cd).",
+			"Quick start: cd <group#>  →  connect <server#>",
+			"             or connect <group#> <server#> from root",
+			"",
+			"Commands:",
+			"  cd <n> | cd ..     Change group (updates header)",
+			"  connect <n>        Connect (in group: server index n)",
+			"  connect <g> <n>    Connect from root",
+			"  ls                 Reload and refresh header",
+			"  list               Show active sessions below header",
+			"  resume [n]         Attach to background session",
+			"  sessions           Same as list (active sessions)",
+			"  help | exit",
+		}
 	}
 
-	prompt("\r\n=== Vantyx CLI ===\r\n")
-	printHelp()
+	if err := loadLastList(); err != nil {
+		setStatus(fmt.Sprintf("Error: %v", err))
+	}
 
 	for {
+		select {
+		case sz, ok := <-resizeChan:
+			if ok && sz.Cols > 0 {
+				screenCols = sz.Cols
+			}
+		default:
+		}
+
+		if err := loadLastList(); err != nil {
+			setStatus(fmt.Sprintf("Error: %v", err))
+		}
+		extra := pendingExtra
+		pendingExtra = nil
+		redrawScreen(extra)
 		currentPrompt := getPrompt()
 		prompt("%s", currentPrompt)
 		line, err := readLine(true, currentPrompt)
@@ -638,189 +725,45 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			prompt("Bye.\r\n")
 			return
 		case "help":
-			printHelp()
+			pendingExtra = helpLines()
 			continue
 		case "pwd":
-			if currentGroupIndex < 1 || currentGroupIndex > len(lastList) {
-				prompt("(root)\r\n")
-			} else {
-				prompt("%s\r\n", lastList[currentGroupIndex-1].Group.Name)
-			}
 			continue
 		case "cd":
-			if len(lastList) == 0 {
-				ctxList, cancel := context.WithTimeout(ctx, 2*time.Minute)
-				entries, err := s.loadGroupsWithTerminalTargets(ctxList, userID)
-				cancel()
-				if err != nil {
-					prompt("Error: %v\r\n", err)
-					continue
-				}
-				lastList = entries
-			}
 			if len(args) == 0 {
-				if currentGroupIndex >= 1 && currentGroupIndex <= len(lastList) {
-					prompt("%s\r\n", lastList[currentGroupIndex-1].Group.Name)
-				} else {
-					prompt("(root)\r\n")
-				}
 				continue
 			}
 			if args[0] == ".." || args[0] == "0" {
 				currentGroupIndex = 0
-				prompt("(root)\r\n")
 				continue
 			}
 			n, _ := strconv.Atoi(args[0])
 			if n < 1 || n > len(lastList) {
-				prompt("Invalid group index. Use 1-%d (run 'list' to see indices).\r\n", len(lastList))
+				setStatus(fmt.Sprintf("Invalid group index. Use 1-%d.", len(lastList)))
 				continue
 			}
 			currentGroupIndex = n
-			prompt("%s\r\n", lastList[currentGroupIndex-1].Group.Name)
 			continue
 		case "ls":
-			ctxList, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			entries, err := s.loadGroupsWithTerminalTargets(ctxList, userID)
-			cancel()
-			if err != nil {
-				prompt("Error: %v\r\n", err)
-				continue
-			}
-			lastList = entries
-			if len(entries) == 0 {
-				prompt("\r\n")
-				continue
-			}
-			if currentGroupIndex >= 1 && currentGroupIndex <= len(entries) {
-				for i, t := range entries[currentGroupIndex-1].Targets {
-					prompt("host %d %s\r\n", i+1, t.Name)
-				}
-			} else {
-				for i, e := range entries {
-					prompt("group %d %s\r\n", i+1, e.Group.Name)
-				}
-			}
+			setStatus("Refreshed.")
 			continue
-		case "list":
-			ctxList, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			entries, err := s.loadGroupsWithTerminalTargets(ctxList, userID)
-			cancel()
-			if err != nil {
-				prompt("Error: %v\r\n", err)
-				continue
-			}
-			lastList = entries
-			if len(entries) == 0 {
-				prompt("No groups or servers assigned.\r\n")
-				continue
-			}
-			for gi, e := range entries {
-				cur := ""
-				if gi+1 == currentGroupIndex {
-					cur = " *"
-				}
-				prompt("  [%d] %s%s\r\n", gi+1, e.Group.Name, cur)
-				for ti, t := range e.Targets {
-					prompt("    [%d] %s [%s] (%s:%d)\r\n", ti+1, t.Name, t.Protocol, t.Host, t.Port)
-				}
-				tidSet := make(map[string]bool)
-				for _, t := range e.Targets {
-					tidSet[string(t.ID)] = true
-				}
-				activeSess := activeSessionsForTargetIDs(tidSet)
-				for i, sess := range activeSess {
-					name := sess.Name
-					if name == "" {
-						name = "(no name)"
-					}
-					desc := sess.Description
-					if desc != "" {
-						prompt("    Active [%d] %s - %s (%s)\r\n", i+1, name, desc, sess.TargetName)
-					} else {
-						prompt("    Active [%d] %s (%s)\r\n", i+1, name, sess.TargetName)
-					}
-				}
-			}
-			if currentGroupIndex >= 1 && currentGroupIndex <= len(lastList) {
-				prompt("\r\nCurrent group: %s. Use connect <server index> to connect.\r\n\r\n", lastList[currentGroupIndex-1].Group.Name)
-			} else {
-				prompt("\r\nUse cd <group> then connect <server>, or connect <group> <server>.\r\n\r\n")
-			}
-			continue
-		case "sessions":
-			var activeSessions []*session.Session
-			if currentGroupIndex >= 1 && currentGroupIndex <= len(lastList) {
-				tidSet := make(map[string]bool)
-				for _, t := range lastList[currentGroupIndex-1].Targets {
-					tidSet[string(t.ID)] = true
-				}
-				activeSessions = activeSessionsForTargetIDs(tidSet)
-			} else {
-				if lister, ok := s.sessionManager.(SessionLister); ok {
-					for _, id := range lister.ActiveIDs() {
-						if sess, ok := s.sessionManager.Get(id); ok && sess.UserID == userID {
-							activeSessions = append(activeSessions, sess)
-						}
-					}
-				}
-			}
-			if len(activeSessions) == 0 {
-				prompt("No active sessions.\r\n")
-				continue
-			}
-			for i, sess := range activeSessions {
-				name := sess.Name
-				if name == "" {
-					name = "(no name)"
-				}
-				if sess.Description != "" {
-					prompt("  [%d] %s - %s | %s (%s)\r\n", i+1, name, sess.Description, sess.TargetName, sess.TargetID)
-				} else {
-					prompt("  [%d] %s | %s (%s)\r\n", i+1, name, sess.TargetName, sess.TargetID)
-				}
-			}
-			prompt("Use resume <n> to attach.\r\n\r\n")
+		case "list", "sessions":
+			pendingExtra = formatCLIActiveSessionLines(activeSessionsForScope())
 			continue
 		case "resume":
-			var activeSessions []*session.Session
-			if currentGroupIndex >= 1 && currentGroupIndex <= len(lastList) {
-				tidSet := make(map[string]bool)
-				for _, t := range lastList[currentGroupIndex-1].Targets {
-					tidSet[string(t.ID)] = true
-				}
-				activeSessions = activeSessionsForTargetIDs(tidSet)
-			} else {
-				if lister, ok := s.sessionManager.(SessionLister); ok {
-					for _, id := range lister.ActiveIDs() {
-						if sess, ok := s.sessionManager.Get(id); ok && sess.UserID == userID {
-							activeSessions = append(activeSessions, sess)
-						}
-					}
-				}
-			}
+			activeSessions := activeSessionsForScope()
 			if len(activeSessions) == 0 {
-				prompt("No active sessions.\r\n")
+				setStatus("No active sessions.")
 				continue
 			}
 			if len(args) == 0 {
-				for i, sess := range activeSessions {
-					name := sess.Name
-					if name == "" {
-						name = "(no name)"
-					}
-					if sess.Description != "" {
-						prompt("  [%d] %s - %s | %s\r\n", i+1, name, sess.Description, sess.TargetName)
-					} else {
-						prompt("  [%d] %s | %s\r\n", i+1, name, sess.TargetName)
-					}
-				}
-				prompt("Use resume <n> to attach (e.g. resume 1).\r\n\r\n")
+				pendingExtra = formatCLIActiveSessionLines(activeSessions)
+				pendingExtra = append(pendingExtra, "Use resume <n> to attach (e.g. resume 1).")
 				continue
 			}
 			n, _ := strconv.Atoi(args[0])
 			if n < 1 || n > len(activeSessions) {
-				prompt("Invalid index. Use 1-%d.\r\n", len(activeSessions))
+				setStatus(fmt.Sprintf("Invalid index. Use 1-%d.", len(activeSessions)))
 				continue
 			}
 			termSess := activeSessions[n-1]
@@ -831,10 +774,23 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			if t, err := s.targetStore.Get(ctx, access.TargetID(termSess.TargetID)); err == nil {
 				resumeProto = t.Protocol
 			}
-			streamAttach := s.newCLIStreamAttach(resumeProto, wr, inputCh, resumeStopCh, &resumeReadStarted, resumeDone, func() error { return channel.Close() })
+			targetName := termSess.TargetName
+			if targetName == "" {
+				targetName = "(unknown)"
+			}
+			frame, bridgeResize, err := s.prepareCLIFrame(wr, screenCols, ptyRows, targetName, resumeProto, resumeStopCh, resizeChan)
+			if err != nil {
+				setStatus(fmt.Sprintf("Error: %v", err))
+				continue
+			}
+			defer func() { _ = frame.Leave() }()
+			streamAttach := s.newCLIStreamAttach(resumeProto, frame.SessionWriter(), inputCh, resumeStopCh, &resumeReadStarted, resumeDone, func() error { return channel.Close() })
 			select {
 			case termSess.AttachCh <- session.AttachReq{Conn: streamAttach}:
-				prompt("\r\nAttached. Disconnect with Ctrl+C or close the connection.\r\n\r\n")
+				select {
+				case bridgeResize <- sshproxy.TerminalSize{Cols: frame.SessionCols(), Rows: frame.SessionRows()}:
+				default:
+				}
 				select {
 				case <-resumeDone:
 				case <-termSess.Done():
@@ -844,22 +800,12 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 					}
 				}
 			default:
-				prompt("Session attach slot busy. Try again.\r\n")
+				setStatus("Session attach slot busy. Try again.")
 			}
 			continue
 		case "connect":
 			if len(lastList) == 0 {
-				ctxList, cancel := context.WithTimeout(ctx, 2*time.Minute)
-				entries, err := s.loadGroupsWithTerminalTargets(ctxList, userID)
-				cancel()
-				if err != nil {
-					prompt("Error: %v\r\n", err)
-					continue
-				}
-				lastList = entries
-			}
-			if len(lastList) == 0 {
-				prompt("No groups or servers assigned.\r\n")
+				setStatus("No groups assigned.")
 				continue
 			}
 			var gi, ti int
@@ -875,19 +821,23 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				ti, _ = strconv.Atoi(args[1])
 			} else {
 				if currentGroupIndex >= 1 && currentGroupIndex <= len(lastList) {
-					prompt("Usage: connect <server index> (e.g. connect 1)\r\n")
+					setStatus("Usage: connect <server index> (e.g. connect 1)")
 				} else {
-					prompt("Usage: connect <group> <server> or cd <group> then connect <server>\r\n")
+					setStatus("Usage: connect <group> <server> or cd <group> then connect <server>")
 				}
 				continue
 			}
 			if gi < 1 || gi > len(lastList) {
-				prompt("Invalid group index. Use 1-%d (run 'list' to see indices).\r\n", len(lastList))
+				setStatus(fmt.Sprintf("Invalid group index. Use 1-%d.", len(lastList)))
 				continue
 			}
 			e := &lastList[gi-1]
 			if ti < 1 || ti > len(e.Targets) {
-				prompt("Invalid server index. Group has servers 1-%d.\r\n", len(e.Targets))
+				if len(e.Targets) == 0 {
+					setStatus("No SSH/Telnet servers in this group.")
+				} else {
+					setStatus(fmt.Sprintf("Invalid server index. Group has servers 1-%d.", len(e.Targets)))
+				}
 				continue
 			}
 			target := e.Targets[ti-1]
@@ -901,7 +851,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			sessionDesc = strings.TrimSpace(sessionDesc)
 
 			if target.Protocol == access.ProtocolSSH && target.SSHPrivateKey != "" && strings.HasPrefix(target.SSHPrivateKey, secret.CiphertextVersionPrefix) {
-				prompt("\r\n保存された認証情報の復号に失敗しています。VANTYX_ENCRYPTION_KEY を確認してください。\r\n")
+				setStatus("Saved credentials could not be decrypted. Check VANTYX_ENCRYPTION_KEY.")
 				continue
 			}
 			var targetUser, targetPass string
@@ -916,7 +866,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 					return
 				}
 				if targetUser == "" {
-					prompt("Username required.\r\n")
+					setStatus("Username required.")
 					continue
 				}
 				prompt("Target password: ")
@@ -927,12 +877,21 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				prompt("\r\nConnecting to %s...\r\n", target.Name)
 			}
 
+			connectStopCh := make(chan struct{})
+			frame, bridgeResize, err := s.prepareCLIFrame(wr, screenCols, ptyRows, target.Name, target.Protocol, connectStopCh, resizeChan)
+			if err != nil {
+				setStatus(fmt.Sprintf("Error: %v", err))
+				continue
+			}
+			defer func() { _ = frame.Leave() }()
+
 			sessionID := session.ID(time.Now().UTC().Format(time.RFC3339Nano))
 			bridgeDone := make(chan struct{})
-			connectStopCh := make(chan struct{})
 			readDone := make(chan struct{})
 			var readStarted bool
 			var bridgeErr error
+			sessionCols := frame.SessionCols()
+			sessionRows := frame.SessionRows()
 			opts := session.StartOptions{
 				UserID:      userID,
 				TargetID:    string(target.ID),
@@ -943,7 +902,11 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			_, err = s.sessionManager.Start(sessionID, opts, func(bridgeCtx context.Context, sess *session.Session) {
 				defer close(bridgeDone)
 				touch := func() { s.sessionManager.Touch(sessionID) }
-				streamAttach := s.newCLIStreamAttach(target.Protocol, wr, inputCh, connectStopCh, &readStarted, readDone, func() error { return channel.Close() })
+				streamAttach := s.newCLIStreamAttach(target.Protocol, frame.SessionWriter(), inputCh, connectStopCh, &readStarted, readDone, func() error { return channel.Close() })
+				select {
+				case bridgeResize <- sshproxy.TerminalSize{Cols: sessionCols, Rows: sessionRows}:
+				default:
+				}
 				var tee io.Writer
 				var stdinRecorder sshproxy.StdinRecorder
 				if s.recordingDir != "" && s.recordingStore != nil {
@@ -982,13 +945,13 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 					if stdinRecorder != nil {
 						telStdin = telnetproxy.StdinRecorderFunc(stdinRecorder.RecordInput)
 					}
-					bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, streamAttach, touch, tee, telStdin)
+					bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, streamAttach, touch, tee, telStdin, sessionCols, sessionRows, bridgeResize)
 				default:
-					bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, ptyCols, ptyRows)
+					bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, sessionCols, sessionRows, bridgeResize)
 				}
 			})
 			if err != nil {
-				prompt("Session start failed: %v\r\n", err)
+				setStatus(fmt.Sprintf("Session start failed: %v", err))
 				continue
 			}
 			<-bridgeDone
@@ -997,13 +960,13 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				<-readDone
 			}
 			if bridgeErr != nil {
-				prompt("\r\nDisconnected: %v\r\n", bridgeErr)
+				setStatus(fmt.Sprintf("Disconnected: %v", bridgeErr))
 			} else {
-				prompt("\r\nDisconnected from %s.\r\n", target.Name)
+				setStatus(fmt.Sprintf("Disconnected from %s.", target.Name))
 			}
 			continue
 		default:
-			prompt("Unknown command '%s'. Type 'help' for commands.\r\n", cmd)
+			setStatus(fmt.Sprintf("Unknown command '%s'. Type 'help' for commands.", cmd))
 		}
 	}
 }

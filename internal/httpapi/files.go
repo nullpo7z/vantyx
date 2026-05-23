@@ -14,6 +14,7 @@ import (
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/ftp"
+	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/protocols"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/sftp"
@@ -73,9 +74,9 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 				audit("files_sftp_connect_failed", auditFields{
 					"user_id":   userID,
 					"target_id": targetID,
-					"error":     err.Error(),
+					"error":     proxyerrors.UnwrapForAudit(err),
 				})
-				writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
+				writeJSONError(w, proxyerrors.BridgeErrorMessage(err), http.StatusBadGateway)
 				return nil, nil
 			}
 			return target, client
@@ -85,9 +86,9 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 			audit("files_sftp_connect_failed", auditFields{
 				"user_id":   userID,
 				"target_id": targetID,
-				"error":     err.Error(),
+				"error":     proxyerrors.UnwrapForAudit(err),
 			})
-			writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
+			writeJSONError(w, proxyerrors.BridgeErrorMessage(err), http.StatusBadGateway)
 			return nil, nil
 		}
 		return target, &sftpClientAdapter{Client: client}

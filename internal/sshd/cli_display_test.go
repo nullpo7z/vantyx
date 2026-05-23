@@ -117,11 +117,10 @@ func TestWriteCLISessionBar(t *testing.T) {
 		t.Fatalf("connected line: %q", out)
 	}
 	idxConn := strings.Index(out, "Connected to:")
-	idxDetach := strings.Index(out, "Detach (keep session)")
-	idxEnd := strings.Index(out, "End session")
+	idxHint := strings.Index(out, cliSessionDisconnectHint)
 	idxSep := strings.Index(out, strings.Repeat("-", 60))
-	if idxConn < 0 || idxDetach < 0 || idxEnd < 0 || idxSep < 0 || !(idxConn < idxDetach && idxDetach < idxEnd && idxEnd < idxSep) {
-		t.Fatalf("order wrong: conn=%d detach=%d end=%d sep=%d\n%q", idxConn, idxDetach, idxEnd, idxSep, out)
+	if idxConn < 0 || idxHint < 0 || idxSep < 0 || !(idxConn < idxHint && idxHint < idxSep) {
+		t.Fatalf("order wrong: conn=%d hint=%d sep=%d\n%q", idxConn, idxHint, idxSep, out)
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/recording"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
@@ -760,16 +761,11 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		endMsg = "session_ended: SSH session closed"
 	}
 	if bridgeErr != nil {
-		errForAudit := bridgeErr.Error()
-		var ufe *telnetproxy.UserFacingError
-		if errors.As(bridgeErr, &ufe) && ufe.Err != nil {
-			errForAudit = ufe.Err.Error()
-		}
 		audit("terminal_bridge_end_error", auditFields{
 			"session_id": id,
-			"error":      errForAudit,
+			"error":      proxyerrors.UnwrapForAudit(bridgeErr),
 		})
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+bridgeErr.Error()))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+proxyerrors.BridgeErrorMessage(bridgeErr)))
 	} else {
 		audit("terminal_bridge_end", auditFields{
 			"session_id": id,

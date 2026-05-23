@@ -22,6 +22,7 @@ import (
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
+	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/recording"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
@@ -40,6 +41,11 @@ type SessionStarter interface {
 // SessionLister is optional and implemented by *session.Manager for CLI resume menu.
 type SessionLister interface {
 	ActiveIDs() []session.ID
+}
+
+// SessionStopper is optional and implemented by *session.Manager to end background bridges.
+type SessionStopper interface {
+	Stop(id session.ID)
 }
 
 // RecordingStore is used to persist recording metadata when CLI sessions are recorded (optional).
@@ -375,8 +381,13 @@ func (s *Server) prepareCLIFrame(wr io.Writer, screenCols, ptyRows int, targetNa
 	return frame, bridgeResize, nil
 }
 
+// cliStreamAttachOpts configures CLI attach read behavior.
+type cliStreamAttachOpts struct {
+	endOnCtrlD bool
+}
+
 // newCLIStreamAttach builds an attach handle for SSH or Telnet detachable bridges.
-func (s *Server) newCLIStreamAttach(protocol access.Protocol, wr io.Writer, inputCh <-chan byte, stopCh <-chan struct{}, readStarted *bool, readDone chan struct{}, closeFn func() error) interface{} {
+func (s *Server) newCLIStreamAttach(protocol access.Protocol, wr io.Writer, inputCh <-chan byte, stopCh <-chan struct{}, readStarted *bool, readDone chan struct{}, closeFn func() error, opts cliStreamAttachOpts) interface{} {
 	writeFn := func(p []byte) error { _, e := wr.Write(p); return e }
 	startRead := func(stdinCh chan<- []byte, onClose func()) {
 		if readStarted != nil {
@@ -395,6 +406,9 @@ func (s *Server) newCLIStreamAttach(protocol access.Protocol, wr io.Writer, inpu
 					if !ok {
 						return
 					}
+					if opts.endOnCtrlD && b == 0x04 {
+						return
+					}
 					buf := []byte{b}
 				drain:
 					for {
@@ -402,6 +416,9 @@ func (s *Server) newCLIStreamAttach(protocol access.Protocol, wr io.Writer, inpu
 						case b, ok = <-inputCh:
 							if !ok {
 								break drain
+							}
+							if opts.endOnCtrlD && b == 0x04 {
+								return
 							}
 							buf = append(buf, b)
 						default:
@@ -517,11 +534,13 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				}
 				return strings.TrimSpace(string(line)), nil
 			}
-			// Backspace (0x7f) or BS (0x08)
-			if (b == 0x7f || b == 0x08) && len(line) > 0 {
-				line = line[:len(line)-1]
-				if echo {
-					eraseChar()
+			// Backspace (0x7f) or BS (0x08). Never echo when the line is empty (would erase the prompt).
+			if b == 0x7f || b == 0x08 {
+				if len(line) > 0 {
+					line = line[:len(line)-1]
+					if echo {
+						eraseChar()
+					}
 				}
 				continue
 			}
@@ -784,7 +803,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				continue
 			}
 			defer func() { _ = frame.Leave() }()
-			streamAttach := s.newCLIStreamAttach(resumeProto, frame.SessionWriter(), inputCh, resumeStopCh, &resumeReadStarted, resumeDone, func() error { return channel.Close() })
+			streamAttach := s.newCLIStreamAttach(resumeProto, frame.SessionWriter(), inputCh, resumeStopCh, &resumeReadStarted, resumeDone, func() error { return channel.Close() }, cliStreamAttachOpts{})
 			select {
 			case termSess.AttachCh <- session.AttachReq{Conn: streamAttach}:
 				select {
@@ -902,7 +921,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			_, err = s.sessionManager.Start(sessionID, opts, func(bridgeCtx context.Context, sess *session.Session) {
 				defer close(bridgeDone)
 				touch := func() { s.sessionManager.Touch(sessionID) }
-				streamAttach := s.newCLIStreamAttach(target.Protocol, frame.SessionWriter(), inputCh, connectStopCh, &readStarted, readDone, func() error { return channel.Close() })
+				streamAttach := s.newCLIStreamAttach(target.Protocol, frame.SessionWriter(), inputCh, connectStopCh, &readStarted, readDone, nil, cliStreamAttachOpts{endOnCtrlD: true})
 				select {
 				case bridgeResize <- sshproxy.TerminalSize{Cols: sessionCols, Rows: sessionRows}:
 				default:
@@ -954,13 +973,28 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				setStatus(fmt.Sprintf("Session start failed: %v", err))
 				continue
 			}
-			<-bridgeDone
+			select {
+			case <-readDone:
+				if stopper, ok := s.sessionManager.(SessionStopper); ok {
+					stopper.Stop(sessionID)
+				}
+			case <-bridgeDone:
+			}
 			close(connectStopCh)
 			if readStarted {
-				<-readDone
+				select {
+				case <-readDone:
+				default:
+				}
+			}
+			// Ensure bridge goroutine finished (Stop may have already unblocked it).
+			select {
+			case <-bridgeDone:
+			default:
+				<-bridgeDone
 			}
 			if bridgeErr != nil {
-				setStatus(fmt.Sprintf("Disconnected: %v", bridgeErr))
+				setStatus(fmt.Sprintf("Disconnected: %s", proxyerrors.BridgeErrorMessage(bridgeErr)))
 			} else {
 				setStatus(fmt.Sprintf("Disconnected from %s.", target.Name))
 			}

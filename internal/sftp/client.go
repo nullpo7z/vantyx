@@ -9,6 +9,7 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
 
@@ -49,7 +50,7 @@ func NewClient(ctx context.Context, host string, port uint16, username, password
 	addr := net.JoinHostPort(host, portString(port))
 	sshClient, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
-		return nil, err
+		return nil, proxyerrors.WrapTCPDialError("SSH", err)
 	}
 	sc, err := sftp.NewClient(sshClient)
 	if err != nil {

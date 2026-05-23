@@ -11,12 +11,7 @@ import (
 
 const cliClearScreen = "\033[2J\033[H"
 
-func cliSessionDisconnectLines() []string {
-	return []string{
-		"Detach (keep session): close SSH to Vantyx, return to menu, then use \"resume\" to reattach",
-		"End session: run \"exit\" on the remote host, or press Ctrl+D at the shell prompt",
-	}
-}
+const cliSessionDisconnectHint = "Press Ctrl+D to end the session."
 
 // cliSessionBarState is the compact status bar shown during a target session.
 type cliSessionBarState struct {
@@ -107,7 +102,7 @@ type cliScreenLayout struct {
 
 func buildCLISessionBarLayout(bar cliSessionBarState) cliScreenLayout {
 	lines := []string{fmt.Sprintf("Connected to: %s [%s]", bar.TargetName, bar.Protocol)}
-	lines = append(lines, cliSessionDisconnectLines()...)
+	lines = append(lines, cliSessionDisconnectHint)
 	lines = append(lines, cliSeparatorLine(bar.Cols))
 	return cliScreenLayout{lines: lines}
 }

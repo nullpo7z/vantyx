@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/session"
 )
 
@@ -479,7 +480,7 @@ func RunBridgeDetachable(ctx context.Context, host string, port uint16, username
 	addr := net.JoinHostPort(host, portString(port))
 	stdin, stdout, stderr, windowChange, cleanup, err := sessionFactory(addr, config, initialCols, initialRows)
 	if err != nil {
-		return err
+		return proxyerrors.WrapTCPDialError("SSH", err)
 	}
 	// Ensure cleanup happens on ctx cancel too, otherwise stdout/stderr reads can block forever
 	// and the detachable session never stops (leaving "active sessions" behind).

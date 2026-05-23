@@ -14,20 +14,17 @@ func TestCLISessionBarLayout_order(t *testing.T) {
 		Protocol:   access.ProtocolSSH,
 		Cols:       40,
 	})
-	if len(layout.lines) != 4 {
+	if len(layout.lines) != 3 {
 		t.Fatalf("got %d lines: %v", len(layout.lines), layout.lines)
 	}
 	if !strings.HasPrefix(layout.lines[0], "Connected to: claude") {
 		t.Fatalf("line0: %q", layout.lines[0])
 	}
-	if !strings.Contains(layout.lines[1], "Detach") {
+	if layout.lines[1] != cliSessionDisconnectHint {
 		t.Fatalf("line1: %q", layout.lines[1])
 	}
-	if !strings.Contains(layout.lines[2], "End session") {
-		t.Fatalf("line2: %q", layout.lines[2])
-	}
-	if len(layout.lines[3]) != 40 {
-		t.Fatalf("separator width: %d", len(layout.lines[3]))
+	if len(layout.lines[2]) != 40 {
+		t.Fatalf("separator width: %d", len(layout.lines[2]))
 	}
 }
 
@@ -49,8 +46,8 @@ func TestCLISessionFrame_EnterSetsScrollRegion(t *testing.T) {
 	if !strings.Contains(out, "Connected to: sw1 [ssh]") {
 		t.Fatalf("missing connected line: %q", out)
 	}
-	if !strings.Contains(out, "Detach (keep session)") || !strings.Contains(out, "End session") {
-		t.Fatalf("missing disconnect hints: %q", out)
+	if !strings.Contains(out, cliSessionDisconnectHint) {
+		t.Fatalf("missing disconnect hint: %q", out)
 	}
 	if !strings.Contains(out, "\033[") || !strings.Contains(out, "r") {
 		t.Fatalf("missing DECSTBM: %q", out)

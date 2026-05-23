@@ -984,7 +984,7 @@ export function renderApp(container) {
     const passwordBlock = needsPassword
       ? `
       <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード <span class="text-amber-600">（未登録のため入力してください）</span></label>
+        <label class="block text-xs font-medium text-slate-600 mb-1.5">${isTelnet ? 'Telnet' : 'SSH'} パスワード <span class="text-amber-600">（未登録のため入力してください）</span></label>
         <input type="password" id="ssh-cred-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
       </div>`
       : ''
@@ -1829,7 +1829,7 @@ export function renderApp(container) {
     const addTftpCheckbox = modal.querySelector('#add-target-enable-tftp')
     function syncAddAuthType() {
       const proto = addProtoSelect.value
-      if (proto === 'rdp') {
+      if (proto === 'rdp' || proto === 'telnet') {
         addPasswordWrap.classList.remove('hidden')
         addKeyWrap.classList.add('hidden')
         addPassphraseWrap.classList.add('hidden')
@@ -1843,11 +1843,19 @@ export function renderApp(container) {
     }
     function syncAddProtocol() {
       const proto = addProtoSelect.value
-      const hasCreds = proto === 'ssh' || proto === 'rdp' || proto === 'ftp'
+      const hasCreds = proto === 'ssh' || proto === 'telnet' || proto === 'rdp' || proto === 'ftp'
       addCredFields.style.display = hasCreds ? '' : 'none'
       addAuthTypeWrap.classList.toggle('hidden', proto !== 'ssh')
-      addUsernameLabel.textContent = proto === 'rdp' ? 'RDP ユーザー名（任意）' : proto === 'ftp' ? 'FTP ユーザー名（任意）' : 'SSH ユーザー名（任意）'
-      addPasswordLabel.textContent = proto === 'rdp' ? 'RDP パスワード（任意）' : proto === 'ftp' ? 'FTP パスワード（任意）' : 'SSH パスワード（任意）'
+      addUsernameLabel.textContent =
+        proto === 'telnet' ? 'Telnet ユーザー名（任意）'
+          : proto === 'rdp' ? 'RDP ユーザー名（任意）'
+            : proto === 'ftp' ? 'FTP ユーザー名（任意）'
+              : 'SSH ユーザー名（任意）'
+      addPasswordLabel.textContent =
+        proto === 'telnet' ? 'Telnet パスワード（任意）'
+          : proto === 'rdp' ? 'RDP パスワード（任意）'
+            : proto === 'ftp' ? 'FTP パスワード（任意）'
+              : 'SSH パスワード（任意）'
       addRdpResWrap.classList.toggle('hidden', proto !== 'rdp')
       const canEditFileProtocols = proto === 'ssh' || proto === 'telnet'
       addFileProtocolsWrap.classList.toggle('hidden', !canEditFileProtocols)
@@ -1891,7 +1899,7 @@ export function renderApp(container) {
       const ssh_username = modal.querySelector('#add-target-ssh-username').value.trim()
       const authType = protocol === 'ssh' ? (modal.querySelector('input[name="add-target-auth-type"]:checked')?.value || 'password') : 'password'
       const payload = { name, host, port, protocol, group_id, ssh_username }
-      if (protocol === 'rdp' || protocol === 'ftp' || authType === 'password') {
+      if (protocol === 'rdp' || protocol === 'ftp' || protocol === 'telnet' || authType === 'password') {
         const v = modal.querySelector('#add-target-ssh-password').value
         if (v !== '') payload.ssh_password = v
       }
@@ -2111,7 +2119,7 @@ export function renderApp(container) {
 
     function syncEditAuthType() {
       const proto = editProtoSelect.value
-      if (proto === 'rdp') {
+      if (proto === 'rdp' || proto === 'telnet') {
         editPasswordWrap.classList.remove('hidden')
         editKeyWrap.classList.add('hidden')
         editPassphraseWrap.classList.add('hidden')
@@ -2125,11 +2133,19 @@ export function renderApp(container) {
     }
     function syncEditProtocol() {
       const proto = editProtoSelect.value
-      const hasCreds = proto === 'ssh' || proto === 'rdp' || proto === 'ftp'
+      const hasCreds = proto === 'ssh' || proto === 'telnet' || proto === 'rdp' || proto === 'ftp'
       editCredFields.style.display = hasCreds ? '' : 'none'
       editAuthTypeWrap.classList.toggle('hidden', proto !== 'ssh')
-      editUsernameLabel.textContent = proto === 'rdp' ? 'RDP ユーザー名（任意）' : proto === 'ftp' ? 'FTP ユーザー名（任意）' : 'SSH ユーザー名（任意）'
-      editPasswordLabel.textContent = proto === 'rdp' ? 'RDP パスワード（任意）' : proto === 'ftp' ? 'FTP パスワード（任意）' : 'SSH パスワード（任意）'
+      editUsernameLabel.textContent =
+        proto === 'telnet' ? 'Telnet ユーザー名（任意）'
+          : proto === 'rdp' ? 'RDP ユーザー名（任意）'
+            : proto === 'ftp' ? 'FTP ユーザー名（任意）'
+              : 'SSH ユーザー名（任意）'
+      editPasswordLabel.textContent =
+        proto === 'telnet' ? 'Telnet パスワード（任意）'
+          : proto === 'rdp' ? 'RDP パスワード（任意）'
+            : proto === 'ftp' ? 'FTP パスワード（任意）'
+              : 'SSH パスワード（任意）'
       editRdpResWrap.classList.toggle('hidden', proto !== 'rdp')
       const canEditFileProtocols = proto === 'ssh' || proto === 'telnet'
       if (editFileProtocolsWrap) {
@@ -2204,7 +2220,7 @@ export function renderApp(container) {
       const authType = protocol === 'ssh' ? (modal.querySelector('input[name="edit-target-auth-type"]:checked')?.value || 'password') : 'password'
       const clearKeyChecked = modal.querySelector('#edit-target-clear-ssh-key') && modal.querySelector('#edit-target-clear-ssh-key').checked
       let ssh_password, ssh_private_key, ssh_private_key_passphrase
-      if (protocol === 'rdp' || authType === 'password') {
+      if (protocol === 'rdp' || protocol === 'telnet' || authType === 'password') {
         const pwVal = modal.querySelector('#edit-target-ssh-password').value
         ssh_password = pwVal === '' ? undefined : pwVal
       }

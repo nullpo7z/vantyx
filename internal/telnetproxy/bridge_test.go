@@ -42,7 +42,7 @@ func TestRunBridgeDetachable_WithEchoServer(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			err := RunBridgeDetachable(ctx, "127.0.0.1", port, output, attachCh, wsConn, nil, nil, nil)
+			err := RunBridgeDetachable(ctx, "127.0.0.1", port, "", "", output, attachCh, wsConn, nil, nil, nil)
 			bridgeErrCh <- err
 		}()
 	}))
@@ -108,7 +108,7 @@ func TestRunBridgeDetachable_StreamAttach(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		bridgeErrCh <- RunBridgeDetachable(ctx, "127.0.0.1", port, output, attachCh, nil, nil, nil, nil)
+		bridgeErrCh <- RunBridgeDetachable(ctx, "127.0.0.1", port, "", "", output, attachCh, nil, nil, nil, nil)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -130,6 +130,26 @@ func TestRunBridgeDetachable_StreamAttach(t *testing.T) {
 	}
 }
 
+func TestIACStream_SplitSequence(t *testing.T) {
+	var replies [][]byte
+	reply := func(b []byte) error {
+		replies = append(replies, append([]byte(nil), b...))
+		return nil
+	}
+	var s iacStream
+	out1 := s.Filter([]byte{'h', iac}, reply)
+	if len(out1) != 1 || out1[0] != 'h' {
+		t.Fatalf("first chunk: got %q", out1)
+	}
+	out2 := s.Filter([]byte{do, 1, 'i'}, reply)
+	if string(out2) != "i" {
+		t.Fatalf("second chunk: got %q", out2)
+	}
+	if len(replies) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(replies))
+	}
+}
+
 func TestFilterIAC(t *testing.T) {
 	var replies [][]byte
 	out := filterIAC([]byte{'h', iac, do, 1, 'i'}, func(b []byte) error {
@@ -139,7 +159,7 @@ func TestFilterIAC(t *testing.T) {
 	if string(out) != "hi" {
 		t.Fatalf("got %q", out)
 	}
-	if len(replies) != 1 || replies[0][0] != iac || replies[0][1] != wont {
+	if len(replies) != 1 || replies[0][0] != iac || replies[0][1] != wont || replies[0][2] != 1 {
 		t.Fatalf("unexpected reply: %v", replies)
 	}
 }

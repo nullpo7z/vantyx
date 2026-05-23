@@ -982,7 +982,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 					if stdinRecorder != nil {
 						telStdin = telnetproxy.StdinRecorderFunc(stdinRecorder.RecordInput)
 					}
-					bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, sess.Output, sess.AttachCh, streamAttach, touch, tee, telStdin)
+					bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, streamAttach, touch, tee, telStdin)
 				default:
 					bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, ptyCols, ptyRows)
 				}

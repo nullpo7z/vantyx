@@ -29,7 +29,7 @@ export function renderTerminalPage(container) {
 
   container.innerHTML = `
     <div class="min-h-screen w-screen flex flex-col bg-slate-100 font-sans text-slate-900">
-      <header class="bg-sky-800 text-white px-6 py-3 flex items-center justify-between shadow z-10 shrink-0">
+      <header class="relative z-30 bg-sky-800 text-white px-6 py-3 flex items-center justify-between shadow shrink-0">
         <div class="flex items-center gap-8 min-w-0">
           <h1 class="text-xl font-semibold tracking-wide">Vantyx</h1>
           <div class="min-w-0 text-[11px] leading-tight">
@@ -96,7 +96,7 @@ export function renderTerminalPage(container) {
         </form>
       </div>
 
-      <div id="term-shell" class="hidden flex-1 min-h-0 flex flex-col bg-white border-t border-slate-200">
+      <div id="term-shell" class="hidden relative z-0 flex-1 min-h-0 flex flex-col overflow-hidden bg-white border-t border-slate-200">
         <div id="xterm" class="flex-1 min-h-0"></div>
       </div>
     </div>
@@ -130,6 +130,57 @@ export function renderTerminalPage(container) {
   let term = null
   let fitAddon = null
   let resizeObserver = null
+  let termStdinAttached = false
+
+  /** WebSocket メッセージ共通処理。session_id 受信時も xterm を必ず接続する。 */
+  function handleTerminalWsMessage(ws, ev, { onError, onSessionEnded } = {}) {
+    if (typeof ev.data === 'string' && ev.data.startsWith('session_ended:')) {
+      const msg = ev.data.slice('session_ended:'.length).trim() || 'セッションが終了しました'
+      if (term) term.write('\r\n\n[セッション終了] ' + msg + '\r\n')
+      currentSessionId = null
+      shellWrap.classList.add('hidden')
+      sessionEndedWrap.classList.remove('hidden')
+      try { ws.close() } catch { /* ignore */ }
+      onSessionEnded?.()
+      return true
+    }
+    if (typeof ev.data === 'string' && ev.data.startsWith('error:')) {
+      const msg = ev.data.slice(6).trim()
+      onError?.(msg)
+      if (term) term.write('\r\n\n[エラー] ' + msg + '\r\n')
+      try { ws.close() } catch { /* ignore */ }
+      return true
+    }
+    if (typeof ev.data === 'string' && ev.data.trim().startsWith('{')) {
+      try {
+        const o = JSON.parse(ev.data)
+        if (o && typeof o.session_id === 'string') {
+          setCurrentSessionId(o.session_id)
+          credsWrap.classList.add('hidden')
+          shellWrap.classList.remove('hidden')
+          if (!ws._vantyxAttached) {
+            startXterm(ws)
+            ws._vantyxAttached = true
+          }
+          return true
+        }
+      } catch {
+        /* not JSON */
+      }
+    }
+    credsWrap.classList.add('hidden')
+    shellWrap.classList.remove('hidden')
+    if (!ws._vantyxAttached) {
+      startXterm(ws)
+      ws._vantyxAttached = true
+    }
+    if (typeof ev.data === 'string') {
+      term.write(ev.data)
+    } else {
+      term.write(new Uint8Array(ev.data))
+    }
+    return false
+  }
   let currentSessionId = resumeSessionId || null
   const currentSessionIdReady = (() => {
     if (currentSessionId) return Promise.resolve(currentSessionId)
@@ -184,7 +235,7 @@ export function renderTerminalPage(container) {
   function showEndSessionConfirmModal() {
     closeEndSessionModal()
     const wrap = document.createElement('div')
-    wrap.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4'
+    wrap.className = 'fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4'
     wrap.innerHTML = `
       <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
         <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
@@ -221,36 +272,14 @@ export function renderTerminalPage(container) {
       btn.disabled = true
       try {
         if (!currentSessionId) {
-          // Wait briefly for session_id to arrive from backend before attempting delete.
           await Promise.race([
             currentSessionIdReady,
-            new Promise((_, rej) => setTimeout(() => rej(new Error('セッションIDを取得中です。数秒後にもう一度お試しください。')), 1500)),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('セッションIDを取得中です。接続完了まで数秒お待ちください。')), 5000)),
           ])
         }
-        if (!currentSessionId) throw new Error('セッションIDを取得できませんでした。数秒後にもう一度お試しください。')
-        const sid = currentSessionId
-        await API.terminalSessionDelete(sid)
-
-        // Ensure the session is actually gone before closing the tab.
-        // If it remains, closing would hide the failure and confuse the user.
-        let gone = false
-        for (let i = 0; i < 10; i++) {
-          try {
-            const res = await API.terminalSessions()
-            const items = res?.items || []
-            if (!items.some((s) => s && s.session_id === sid)) {
-              gone = true
-              break
-            }
-          } catch {
-            // If listing fails transiently, keep trying briefly.
-          }
-          await new Promise((r) => setTimeout(r, 150))
-        }
-        if (!gone) {
-          leavingPage = false
-          throw new Error('セッションがまだアクティブ一覧に残っています。もう一度お試しください。')
-        }
+        if (!currentSessionId) throw new Error('セッションIDを取得できませんでした。接続完了までお待ちください。')
+        leavingPage = true
+        await API.terminalSessionDelete(currentSessionId)
         closeWindow()
       } catch (err) {
         leavingPage = false
@@ -277,8 +306,7 @@ export function renderTerminalPage(container) {
   })
 
   // セッション終了: 確認モーダルを表示し、OK のときだけセッションを終了して閉じる
-  closeBtn.addEventListener('click', async () => {
-    leavingPage = true
+  closeBtn.addEventListener('click', () => {
     showEndSessionConfirmModal()
   })
   cancelBtn.addEventListener('click', () => { window.location.href = '/' })
@@ -311,32 +339,14 @@ export function renderTerminalPage(container) {
     const ws = new WebSocket(wsUrlResume(sessionId))
     ws.binaryType = 'arraybuffer'
     ws.onmessage = (ev) => {
-      if (typeof ev.data === 'string' && ev.data.startsWith('session_ended:')) {
-        const msg = ev.data.slice('session_ended:'.length).trim() || 'セッションが終了しました'
-        if (term) term.write('\r\n\n[セッション終了] ' + msg + '\r\n')
-        currentSessionId = null
-        shellWrap.classList.add('hidden')
-        sessionEndedWrap.classList.remove('hidden')
-        try { ws.close() } catch { /* ignore */ }
-        return
-      }
-      if (typeof ev.data === 'string' && ev.data.startsWith('error:')) {
-        errorEl.textContent = ev.data.slice(6).trim()
-        errorEl.classList.remove('hidden')
-        shellWrap.classList.add('hidden')
-        credsWrap.classList.remove('hidden')
-        try { ws.close() } catch { /* ignore */ }
-        return
-      }
-      if (!ws._vantyxAttached) {
-        startXterm(ws)
-        ws._vantyxAttached = true
-      }
-      if (typeof ev.data === 'string') {
-        term.write(ev.data)
-      } else {
-        term.write(new Uint8Array(ev.data))
-      }
+      handleTerminalWsMessage(ws, ev, {
+        onError: (msg) => {
+          errorEl.textContent = msg
+          errorEl.classList.remove('hidden')
+          shellWrap.classList.add('hidden')
+          credsWrap.classList.remove('hidden')
+        },
+      })
     }
     ws.onerror = () => {
       errorEl.textContent = 'WebSocket 接続に失敗しました。'
@@ -402,52 +412,16 @@ export function renderTerminalPage(container) {
     ws.onmessage = (ev) => {
       sawFirstMessage = true
       window.clearTimeout(connectTimeout)
-      if (typeof ev.data === 'string' && ev.data.startsWith('session_ended:')) {
-        const msg = ev.data.slice('session_ended:'.length).trim() || 'セッションが終了しました'
-        if (term) term.write('\r\n\n[セッション終了] ' + msg + '\r\n')
-        currentSessionId = null
-        shellWrap.classList.add('hidden')
-        sessionEndedWrap.classList.remove('hidden')
-        try { ws.close() } catch { /* ignore */ }
-        return
-      }
-      if (typeof ev.data === 'string' && ev.data.startsWith('error:')) {
-        const msg = ev.data.slice(6).trim()
-        sawError = true
-        errorEl.textContent = msg
-        errorEl.classList.remove('hidden')
-        connectBtn.disabled = false
-        // ターミナル表示に切り替わった後でもエラーを見せるため、認証パネルを再表示する
-        credsWrap.classList.remove('hidden')
-        shellWrap.classList.add('hidden')
-        if (term) term.write('\r\n\n[エラー] ' + msg + '\r\n')
-        try { ws.close() } catch { /* ignore */ }
-        return
-      }
-      // Backend sends session_id as JSON after connect (for resume).
-      if (typeof ev.data === 'string' && ev.data.trim().startsWith('{')) {
-        try {
-          const o = JSON.parse(ev.data)
-          if (o && typeof o.session_id === 'string') {
-            setCurrentSessionId(o.session_id)
-            return
-          }
-        } catch {
-          /* not JSON, fall through to term.write */
-        }
-      }
-
-      credsWrap.classList.add('hidden')
-      shellWrap.classList.remove('hidden')
-      if (!ws._vantyxAttached) {
-        startXterm(ws)
-        ws._vantyxAttached = true
-      }
-      if (typeof ev.data === 'string') {
-        term.write(ev.data)
-      } else {
-        term.write(new Uint8Array(ev.data))
-      }
+      handleTerminalWsMessage(ws, ev, {
+        onError: (msg) => {
+          sawError = true
+          errorEl.textContent = msg
+          errorEl.classList.remove('hidden')
+          connectBtn.disabled = false
+          credsWrap.classList.remove('hidden')
+          shellWrap.classList.add('hidden')
+        },
+      })
     }
 
     ws.onerror = () => {
@@ -511,48 +485,15 @@ export function renderTerminalPage(container) {
     ws.onmessage = (ev) => {
       sawFirstMessage = true
       window.clearTimeout(connectTimeout)
-      if (typeof ev.data === 'string' && ev.data.startsWith('session_ended:')) {
-        const msg = ev.data.slice('session_ended:'.length).trim() || 'セッションが終了しました'
-        if (term) term.write('\r\n\n[セッション終了] ' + msg + '\r\n')
-        currentSessionId = null
-        shellWrap.classList.add('hidden')
-        sessionEndedWrap.classList.remove('hidden')
-        try { ws.close() } catch { /* ignore */ }
-        return
-      }
-      if (typeof ev.data === 'string' && ev.data.startsWith('error:')) {
-        const msg = ev.data.slice(6).trim()
-        sawError = true
-        errorEl.textContent = msg
-        errorEl.classList.remove('hidden')
-        credsWrap.classList.remove('hidden')
-        shellWrap.classList.add('hidden')
-        if (term) term.write('\r\n\n[エラー] ' + msg + '\r\n')
-        try { ws.close() } catch { /* ignore */ }
-        return
-      }
-      if (typeof ev.data === 'string' && ev.data.trim().startsWith('{')) {
-        try {
-          const o = JSON.parse(ev.data)
-          if (o && typeof o.session_id === 'string') {
-            setCurrentSessionId(o.session_id)
-            return
-          }
-        } catch {
-          /* ignore */
-        }
-      }
-      credsWrap.classList.add('hidden')
-      shellWrap.classList.remove('hidden')
-      if (!ws._vantyxAttached) {
-        startXterm(ws)
-        ws._vantyxAttached = true
-      }
-      if (typeof ev.data === 'string') {
-        term.write(ev.data)
-      } else {
-        term.write(new Uint8Array(ev.data))
-      }
+      handleTerminalWsMessage(ws, ev, {
+        onError: (msg) => {
+          sawError = true
+          errorEl.textContent = msg
+          errorEl.classList.remove('hidden')
+          credsWrap.classList.remove('hidden')
+          shellWrap.classList.add('hidden')
+        },
+      })
     }
 
     ws.onerror = () => {
@@ -767,11 +708,14 @@ export function renderTerminalPage(container) {
     currentWs = ws
     term.focus()
     sendResize(ws)
-    term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(new TextEncoder().encode(data))
-      }
-    })
+    if (!termStdinAttached) {
+      termStdinAttached = true
+      term.onData((data) => {
+        if (currentWs && currentWs.readyState === WebSocket.OPEN) {
+          currentWs.send(new TextEncoder().encode(data))
+        }
+      })
+    }
     if (!resizeObserver) {
       resizeObserver = new ResizeObserver(() => {
         try { fitAddon.fit() } catch { /* ignore */ }
@@ -787,6 +731,10 @@ export function renderTerminalPage(container) {
   function startXterm(ws) {
     ensureTerm()
     attachWsToTerm(ws)
+    if (isTelnet && term && !term._vantyxTelnetHint) {
+      term._vantyxTelnetHint = true
+      term.write('\r\n\x1b[33m[接続済み]\x1b[0m Telnet に接続しました。ログイン画面が表示されない場合はキーボードで Enter を押すか、保存済み認証のユーザー名・パスワードを確認してください。\r\n')
+    }
   }
 
   function sendResize(ws) {

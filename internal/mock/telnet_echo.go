@@ -30,7 +30,12 @@ func NewTelnetEchoServer() *TelnetEchoServer {
 
 // Start listens on 127.0.0.1:0 and accepts connections, handling each with echo + IAC.
 func (s *TelnetEchoServer) Start() error {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	return s.StartOn("127.0.0.1:0")
+}
+
+// StartOn listens on listenAddr (e.g. "0.0.0.0:8023") and accepts connections.
+func (s *TelnetEchoServer) StartOn(listenAddr string) error {
+	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return err
 	}

@@ -751,7 +751,7 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		if stdinRecorder != nil {
 			telStdin = telnetproxy.StdinRecorderFunc(stdinRecorder.RecordInput)
 		}
-		bridgeErr = telnetproxy.RunBridgeDetachable(ctx, target.Host, target.Port, termSess.Output, termSess.AttachCh, conn, touch, tee, telStdin)
+		bridgeErr = telnetproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, termSess.Output, termSess.AttachCh, conn, touch, tee, telStdin)
 		endReason = "telnet_session_closed"
 		endMsg = "session_ended: Telnet session closed"
 	default:

@@ -2,10 +2,13 @@ package telnetproxy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -17,6 +20,7 @@ func RunBridgeDetachable(
 	ctx context.Context,
 	host string,
 	port uint16,
+	username, password string,
 	output *session.RingBuffer,
 	attachCh <-chan session.AttachReq,
 	initialConn interface{},
@@ -24,8 +28,9 @@ func RunBridgeDetachable(
 	tee io.Writer,
 	stdinRecorder StdinRecorder,
 ) error {
+	dialer := net.Dialer{Timeout: 15 * time.Second}
 	addr := net.JoinHostPort(host, portString(port))
-	conn, err := net.Dial("tcp", addr)
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
@@ -33,10 +38,25 @@ func RunBridgeDetachable(
 	var cleanupOnce sync.Once
 	cleanup := func() { cleanupOnce.Do(func() { _ = conn.Close() }) }
 	defer cleanup()
+
+	bridgeDone := make(chan struct{})
+	var bridgeDoneOnce sync.Once
+	signalBridgeDone := func() {
+		bridgeDoneOnce.Do(func() { close(bridgeDone) })
+	}
+
 	go func() {
 		<-ctx.Done()
 		cleanup()
+		signalBridgeDone()
 	}()
+
+	replyTo := func(b []byte) error {
+		_, wErr := conn.Write(b)
+		return wErr
+	}
+	_ = sendClientNegotiation(conn)
+	loginAuto := NewLoginAutomater(username, password)
 
 	stdinCh := make(chan []byte, 256)
 	var clientMu sync.Mutex
@@ -55,23 +75,31 @@ func RunBridgeDetachable(
 					if stdinRecorder != nil {
 						stdinRecorder.RecordInput(b)
 					}
-					_, _ = conn.Write(b)
+					_, _ = conn.Write(normalizeTelnetInput(b))
 				}
 			}
 		}
 	}()
 
-	bridgeDone := make(chan struct{})
+	var iacProc iacStream
 	go func() {
+		defer signalBridgeDone()
 		buf := make([]byte, 4096)
 		for {
+			if ctx.Err() != nil {
+				return
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 			n, err := conn.Read(buf)
 			if n > 0 {
-				filtered := filterIAC(buf[:n], func(reply []byte) error {
-					_, wErr := conn.Write(reply)
-					return wErr
-				})
+				filtered := iacProc.Filter(buf[:n], replyTo)
 				if len(filtered) > 0 {
+					if loginAuto != nil {
+						loginAuto.OnOutput(filtered, func(b []byte) error {
+							_, wErr := conn.Write(b)
+							return wErr
+						})
+					}
 					_, _ = output.Write(filtered)
 					if tee != nil {
 						_, _ = tee.Write(filtered)
@@ -85,7 +113,9 @@ func RunBridgeDetachable(
 				}
 			}
 			if err != nil {
-				close(bridgeDone)
+				if isReadTimeout(err) {
+					continue
+				}
 				return
 			}
 		}
@@ -124,7 +154,6 @@ func RunBridgeDetachable(
 				if touch != nil {
 					touch()
 				}
-				// Telnet: ignore resize JSON (no NAWS in MVP).
 				if mt == websocket.TextMessage && len(msg) > 0 && msg[0] == '{' && strings.Contains(string(msg), `"type":"resize"`) {
 					continue
 				}
@@ -182,6 +211,41 @@ func RunBridgeDetachable(
 			doAttach(req.Conn)
 		}
 	}
+}
+
+// normalizeTelnetInput maps LF to CR for line endings (Telnet expects CR).
+func normalizeTelnetInput(b []byte) []byte {
+	if !bytesContains(b, '\n') {
+		return b
+	}
+	out := make([]byte, 0, len(b))
+	for i := 0; i < len(b); i++ {
+		if b[i] == '\n' && (i == 0 || b[i-1] != '\r') {
+			out = append(out, '\r')
+		}
+		out = append(out, b[i])
+	}
+	return out
+}
+
+func isReadTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+func bytesContains(b []byte, c byte) bool {
+	for _, x := range b {
+		if x == c {
+			return true
+		}
+	}
+	return false
 }
 
 func isDataMessage(mt int) bool {

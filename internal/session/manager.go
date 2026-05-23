@@ -128,6 +128,7 @@ func (m *Manager) Touch(id ID) {
 }
 
 // Stop cancels the session goroutine and waits for it to finish.
+// If the bridge does not exit within stopTimeout, the session is removed from the map anyway.
 func (m *Manager) Stop(id ID) {
 	m.mu.Lock()
 	sess, ok := m.sessions[id]
@@ -137,7 +138,14 @@ func (m *Manager) Stop(id ID) {
 	}
 
 	sess.cancel()
-	<-sess.done
+	const stopTimeout = 8 * time.Second
+	select {
+	case <-sess.done:
+	case <-time.After(stopTimeout):
+		m.mu.Lock()
+		delete(m.sessions, id)
+		m.mu.Unlock()
+	}
 }
 
 // ActiveIDs returns the list of active session IDs.

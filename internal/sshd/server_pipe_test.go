@@ -159,6 +159,42 @@ func TestServer_Serve_RealTCP(t *testing.T) {
 	_ = sess.Wait()
 }
 
+// runSessionSlow is like runSession but with longer pauses for telnet connect credential prompts.
+func runSessionSlow(t *testing.T, addr string, signer ssh.Signer, commands ...string) {
+	t.Helper()
+	config := &ssh.ClientConfig{
+		User:            "admin",
+		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
+		Timeout:         5 * time.Second,
+	}
+	client, err := ssh.Dial("tcp", addr, config)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer client.Close()
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sess.Close()
+	if err := sess.RequestPty("xterm", 80, 24, nil); err != nil {
+		t.Fatalf("RequestPty: %v", err)
+	}
+	stdin, _ := sess.StdinPipe()
+	stdout, _ := sess.StdoutPipe()
+	go func() { _, _ = io.Copy(io.Discard, stdout) }()
+	if err := sess.Shell(); err != nil {
+		t.Fatalf("Shell: %v", err)
+	}
+	for _, cmd := range commands {
+		_, _ = stdin.Write([]byte(cmd + "\r\n"))
+		time.Sleep(250 * time.Millisecond)
+	}
+	_ = stdin.Close()
+	_ = sess.Wait()
+}
+
 // runSession runs shell, sends commands (each followed by \r\n), then exit. Uses small sleeps so server can process.
 func runSession(t *testing.T, addr string, signer ssh.Signer, commands ...string) {
 	config := &ssh.ClientConfig{
@@ -375,7 +411,8 @@ func setupServerWithTCPTelnetEcho(t *testing.T, port uint16) (*Server, string, s
 	ctx := context.Background()
 	_, _ = groupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = groupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "telnet-echo", "127.0.0.1", port, access.ProtocolTelnet, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
+	// Stored username only (no password) avoids ErrEncryptionKeyRequired and skips interactive credential prompts in tests.
+	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "telnet-echo", "127.0.0.1", port, access.ProtocolTelnet, access.GroupID("g1"), "g1", "user", "", "", "", false, false, false)
 	_ = groupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	mgr := session.NewManager()
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -402,8 +439,17 @@ func TestServer_Serve_TelnetConnect(t *testing.T) {
 	if port == 0 {
 		t.Fatal("echo port is 0")
 	}
-	_, addr, signer := setupServerWithTCPTelnetEcho(t, port)
-	runSession(t, addr, signer, "list", "connect 1 1", "", "", "user", "pass", "x", "exit")
+	srv, addr, signer := setupServerWithTCPTelnetEcho(t, port)
+	runSessionSlow(t, addr, signer, "list", "connect 1 1", "", "", "x", "exit")
+	mgr, ok := srv.sessionManager.(*session.Manager)
+	if !ok {
+		t.Fatal("session manager is not *session.Manager")
+	}
+	time.Sleep(200 * time.Millisecond)
+	if len(mgr.ActiveIDs()) != 1 {
+		t.Fatalf("expected background session after telnet connect+exit, got %v", mgr.ActiveIDs())
+	}
+	mgr.Stop(mgr.ActiveIDs()[0])
 }
 
 // setupServerWithTCPNoCreds: one SSH target with no stored credentials (connect will prompt for user/pass).
@@ -704,7 +750,7 @@ func runSessionRaw(t *testing.T, addr string, signer ssh.Signer, chunks ...[]byt
 	_ = sess.Wait()
 }
 
-func TestServer_Connect_CtrlD_ClearsActiveSession(t *testing.T) {
+func TestServer_Connect_CtrlBracket_Detaches(t *testing.T) {
 	echo := mock.NewTelnetEchoServer()
 	if err := echo.Start(); err != nil {
 		t.Fatalf("echo start: %v", err)
@@ -719,16 +765,34 @@ func TestServer_Connect_CtrlD_ClearsActiveSession(t *testing.T) {
 	if !ok {
 		t.Fatal("session manager is not *session.Manager")
 	}
-	runSessionRaw(t, addr, signer,
-		[]byte("list\r\n"),
-		[]byte("connect 1 1\r\n"),
-		[]byte("\r\n"),
-		[]byte("\r\n"),
-		[]byte("user\r\n"),
-		[]byte("pass\r\n"),
-		[]byte{0x04},
-		[]byte("exit\r\n"),
-	)
+	runSessionSlow(t, addr, signer, "list", "connect 1 1", "", "", "x", "\x1d", "exit")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(mgr.ActiveIDs()) == 1 {
+			mgr.Stop(mgr.ActiveIDs()[0])
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("expected 1 active session after Ctrl+] detach, got %v", mgr.ActiveIDs())
+}
+
+func TestServer_Connect_CtrlD_EndsSession(t *testing.T) {
+	echo := mock.NewTelnetEchoServer()
+	if err := echo.Start(); err != nil {
+		t.Fatalf("echo start: %v", err)
+	}
+	defer echo.Close()
+	port := echo.Port()
+	if port == 0 {
+		t.Fatal("echo port is 0")
+	}
+	srv, addr, signer := setupServerWithTCPTelnetEcho(t, port)
+	mgr, ok := srv.sessionManager.(*session.Manager)
+	if !ok {
+		t.Fatal("session manager is not *session.Manager")
+	}
+	runSessionSlow(t, addr, signer, "list", "connect 1 1", "", "", "\x04", "exit")
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if len(mgr.ActiveIDs()) == 0 {
@@ -773,6 +837,45 @@ func TestServer_BackgroundSession_RemainsActive(t *testing.T) {
 	runSession(t, addr, signer, "list", "exit")
 	if len(mgr.ActiveIDs()) != 1 {
 		t.Fatalf("background session should remain after list, got %v", mgr.ActiveIDs())
+	}
+	mgr.Stop(id)
+}
+
+func TestServer_Resume_CtrlBracket_Detaches(t *testing.T) {
+	echo := mock.NewTelnetEchoServer()
+	if err := echo.Start(); err != nil {
+		t.Fatalf("echo start: %v", err)
+	}
+	defer echo.Close()
+	port := echo.Port()
+	if port == 0 {
+		t.Fatal("echo port is 0")
+	}
+	srv, addr, signer := setupServerWithTCPTelnetEcho(t, port)
+	mgr, ok := srv.sessionManager.(*session.Manager)
+	if !ok {
+		t.Fatal("session manager is not *session.Manager")
+	}
+	id := session.ID("bg-resume-detach")
+	opts := session.StartOptions{
+		UserID:     "admin",
+		TargetID:   "t1",
+		TargetName: "telnet-echo",
+	}
+	_, err := mgr.Start(id, opts, func(ctx context.Context, sess *session.Session) {
+		_ = telnetproxy.RunBridgeDetachable(ctx, "127.0.0.1", port, "", "", sess.Output, sess.AttachCh, nil, nil, nil, nil, 80, 24, nil)
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	runSessionRaw(t, addr, signer,
+		[]byte("resume 1\r\n"),
+		[]byte{0x1d},
+		[]byte("exit\r\n"),
+	)
+	if len(mgr.ActiveIDs()) != 1 {
+		t.Fatalf("expected session to remain after resume detach, got %v", mgr.ActiveIDs())
 	}
 	mgr.Stop(id)
 }

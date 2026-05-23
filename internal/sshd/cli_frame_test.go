@@ -10,21 +10,25 @@ import (
 
 func TestCLISessionBarLayout_order(t *testing.T) {
 	layout := buildCLISessionBarLayout(cliSessionBarState{
-		TargetName: "claude",
-		Protocol:   access.ProtocolSSH,
-		Cols:       40,
+		TargetName:         "claude",
+		Protocol:           access.ProtocolSSH,
+		Cols:               40,
+		ShowEndSessionHint: true,
 	})
-	if len(layout.lines) != 3 {
+	if len(layout.lines) != 4 {
 		t.Fatalf("got %d lines: %v", len(layout.lines), layout.lines)
 	}
 	if !strings.HasPrefix(layout.lines[0], "Connected to: claude") {
 		t.Fatalf("line0: %q", layout.lines[0])
 	}
-	if layout.lines[1] != cliSessionDisconnectHint {
+	if layout.lines[1] != cliSessionDetachHint {
 		t.Fatalf("line1: %q", layout.lines[1])
 	}
-	if len(layout.lines[2]) != 40 {
-		t.Fatalf("separator width: %d", len(layout.lines[2]))
+	if layout.lines[2] != cliSessionEndHint {
+		t.Fatalf("line2: %q", layout.lines[2])
+	}
+	if len(layout.lines[3]) != 40 {
+		t.Fatalf("separator width: %d", len(layout.lines[3]))
 	}
 }
 
@@ -32,9 +36,10 @@ func TestCLISessionFrame_EnterSetsScrollRegion(t *testing.T) {
 	var buf bytes.Buffer
 	frame := newCLISessionFrame(&buf, 80, 24)
 	bar := cliSessionBarState{
-		TargetName: "sw1",
-		Protocol:   access.ProtocolSSH,
-		Cols:       80,
+		TargetName:         "sw1",
+		Protocol:           access.ProtocolSSH,
+		Cols:               80,
+		ShowEndSessionHint: true,
 	}
 	if err := frame.Enter(bar); err != nil {
 		t.Fatal(err)
@@ -46,8 +51,11 @@ func TestCLISessionFrame_EnterSetsScrollRegion(t *testing.T) {
 	if !strings.Contains(out, "Connected to: sw1 [ssh]") {
 		t.Fatalf("missing connected line: %q", out)
 	}
-	if !strings.Contains(out, cliSessionDisconnectHint) {
-		t.Fatalf("missing disconnect hint: %q", out)
+	if !strings.Contains(out, cliSessionDetachHint) {
+		t.Fatalf("missing detach hint: %q", out)
+	}
+	if !strings.Contains(out, cliSessionEndHint) {
+		t.Fatalf("missing end session hint: %q", out)
 	}
 	if !strings.Contains(out, "\033[") || !strings.Contains(out, "r") {
 		t.Fatalf("missing DECSTBM: %q", out)

@@ -29,7 +29,7 @@
 - Telnet: NAWS（端末リサイズ）、保存認証による自動ログイン
 - SSH/Telnet ターミナル接続失敗時の英語診断メッセージ（TCP dial タイムアウト・拒否等）
 - セッション永続化・レジューム（再接続で同一セッションにアタッチ）。Web タブを閉じた場合はバックグラウンド継続（デタッチ）し、一覧の「終了」または `DELETE /api/terminal/sessions/{id}` で明示終了
-- CLI `connect` 中の Ctrl+D でターゲットセッションを終了し、アクティブ一覧から削除
+- CLI セッション操作: Ctrl+] でメニューへ detach（Web タブ閉じ相当・セッション継続）、`connect` 中の Ctrl+D でセッション終了
 - ターミナルセッション一覧・削除 API
 - **CLI アクセス**: Vantyx が SSH サーバーとして待ち受け（`internal/sshd`）、Tera Term 等から `ssh user@vantyx` でログインし、ターゲットへプロキシ接続
 - SSH 公開鍵登録（`/api/me/ssh-keys`）による Vantyx SSH ログイン

@@ -360,12 +360,13 @@ func isCLITerminalProtocol(p access.Protocol) bool {
 }
 
 // prepareCLIFrame draws the session status bar and starts resize forwarding for a target session.
-func (s *Server) prepareCLIFrame(wr io.Writer, screenCols, ptyRows int, targetName string, protocol access.Protocol, stopCh <-chan struct{}, resizeChan <-chan sshproxy.TerminalSize) (*cliSessionFrame, chan sshproxy.TerminalSize, error) {
+func (s *Server) prepareCLIFrame(wr io.Writer, screenCols, ptyRows int, targetName string, protocol access.Protocol, showEndSessionHint bool, stopCh <-chan struct{}, resizeChan <-chan sshproxy.TerminalSize) (*cliSessionFrame, chan sshproxy.TerminalSize, error) {
 	frame := newCLISessionFrame(wr, screenCols, ptyRows)
 	bar := cliSessionBarState{
-		TargetName: targetName,
-		Protocol:   protocol,
-		Cols:       screenCols,
+		TargetName:         targetName,
+		Protocol:           protocol,
+		Cols:               screenCols,
+		ShowEndSessionHint: showEndSessionHint,
 	}
 	if err := frame.Enter(bar); err != nil {
 		return nil, nil, err
@@ -383,12 +384,47 @@ func (s *Server) prepareCLIFrame(wr io.Writer, screenCols, ptyRows int, targetNa
 
 // cliStreamAttachOpts configures CLI attach read behavior.
 type cliStreamAttachOpts struct {
-	endOnCtrlD bool
+	endOnCtrlD          bool // 0x04 ends session (connect only)
+	detachOnCtrlBracket bool // 0x1d returns to menu without stopping the bridge
+}
+
+// cliAttachOutcome records whether the user ended the session (Ctrl+D) vs detached (Ctrl+]).
+type cliAttachOutcome struct {
+	mu    sync.Mutex
+	ended bool
+}
+
+func (o *cliAttachOutcome) markEnded() {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.ended = true
+	o.mu.Unlock()
+}
+
+func (o *cliAttachOutcome) endedSession() bool {
+	if o == nil {
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.ended
 }
 
 // newCLIStreamAttach builds an attach handle for SSH or Telnet detachable bridges.
-func (s *Server) newCLIStreamAttach(protocol access.Protocol, wr io.Writer, inputCh <-chan byte, stopCh <-chan struct{}, readStarted *bool, readDone chan struct{}, closeFn func() error, opts cliStreamAttachOpts) interface{} {
+func (s *Server) newCLIStreamAttach(protocol access.Protocol, wr io.Writer, inputCh <-chan byte, stopCh <-chan struct{}, readStarted *bool, readDone chan struct{}, closeFn func() error, opts cliStreamAttachOpts, outcome *cliAttachOutcome) interface{} {
 	writeFn := func(p []byte) error { _, e := wr.Write(p); return e }
+	stopForControl := func(b byte) bool {
+		if opts.detachOnCtrlBracket && b == 0x1d {
+			return true
+		}
+		if opts.endOnCtrlD && b == 0x04 {
+			outcome.markEnded()
+			return true
+		}
+		return false
+	}
 	startRead := func(stdinCh chan<- []byte, onClose func()) {
 		if readStarted != nil {
 			*readStarted = true
@@ -406,7 +442,7 @@ func (s *Server) newCLIStreamAttach(protocol access.Protocol, wr io.Writer, inpu
 					if !ok {
 						return
 					}
-					if opts.endOnCtrlD && b == 0x04 {
+					if stopForControl(b) {
 						return
 					}
 					buf := []byte{b}
@@ -417,7 +453,7 @@ func (s *Server) newCLIStreamAttach(protocol access.Protocol, wr io.Writer, inpu
 							if !ok {
 								break drain
 							}
-							if opts.endOnCtrlD && b == 0x04 {
+							if stopForControl(b) {
 								return
 							}
 							buf = append(buf, b)
@@ -697,6 +733,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			"  list               Show active sessions below header",
 			"  resume [n]         Attach to background session",
 			"  sessions           Same as list (active sessions)",
+			"  In a session: Ctrl+] detach to menu; Ctrl+D end (connect only)",
 			"  help | exit",
 		}
 	}
@@ -797,13 +834,13 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			if targetName == "" {
 				targetName = "(unknown)"
 			}
-			frame, bridgeResize, err := s.prepareCLIFrame(wr, screenCols, ptyRows, targetName, resumeProto, resumeStopCh, resizeChan)
+			frame, bridgeResize, err := s.prepareCLIFrame(wr, screenCols, ptyRows, targetName, resumeProto, false, resumeStopCh, resizeChan)
 			if err != nil {
 				setStatus(fmt.Sprintf("Error: %v", err))
 				continue
 			}
 			defer func() { _ = frame.Leave() }()
-			streamAttach := s.newCLIStreamAttach(resumeProto, frame.SessionWriter(), inputCh, resumeStopCh, &resumeReadStarted, resumeDone, func() error { return channel.Close() }, cliStreamAttachOpts{})
+			streamAttach := s.newCLIStreamAttach(resumeProto, frame.SessionWriter(), inputCh, resumeStopCh, &resumeReadStarted, resumeDone, nil, cliStreamAttachOpts{detachOnCtrlBracket: true}, nil)
 			select {
 			case termSess.AttachCh <- session.AttachReq{Conn: streamAttach}:
 				select {
@@ -897,7 +934,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			}
 
 			connectStopCh := make(chan struct{})
-			frame, bridgeResize, err := s.prepareCLIFrame(wr, screenCols, ptyRows, target.Name, target.Protocol, connectStopCh, resizeChan)
+			frame, bridgeResize, err := s.prepareCLIFrame(wr, screenCols, ptyRows, target.Name, target.Protocol, true, connectStopCh, resizeChan)
 			if err != nil {
 				setStatus(fmt.Sprintf("Error: %v", err))
 				continue
@@ -909,6 +946,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			readDone := make(chan struct{})
 			var readStarted bool
 			var bridgeErr error
+			var attachOutcome cliAttachOutcome
 			sessionCols := frame.SessionCols()
 			sessionRows := frame.SessionRows()
 			opts := session.StartOptions{
@@ -921,7 +959,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			_, err = s.sessionManager.Start(sessionID, opts, func(bridgeCtx context.Context, sess *session.Session) {
 				defer close(bridgeDone)
 				touch := func() { s.sessionManager.Touch(sessionID) }
-				streamAttach := s.newCLIStreamAttach(target.Protocol, frame.SessionWriter(), inputCh, connectStopCh, &readStarted, readDone, nil, cliStreamAttachOpts{endOnCtrlD: true})
+				streamAttach := s.newCLIStreamAttach(target.Protocol, frame.SessionWriter(), inputCh, connectStopCh, &readStarted, readDone, nil, cliStreamAttachOpts{endOnCtrlD: true, detachOnCtrlBracket: true}, &attachOutcome)
 				select {
 				case bridgeResize <- sshproxy.TerminalSize{Cols: sessionCols, Rows: sessionRows}:
 				default:
@@ -973,10 +1011,21 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				setStatus(fmt.Sprintf("Session start failed: %v", err))
 				continue
 			}
+			attachWait := time.Now().Add(3 * time.Second)
+			for time.Now().Before(attachWait) && !readStarted {
+				time.Sleep(10 * time.Millisecond)
+			}
+			sessionEnded := false
+			clientDetached := false
 			select {
 			case <-readDone:
-				if stopper, ok := s.sessionManager.(SessionStopper); ok {
-					stopper.Stop(sessionID)
+				if attachOutcome.endedSession() {
+					sessionEnded = true
+					if stopper, ok := s.sessionManager.(SessionStopper); ok {
+						stopper.Stop(sessionID)
+					}
+				} else {
+					clientDetached = true
 				}
 			case <-bridgeDone:
 			}
@@ -987,15 +1036,25 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				default:
 				}
 			}
-			// Ensure bridge goroutine finished (Stop may have already unblocked it).
-			select {
-			case <-bridgeDone:
-			default:
-				<-bridgeDone
+			if sessionEnded {
+				select {
+				case <-bridgeDone:
+				default:
+					<-bridgeDone
+				}
+			} else if !clientDetached {
+				select {
+				case <-bridgeDone:
+				default:
+					<-bridgeDone
+				}
 			}
-			if bridgeErr != nil {
+			switch {
+			case clientDetached:
+				setStatus("Detached. Session continues in background.")
+			case bridgeErr != nil:
 				setStatus(fmt.Sprintf("Disconnected: %s", proxyerrors.BridgeErrorMessage(bridgeErr)))
-			} else {
+			default:
 				setStatus(fmt.Sprintf("Disconnected from %s.", target.Name))
 			}
 			continue

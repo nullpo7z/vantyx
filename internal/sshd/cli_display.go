@@ -11,13 +11,16 @@ import (
 
 const cliClearScreen = "\033[2J\033[H"
 
-const cliSessionDisconnectHint = "Press Ctrl+D to end the session."
+const cliSessionDetachHint = "Press Ctrl+\\ or Ctrl+] to return to the menu (session continues)."
+
+const cliSessionEndHint = "Press Ctrl+D to end the session."
 
 // cliSessionBarState is the compact status bar shown during a target session.
 type cliSessionBarState struct {
-	TargetName string
-	Protocol   access.Protocol
-	Cols       int
+	TargetName         string
+	Protocol           access.Protocol
+	Cols               int
+	ShowEndSessionHint bool // false on resume (Ctrl+D is sent to the remote)
 }
 
 func cliSeparatorLine(cols int) string {
@@ -102,7 +105,10 @@ type cliScreenLayout struct {
 
 func buildCLISessionBarLayout(bar cliSessionBarState) cliScreenLayout {
 	lines := []string{fmt.Sprintf("Connected to: %s [%s]", bar.TargetName, bar.Protocol)}
-	lines = append(lines, cliSessionDisconnectHint)
+	lines = append(lines, cliSessionDetachHint)
+	if bar.ShowEndSessionHint {
+		lines = append(lines, cliSessionEndHint)
+	}
 	lines = append(lines, cliSeparatorLine(bar.Cols))
 	return cliScreenLayout{lines: lines}
 }

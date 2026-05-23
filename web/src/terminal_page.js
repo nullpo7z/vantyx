@@ -14,12 +14,15 @@ export function renderTerminalPage(container) {
   const params = new URLSearchParams(window.location.search)
   const targetId = params.get('target_id') || ''
   const targetName = params.get('target_name') || targetId || 'terminal'
+  const terminalProtocol = params.get('protocol') || 'ssh'
+  const isTelnet = terminalProtocol === 'telnet'
+  const authLabel = isTelnet ? 'Telnet' : 'SSH'
   const channelToken = params.get('channel') || ''
   const resumeSessionId = params.get('session_id') || ''
   const parentToken = params.get('parent_token') || ''
   const useStoredCredentials = params.get('use_stored_credentials') === '1'
   const needsPassword = params.get('needs_password') === '1'
-  const needsPassphrase = params.get('needs_passphrase') === '1'
+  const needsPassphrase = !isTelnet && params.get('needs_passphrase') === '1'
   const urlSessionName = params.get('session_name') ?? ''
   const urlSessionDesc = params.get('session_description') ?? ''
   const hasSessionParamsFromUrl = params.has('session_name') || params.has('session_description')
@@ -30,7 +33,7 @@ export function renderTerminalPage(container) {
         <div class="flex items-center gap-8 min-w-0">
           <h1 class="text-xl font-semibold tracking-wide">Vantyx</h1>
           <div class="min-w-0 text-[11px] leading-tight">
-            <div class="opacity-70">SSH ターミナル</div>
+            <div class="opacity-70">${isTelnet ? 'Telnet ターミナル' : 'SSH ターミナル'}</div>
             <div class="text-xs sm:text-[13px] font-semibold truncate">${escapeHtml(targetName)}</div>
           </div>
         </div>
@@ -54,27 +57,27 @@ export function renderTerminalPage(container) {
       <div id="term-credentials" class="flex-1 flex items-center justify-center p-4 bg-slate-100">
         <form class="w-full max-w-md bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
           <div class="px-5 py-5 space-y-5">
-            <p id="term-auth-prompt" class="text-sm text-slate-600">ターゲットの SSH 認証情報を入力してください。</p>
+            <p id="term-auth-prompt" class="text-sm text-slate-600">ターゲットの ${authLabel} 認証情報を入力してください。</p>
             <p id="term-stored-cred-hint" class="text-sm text-slate-600 hidden">セッション名と説明を入力してください（任意）。接続で保存済み認証を使って接続します。</p>
             <p id="term-needs-password-hint" class="text-sm text-slate-600 hidden">ユーザー名は保存済みです。パスワードを入力してください。</p>
             <p id="term-needs-passphrase-hint" class="text-sm text-slate-600 hidden">秘密鍵は保存済みです。パスフレーズを入力してください。</p>
             <div id="term-auth-fields" class="space-y-5">
               <div id="term-username-wrap">
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${authLabel} ユーザー名</label>
                 <input type="text" id="ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="例: root" />
               </div>
               <div id="term-password-wrap">
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${authLabel} パスワード</label>
                 <input type="password" id="ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" />
               </div>
               <div id="term-passphrase-wrap" class="hidden">
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ</label>
                 <input type="password" id="ssh-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="暗号化された秘密鍵のパスフレーズ" />
               </div>
-              <div id="term-passphrase-optional-wrap">
+              ${isTelnet ? '' : `<div id="term-passphrase-optional-wrap">
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
                 <input type="password" id="ssh-passphrase-optional" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="保存済み鍵が暗号化されている場合のみ入力" />
-              </div>
+              </div>`}
             </div>
             <div>
               <label class="block text-xs font-medium text-slate-600 mb-1.5">セッション名（任意）</label>
@@ -392,7 +395,7 @@ export function renderTerminalPage(container) {
 
     ws.onopen = () => {
       const payload = { username: user, password: password || '', name, description }
-      if (privateKeyPassphrase != null && privateKeyPassphrase !== '') payload.private_key_passphrase = privateKeyPassphrase
+      if (!isTelnet && privateKeyPassphrase != null && privateKeyPassphrase !== '') payload.private_key_passphrase = privateKeyPassphrase
       ws.send(JSON.stringify(payload))
     }
 
@@ -485,7 +488,7 @@ export function renderTerminalPage(container) {
     const description = typeof sessionDescription === 'string' ? sessionDescription.trim() : ''
     const payload = { use_stored_credentials: true, name, description }
     if (password != null && password !== '') payload.password = password
-    if (privateKeyPassphrase != null && privateKeyPassphrase !== '') payload.private_key_passphrase = privateKeyPassphrase
+    if (!isTelnet && privateKeyPassphrase != null && privateKeyPassphrase !== '') payload.private_key_passphrase = privateKeyPassphrase
 
     const ws = new WebSocket(getWsUrlNew())
     ws.binaryType = 'arraybuffer'
@@ -608,8 +611,8 @@ export function renderTerminalPage(container) {
     }
     const username = usernameInput.value.trim()
     const password = passwordInput.value
-    const passphraseOptional = passphraseOptionalInput?.value ?? ''
-    connectWithCredentials(username, password, sessionName, sessionDesc, passphraseOptional)
+      const passphraseOptional = isTelnet ? '' : (passphraseOptionalInput?.value ?? '')
+      connectWithCredentials(username, password, sessionName, sessionDesc, passphraseOptional)
   })
 
   // session_id のみで開いた場合（レジューム用リンク）は認証なしで再接続
@@ -704,7 +707,7 @@ export function renderTerminalPage(container) {
         usedPendingCreds = true
         credsWrap.classList.add('hidden')
         shellWrap.classList.remove('hidden')
-        connectWithStoredCredentials(name, desc, typeof p === 'string' ? p : '', passphrase)
+        connectWithStoredCredentials(name, desc, typeof p === 'string' ? p : '', isTelnet ? '' : passphrase)
         return
       }
 
@@ -716,7 +719,7 @@ export function renderTerminalPage(container) {
       usernameInput.value = typeof u === 'string' ? u : ''
       passwordInput.value = typeof p === 'string' ? p : ''
       const passphrase = typeof ev.data.private_key_passphrase === 'string' ? ev.data.private_key_passphrase : ''
-      if (passphraseOptionalInput) passphraseOptionalInput.value = passphrase
+      if (!isTelnet && passphraseOptionalInput) passphraseOptionalInput.value = passphrase
 
       if (!usernameInput.value.trim()) {
         connectBtn.disabled = false

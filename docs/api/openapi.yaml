@@ -16,7 +16,7 @@ info:
     - タグ（グループ・ターゲット・ユーザー）: GET/PUT /api/groups/{group_id}/tags、/api/targets/{target_id}/tags、/api/users/{user_id}/tags。同じタグを持つユーザーはそのタグが付いたターゲット（またはそのタグが付いたグループに属するターゲット）にアクセス可能。
     - ユーザー登録・一覧（管理者のみ）: GET /api/users、POST /api/users。
     - ターゲットの一覧・作成・更新・削除 (GET/POST/PUT/DELETE /api/targets, /api/targets/{target_id})。プロトコルは ssh / telnet / vnc / tftp。一覧は limit / after_id でキーセットページネーション対応。
-    - SSH WebSocket ターミナル (GET /ws/ssh)。認証後、ターゲットへの SSH をブリッジ。セッション永続化・レジューム対応（GET /api/terminal/sessions で一覧、session_id で再接続）。
+    - ターミナル WebSocket (GET /ws/ssh)。認証後、ターゲットへの SSH または Telnet をブリッジ。セッション永続化・レジューム対応（GET /api/terminal/sessions で一覧、session_id で再接続）。
     - VNC WebSocket (GET /ws/vnc)。認証後、protocol=vnc のターゲットへ noVNC 用に RFB をブリッジ。クエリ target_id 必須。
     - ファイル転送: GET /api/targets/{target_id}/files（一覧・クエリ path）、GET /api/targets/{target_id}/files/download（ダウンロード・クエリ path）、POST /api/targets/{target_id}/files/upload（multipart: path, file）、DELETE /api/targets/{target_id}/files（削除・クエリ path）。SSH ターゲットは SFTP（保存済み認証必須）、TFTP ターゲットは TFTP（認証不要）。TFTP はディレクトリ一覧なし・削除未対応。
     - 録画: GET /api/recordings（メタデータ一覧。クエリ target_id でフィルタ可）。GET /api/recordings/{recording_id}/file でファイル取得。クエリ format=cast|gif|webm（省略時 cast）。cast=Asciinema 形式。gif/webm は agg（および WebM は ffmpeg）必要、未導入時 503。ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象。
@@ -1946,17 +1946,21 @@ paths:
 
   /ws/ssh:
     get:
-      summary: SSH WebSocket ターミナル
+      summary: ターミナル WebSocket（SSH / Telnet）
       description: |
         WebSocket にアップグレードされるエンドポイントです。
 
-        **新規接続**: クエリに target_id を指定します。アップグレード後、最初のテキストメッセージでターゲット SSH 用の認証情報を JSON で送信してください。セッションの識別用に name（セッション名）と description（説明）を任意で含められます。
+        **新規接続**: クエリに target_id を指定します。アップグレード後、最初のテキストメッセージで認証情報を JSON で送信してください（Telnet は username/password のみ。秘密鍵は不要）。セッションの識別用に name（セッション名）と description（説明）を任意で含められます。
         ```json
         {"username":"...","password":"...","name":"セッション名（任意）","description":"説明（任意）"}
         ```
+        保存済み認証を使う場合:
+        ```json
+        {"use_stored_credentials":true,"password":"...（未保存時のみ）"}
+        ```
         **レジューム（再接続）**: クエリに session_id を指定します（GET /api/terminal/sessions で取得）。認証情報は不要で、切断前の出力がリングバッファから再送されます。
 
-        ユーザーはターゲットへのアクセス権が必要です。ターゲットの protocol は ssh である必要があります（telnet の場合は 501）。
+        ユーザーはターゲットへのアクセス権が必要です。ターゲットの protocol は ssh または telnet である必要があります（vnc/rdp 等は 501）。
         認証情報が無効またはタイムアウト（15 秒）の場合は、サーバーが "error: ..." を送信し接続を閉じます。
         セッションはバックエンドで保持され、クライアント切断後もブリッジは継続します（バックグラウンド実行）。
       security:

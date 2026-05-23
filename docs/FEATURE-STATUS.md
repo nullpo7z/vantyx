@@ -24,8 +24,8 @@
 - アクセスグループ・ユーザー・ターゲットの多対多（グループ↔ターゲット、ユーザー↔グループ、タグによる紐付け）
 
 ### SSH/Telnet・セッション永続化・CLI アクセス（Phase 2）
-- ブラウザターミナル（xterm.js + WebSocket `/ws/ssh`）
-- SSH/Telnet プロキシ（`internal/sshproxy`, `internal/session`）
+- ブラウザターミナル（xterm.js + WebSocket `/ws/ssh`）— **SSH と Telnet** ターゲットに対応
+- SSH プロキシ（`internal/sshproxy`）、Telnet プロキシ（`internal/telnetproxy`）、セッション管理（`internal/session`）
 - セッション永続化・レジューム（再接続で同一セッションにアタッチ）
 - ターミナルセッション一覧・削除 API
 - **CLI アクセス**: Vantyx が SSH サーバーとして待ち受け（`internal/sshd`）、Tera Term 等から `ssh user@vantyx` でログインし、ターゲットへプロキシ接続
@@ -94,7 +94,7 @@
 
 ### その他
 - **構造化ログ**: zap/logrus 等の構造化ログは未導入（`log.Printf` ベース）
-- **Telnet ブラウザターミナル**: プロトコルとして Telnet は選択可能だが、ブラウザから Telnet 接続する専用 UI（SSH のような `/terminal` 相当）は未実装（接続ボタンはあるが別フロー要確認）
+- （Telnet ブラウザ/CLI ターミナルは実装済み — 下記「実装済み」参照）
 
 ---
 
@@ -104,7 +104,7 @@
 |--------------------|------------------------------------|------------------------------------------|
 | 認証・セッション   | ローカル認証、Cookie セッション、レート制限 | OIDC、TOTP、RADIUS/TACACS+/LDAP          |
 | アクセス制御       | グループ・ターゲット・タグ、水平/垂直制御   | （特になし）                             |
-| ターミナル         | SSH/Telnet プロキシ、ブラウザ+CLI、永続化・レジューム | Telnet 専用ブラウザ UI                   |
+| ターミナル         | SSH/Telnet プロキシ、ブラウザ+CLI、永続化・レジューム | —                                        |
 | 録画・証跡         | Asciinema 録画、一覧・再生・ダウンロード   | 高度な検索 UI、監査ログ永続化            |
 | ファイル転送       | SFTP、ファイルマネージャー UI              | TFTP                                     |
 | リモートデスクトップ | VNC（noVNC + WebSocket プロキシ）          | RDP ブリッジ                             |

@@ -26,6 +26,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
+	"github.com/nullpo7z/vantyx/internal/telnetproxy"
 )
 
 // SessionStarter starts and touches terminal sessions (same as browser terminal).
@@ -342,14 +343,70 @@ func sendExitStatus(channel ssh.Channel, code uint32) {
 	_, _ = channel.SendRequest("exit-status", false, payload)
 }
 
-// cliGroupEntry is one group and its SSH targets for CLI list/connect.
+// cliGroupEntry is one group and its terminal targets (SSH/Telnet) for CLI list/connect.
 type cliGroupEntry struct {
 	Group   *access.AccessGroup
 	Targets []*access.Target
 }
 
-// loadGroupsWithSSHTargets returns groups the user can see, each with its SSH targets (same logic as API handleGroups).
-func (s *Server) loadGroupsWithSSHTargets(ctx context.Context, userID string) ([]cliGroupEntry, error) {
+func isCLITerminalProtocol(p access.Protocol) bool {
+	return p == access.ProtocolSSH || p == access.ProtocolTelnet
+}
+
+// newCLIStreamAttach builds an attach handle for SSH or Telnet detachable bridges.
+func (s *Server) newCLIStreamAttach(protocol access.Protocol, wr io.Writer, inputCh <-chan byte, stopCh <-chan struct{}, readStarted *bool, readDone chan struct{}, closeFn func() error) interface{} {
+	writeFn := func(p []byte) error { _, e := wr.Write(p); return e }
+	startRead := func(stdinCh chan<- []byte, onClose func()) {
+		if readStarted != nil {
+			*readStarted = true
+		}
+		go func() {
+			defer func() {
+				onClose()
+				if readDone != nil {
+					close(readDone)
+				}
+			}()
+			for {
+				select {
+				case b, ok := <-inputCh:
+					if !ok {
+						return
+					}
+					buf := []byte{b}
+				drain:
+					for {
+						select {
+						case b, ok = <-inputCh:
+							if !ok {
+								break drain
+							}
+							buf = append(buf, b)
+						default:
+							break drain
+						}
+					}
+					cp := make([]byte, len(buf))
+					copy(cp, buf)
+					select {
+					case stdinCh <- cp:
+					case <-stopCh:
+						return
+					}
+				case <-stopCh:
+					return
+				}
+			}
+		}()
+	}
+	if protocol == access.ProtocolTelnet {
+		return &telnetproxy.StreamAttach{Write: writeFn, StartRead: startRead, CloseFn: closeFn}
+	}
+	return &sshproxy.StreamAttach{Write: writeFn, StartRead: startRead, CloseFn: closeFn}
+}
+
+// loadGroupsWithTerminalTargets returns groups the user can see, each with SSH/Telnet targets.
+func (s *Server) loadGroupsWithTerminalTargets(ctx context.Context, userID string) ([]cliGroupEntry, error) {
 	groupIDs, err := s.groupStore.GroupIDsForUser(ctx, access.UserID(userID), nil)
 	if err != nil {
 		return nil, err
@@ -382,14 +439,14 @@ func (s *Server) loadGroupsWithSSHTargets(ctx context.Context, userID string) ([
 		if err != nil {
 			continue
 		}
-		var sshOnly []*access.Target
+		var terminalOnly []*access.Target
 		for _, t := range targets {
-			if t.Protocol == access.ProtocolSSH {
-				sshOnly = append(sshOnly, t)
+			if isCLITerminalProtocol(t.Protocol) {
+				terminalOnly = append(terminalOnly, t)
 			}
 		}
-		if len(sshOnly) > 0 {
-			out = append(out, cliGroupEntry{Group: g, Targets: sshOnly})
+		if len(terminalOnly) > 0 {
+			out = append(out, cliGroupEntry{Group: g, Targets: terminalOnly})
 		}
 	}
 	return out, nil
@@ -593,7 +650,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 		case "cd":
 			if len(lastList) == 0 {
 				ctxList, cancel := context.WithTimeout(ctx, 2*time.Minute)
-				entries, err := s.loadGroupsWithSSHTargets(ctxList, userID)
+				entries, err := s.loadGroupsWithTerminalTargets(ctxList, userID)
 				cancel()
 				if err != nil {
 					prompt("Error: %v\r\n", err)
@@ -624,7 +681,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			continue
 		case "ls":
 			ctxList, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			entries, err := s.loadGroupsWithSSHTargets(ctxList, userID)
+			entries, err := s.loadGroupsWithTerminalTargets(ctxList, userID)
 			cancel()
 			if err != nil {
 				prompt("Error: %v\r\n", err)
@@ -647,7 +704,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			continue
 		case "list":
 			ctxList, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			entries, err := s.loadGroupsWithSSHTargets(ctxList, userID)
+			entries, err := s.loadGroupsWithTerminalTargets(ctxList, userID)
 			cancel()
 			if err != nil {
 				prompt("Error: %v\r\n", err)
@@ -665,7 +722,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				}
 				prompt("  [%d] %s%s\r\n", gi+1, e.Group.Name, cur)
 				for ti, t := range e.Targets {
-					prompt("    [%d] %s (%s:%d)\r\n", ti+1, t.Name, t.Host, t.Port)
+					prompt("    [%d] %s [%s] (%s:%d)\r\n", ti+1, t.Name, t.Protocol, t.Host, t.Port)
 				}
 				tidSet := make(map[string]bool)
 				for _, t := range e.Targets {
@@ -770,46 +827,11 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			resumeStopCh := make(chan struct{})
 			resumeDone := make(chan struct{})
 			var resumeReadStarted bool
-			streamAttach := &sshproxy.StreamAttach{
-				Write: func(p []byte) error { _, err := wr.Write(p); return err },
-				StartRead: func(stdinCh chan<- []byte, onClose func()) {
-					resumeReadStarted = true
-					go func() {
-						defer func() { onClose(); close(resumeDone) }()
-						for {
-							select {
-							case b, ok := <-inputCh:
-								if !ok {
-									return
-								}
-								buf := []byte{b}
-							drain:
-								for {
-									select {
-									case b, ok = <-inputCh:
-										if !ok {
-											break drain
-										}
-										buf = append(buf, b)
-									default:
-										break drain
-									}
-								}
-								cp := make([]byte, len(buf))
-								copy(cp, buf)
-								select {
-								case stdinCh <- cp:
-								case <-resumeStopCh:
-									return
-								}
-							case <-resumeStopCh:
-								return
-							}
-						}
-					}()
-				},
-				CloseFn: func() error { return channel.Close() },
+			resumeProto := access.ProtocolSSH
+			if t, err := s.targetStore.Get(ctx, access.TargetID(termSess.TargetID)); err == nil {
+				resumeProto = t.Protocol
 			}
+			streamAttach := s.newCLIStreamAttach(resumeProto, wr, inputCh, resumeStopCh, &resumeReadStarted, resumeDone, func() error { return channel.Close() })
 			select {
 			case termSess.AttachCh <- session.AttachReq{Conn: streamAttach}:
 				prompt("\r\nAttached. Disconnect with Ctrl+C or close the connection.\r\n\r\n")
@@ -828,7 +850,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 		case "connect":
 			if len(lastList) == 0 {
 				ctxList, cancel := context.WithTimeout(ctx, 2*time.Minute)
-				entries, err := s.loadGroupsWithSSHTargets(ctxList, userID)
+				entries, err := s.loadGroupsWithTerminalTargets(ctxList, userID)
 				cancel()
 				if err != nil {
 					prompt("Error: %v\r\n", err)
@@ -878,7 +900,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			sessionDesc, _ := readLine(true, "")
 			sessionDesc = strings.TrimSpace(sessionDesc)
 
-			if target.SSHPrivateKey != "" && strings.HasPrefix(target.SSHPrivateKey, secret.CiphertextVersionPrefix) {
+			if target.Protocol == access.ProtocolSSH && target.SSHPrivateKey != "" && strings.HasPrefix(target.SSHPrivateKey, secret.CiphertextVersionPrefix) {
 				prompt("\r\n保存された認証情報の復号に失敗しています。VANTYX_ENCRYPTION_KEY を確認してください。\r\n")
 				continue
 			}
@@ -921,46 +943,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			_, err = s.sessionManager.Start(sessionID, opts, func(bridgeCtx context.Context, sess *session.Session) {
 				defer close(bridgeDone)
 				touch := func() { s.sessionManager.Touch(sessionID) }
-				streamAttach := &sshproxy.StreamAttach{
-					Write: func(p []byte) error { _, e := wr.Write(p); return e },
-					StartRead: func(stdinCh chan<- []byte, onClose func()) {
-						readStarted = true
-						go func() {
-							defer func() { onClose(); close(readDone) }()
-							for {
-								select {
-								case b, ok := <-inputCh:
-									if !ok {
-										return
-									}
-									buf := []byte{b}
-								drain:
-									for {
-										select {
-										case b, ok = <-inputCh:
-											if !ok {
-												break drain
-											}
-											buf = append(buf, b)
-										default:
-											break drain
-										}
-									}
-									cp := make([]byte, len(buf))
-									copy(cp, buf)
-									select {
-									case stdinCh <- cp:
-									case <-connectStopCh:
-										return
-									}
-								case <-connectStopCh:
-									return
-								}
-							}
-						}()
-					},
-					CloseFn: func() error { return channel.Close() },
-				}
+				streamAttach := s.newCLIStreamAttach(target.Protocol, wr, inputCh, connectStopCh, &readStarted, readDone, func() error { return channel.Close() })
 				var tee io.Writer
 				var stdinRecorder sshproxy.StdinRecorder
 				if s.recordingDir != "" && s.recordingStore != nil {
@@ -993,7 +976,16 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 						}()
 					}
 				}
-				bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, ptyCols, ptyRows)
+				switch target.Protocol {
+				case access.ProtocolTelnet:
+					var telStdin telnetproxy.StdinRecorder
+					if stdinRecorder != nil {
+						telStdin = telnetproxy.StdinRecorderFunc(stdinRecorder.RecordInput)
+					}
+					bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, sess.Output, sess.AttachCh, streamAttach, touch, tee, telStdin)
+				default:
+					bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, ptyCols, ptyRows)
+				}
 			})
 			if err != nil {
 				prompt("Session start failed: %v\r\n", err)

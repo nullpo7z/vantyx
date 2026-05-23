@@ -26,7 +26,12 @@ import (
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
+	"github.com/nullpo7z/vantyx/internal/telnetproxy"
 )
+
+func supportsDetachableTerminal(p access.Protocol) bool {
+	return p == access.ProtocolSSH || p == access.ProtocolTelnet
+}
 
 // listTerminalSessions is satisfied by *session.Manager for GET /api/terminal/sessions.
 type listTerminalSessions interface {
@@ -145,17 +150,19 @@ func readTerminalCredentials(conn wsReadConn, target *access.Target) (sshproxy.C
 		if m.Password != "" {
 			password = m.Password
 		}
-		keyPassphrase := target.SSHPrivateKeyPassphrase
-		if m.PrivateKeyPassphrase != "" {
-			keyPassphrase = m.PrivateKeyPassphrase
-		}
 		creds := sshproxy.Credentials{
-			Username:             target.SSHUsername,
-			Password:             password,
-			PrivateKey:           target.SSHPrivateKey,
-			PrivateKeyPassphrase: keyPassphrase,
-			Name:                 m.Name,
-			Description:          m.Description,
+			Username:    target.SSHUsername,
+			Password:    password,
+			Name:        m.Name,
+			Description: m.Description,
+		}
+		if target.Protocol != access.ProtocolTelnet {
+			keyPassphrase := target.SSHPrivateKeyPassphrase
+			if m.PrivateKeyPassphrase != "" {
+				keyPassphrase = m.PrivateKeyPassphrase
+			}
+			creds.PrivateKey = target.SSHPrivateKey
+			creds.PrivateKeyPassphrase = keyPassphrase
 		}
 		if err := credentialsDecrypted(creds); err != nil {
 			return sshproxy.Credentials{}, err
@@ -171,8 +178,8 @@ func readTerminalCredentials(conn wsReadConn, target *access.Target) (sshproxy.C
 		Name:        m.Name,
 		Description: m.Description,
 	}
-	// ターゲットに保存済みの秘密鍵があり、クライアントがパスフレーズを送った場合はその鍵を使う（暗号化鍵の接続時入力に対応）
-	if target.SSHPrivateKey != "" && m.PrivateKeyPassphrase != "" {
+	// ターゲットに保存済みの秘密鍵があり、クライアントがパスフレーズを送った場合はその鍵を使う（SSH のみ）
+	if target.Protocol != access.ProtocolTelnet && target.SSHPrivateKey != "" && m.PrivateKeyPassphrase != "" {
 		creds.PrivateKey = target.SSHPrivateKey
 		creds.PrivateKeyPassphrase = m.PrivateKeyPassphrase
 	}
@@ -256,13 +263,13 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if target.Protocol != access.ProtocolSSH {
+	if !supportsDetachableTerminal(target.Protocol) {
 		audit("terminal_ws_not_implemented", auditFields{
 			"user_id":   userID,
 			"target_id": targetID,
 			"protocol":  target.Protocol,
 		})
-		writeJSONError(w, "only SSH targets supported", http.StatusNotImplemented)
+		writeJSONError(w, "only SSH and Telnet targets supported", http.StatusNotImplemented)
 		return
 	}
 
@@ -736,18 +743,34 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		})
 	}
 
-	if err := sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, conn, touch, tee, stdinRecorder, cols, rows); err != nil {
+	var bridgeErr error
+	var endReason, endMsg string
+	switch target.Protocol {
+	case access.ProtocolTelnet:
+		var telStdin telnetproxy.StdinRecorder
+		if stdinRecorder != nil {
+			telStdin = telnetproxy.StdinRecorderFunc(stdinRecorder.RecordInput)
+		}
+		bridgeErr = telnetproxy.RunBridgeDetachable(ctx, target.Host, target.Port, termSess.Output, termSess.AttachCh, conn, touch, tee, telStdin)
+		endReason = "telnet_session_closed"
+		endMsg = "session_ended: Telnet session closed"
+	default:
+		bridgeErr = sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, conn, touch, tee, stdinRecorder, cols, rows)
+		endReason = "ssh_session_closed"
+		endMsg = "session_ended: SSH session closed"
+	}
+	if bridgeErr != nil {
 		audit("terminal_bridge_end_error", auditFields{
 			"session_id": id,
-			"error":      err.Error(),
+			"error":      bridgeErr.Error(),
 		})
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+err.Error()))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+bridgeErr.Error()))
 	} else {
 		audit("terminal_bridge_end", auditFields{
 			"session_id": id,
-			"reason":     "ssh_session_closed",
+			"reason":     endReason,
 		})
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("session_ended: SSH session closed"))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(endMsg))
 	}
 	_ = conn.Close()
 	// コールバックから return すると Manager の goroutine が sess.done を close し delete(m.sessions, id) するため、

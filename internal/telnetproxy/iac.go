@@ -40,7 +40,7 @@ func negotiateReply(cmd, opt byte) []byte {
 		case optSuppressGoAhead:
 			return []byte{iac, will, opt}
 		case optNAWS:
-			return []byte{iac, wont, opt}
+			return []byte{iac, will, opt}
 		default:
 			return []byte{iac, wont, opt}
 		}
@@ -135,4 +135,16 @@ func filterIACBytes(b []byte, replyTo func([]byte) error) (out, rest []byte) {
 		}
 	}
 	return out, nil
+}
+
+// encodeNAWS builds IAC SB NAWS width height IAC SE (RFC 1073, 16-bit big-endian each).
+func encodeNAWS(cols, rows uint16) []byte {
+	c, r := clampTerminalSize(int(cols), int(rows))
+	cols, rows = c, r
+	return []byte{
+		iac, sb, optNAWS,
+		byte(cols >> 8), byte(cols),
+		byte(rows >> 8), byte(rows),
+		iac, se,
+	}
 }

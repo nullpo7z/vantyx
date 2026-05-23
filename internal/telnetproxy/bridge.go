@@ -2,6 +2,7 @@ package telnetproxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -15,6 +16,12 @@ import (
 	"github.com/nullpo7z/vantyx/internal/session"
 )
 
+type resizeMsg struct {
+	Type string `json:"type"`
+	Cols int    `json:"cols"`
+	Rows int    `json:"rows"`
+}
+
 // RunBridgeDetachable runs a Telnet TCP bridge that keeps running when the client disconnects.
 func RunBridgeDetachable(
 	ctx context.Context,
@@ -27,12 +34,13 @@ func RunBridgeDetachable(
 	touch func(),
 	tee io.Writer,
 	stdinRecorder StdinRecorder,
+	initialCols, initialRows int,
 ) error {
 	dialer := net.Dialer{Timeout: 15 * time.Second}
 	addr := net.JoinHostPort(host, portString(port))
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return err
+		return WrapDialError(err)
 	}
 
 	var cleanupOnce sync.Once
@@ -51,16 +59,34 @@ func RunBridgeDetachable(
 		signalBridgeDone()
 	}()
 
+	termSize := newTerminalSize(initialCols, initialRows)
 	replyTo := func(b []byte) error {
-		_, wErr := conn.Write(b)
-		return wErr
+		if _, err := conn.Write(b); err != nil {
+			return err
+		}
+		if len(b) == 3 && b[0] == iac && b[1] == will && b[2] == optNAWS {
+			cols, rows := termSize.get()
+			_, err := conn.Write(encodeNAWS(cols, rows))
+			return err
+		}
+		return nil
 	}
 	_ = sendClientNegotiation(conn)
 	loginAuto := NewLoginAutomater(username, password)
+	if loginAuto != nil && telnetWakeOnConnect() {
+		_, _ = conn.Write([]byte{'\r'})
+	}
 
 	stdinCh := make(chan []byte, 256)
 	var clientMu sync.Mutex
 	var client attachableWriter
+
+	tryResize := func(cols, rows int) {
+		if termSize.set(cols, rows) {
+			c, r := termSize.get()
+			_, _ = conn.Write(encodeNAWS(c, r))
+		}
+	}
 
 	go func() {
 		for {
@@ -121,6 +147,18 @@ func RunBridgeDetachable(
 		}
 	}()
 
+	handleResizeMessage := func(msg []byte) bool {
+		if len(msg) == 0 || msg[0] != '{' || !strings.Contains(string(msg), `"type":"resize"`) {
+			return false
+		}
+		var rm resizeMsg
+		if json.Unmarshal(msg, &rm) != nil || rm.Type != "resize" || rm.Cols <= 0 || rm.Rows <= 0 {
+			return false
+		}
+		tryResize(rm.Cols, rm.Rows)
+		return true
+	}
+
 	attachWebSocket := func(wsConn *websocket.Conn) {
 		clientMu.Lock()
 		if client != nil {
@@ -133,6 +171,8 @@ func RunBridgeDetachable(
 		if len(replay) > 0 {
 			_ = wsConn.WriteMessage(websocket.BinaryMessage, replay)
 		}
+		cols, rows := termSize.get()
+		_, _ = conn.Write(encodeNAWS(cols, rows))
 		go func(adapter *wsWriterAdapter) {
 			defer func() {
 				clientMu.Lock()
@@ -154,7 +194,7 @@ func RunBridgeDetachable(
 				if touch != nil {
 					touch()
 				}
-				if mt == websocket.TextMessage && len(msg) > 0 && msg[0] == '{' && strings.Contains(string(msg), `"type":"resize"`) {
+				if mt == websocket.TextMessage && handleResizeMessage(msg) {
 					continue
 				}
 				if isDataMessage(mt) {

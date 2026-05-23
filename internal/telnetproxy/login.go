@@ -28,15 +28,16 @@ func (l *LoginAutomater) OnOutput(chunk []byte, write func([]byte) error) {
 		l.tail = append([]byte(nil), l.tail[len(l.tail)-512:]...)
 	}
 	lower := bytes.ToLower(l.tail)
+	suffix := promptLineSuffix(lower)
 	switch l.state {
 	case 0:
-		if loginPromptSeen(lower) {
+		if loginPromptSeen(suffix) {
 			_ = write(append([]byte(l.username), '\r'))
 			l.state = 1
 			l.tail = l.tail[:0]
 		}
 	case 1:
-		if passwordPromptSeen(lower) {
+		if passwordPromptSeen(suffix) {
 			_ = write(append([]byte(l.password), '\r'))
 			l.state = 2
 			l.tail = l.tail[:0]
@@ -44,21 +45,32 @@ func (l *LoginAutomater) OnOutput(chunk []byte, write func([]byte) error) {
 	}
 }
 
-func loginPromptSeen(lower []byte) bool {
-	return bytes.Contains(lower, []byte("login:")) ||
-		bytes.Contains(lower, []byte("log in:")) ||
-		bytes.Contains(lower, []byte("username:")) ||
-		bytes.Contains(lower, []byte("user name:")) ||
-		bytes.Contains(lower, []byte("user:")) ||
-		bytes.Contains(lower, []byte("account:")) ||
-		bytes.Contains(lower, []byte("sername:")) ||
-		bytes.Contains(lower, []byte("ログイン")) ||
-		bytes.Contains(lower, []byte("ユーザ"))
+// promptLineSuffix returns the current line tail (after last CR/LF) for prompt matching.
+func promptLineSuffix(lower []byte) []byte {
+	idx := bytes.LastIndexAny(lower, "\r\n")
+	if idx >= 0 && idx+1 < len(lower) {
+		return lower[idx+1:]
+	}
+	return lower
 }
 
-func passwordPromptSeen(lower []byte) bool {
-	return bytes.Contains(lower, []byte("password:")) ||
-		bytes.Contains(lower, []byte("passwort:")) ||
-		bytes.Contains(lower, []byte("passwd:")) ||
-		bytes.Contains(lower, []byte("パスワード"))
+func loginPromptSeen(suffix []byte) bool {
+	s := bytes.TrimSpace(suffix)
+	return bytes.Contains(s, []byte("login:")) ||
+		bytes.Contains(s, []byte("log in:")) ||
+		bytes.Contains(s, []byte("username:")) ||
+		bytes.Contains(s, []byte("user name:")) ||
+		bytes.Contains(s, []byte("account:")) ||
+		bytes.Contains(s, []byte("account name:")) ||
+		bytes.Contains(s, []byte("user access verification")) ||
+		bytes.Contains(s, []byte("ログイン")) ||
+		bytes.Contains(s, []byte("ユーザ"))
+}
+
+func passwordPromptSeen(suffix []byte) bool {
+	s := bytes.TrimSpace(suffix)
+	return bytes.Contains(s, []byte("password:")) ||
+		bytes.Contains(s, []byte("passwort:")) ||
+		bytes.Contains(s, []byte("passwd:")) ||
+		bytes.Contains(s, []byte("パスワード"))
 }

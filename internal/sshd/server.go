@@ -353,6 +353,28 @@ func isCLITerminalProtocol(p access.Protocol) bool {
 	return p == access.ProtocolSSH || p == access.ProtocolTelnet
 }
 
+// prepareCLIFrame draws the session status bar and starts resize forwarding for a target session.
+func (s *Server) prepareCLIFrame(wr io.Writer, screenCols, ptyRows int, targetName string, protocol access.Protocol, stopCh <-chan struct{}, resizeChan <-chan sshproxy.TerminalSize) (*cliSessionFrame, chan sshproxy.TerminalSize, error) {
+	frame := newCLISessionFrame(wr, screenCols, ptyRows)
+	bar := cliSessionBarState{
+		TargetName: targetName,
+		Protocol:   protocol,
+		Cols:       screenCols,
+	}
+	if err := frame.Enter(bar); err != nil {
+		return nil, nil, err
+	}
+	bridgeResize := make(chan sshproxy.TerminalSize, 8)
+	frame.SetOnResize(func(c, r int) {
+		select {
+		case bridgeResize <- sshproxy.TerminalSize{Cols: c, Rows: r}:
+		default:
+		}
+	})
+	go watchCLIResize(stopCh, resizeChan, frame)
+	return frame, bridgeResize, nil
+}
+
 // newCLIStreamAttach builds an attach handle for SSH or Telnet detachable bridges.
 func (s *Server) newCLIStreamAttach(protocol access.Protocol, wr io.Writer, inputCh <-chan byte, stopCh <-chan struct{}, readStarted *bool, readDone chan struct{}, closeFn func() error) interface{} {
 	writeFn := func(p []byte) error { _, e := wr.Write(p); return e }
@@ -752,10 +774,23 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			if t, err := s.targetStore.Get(ctx, access.TargetID(termSess.TargetID)); err == nil {
 				resumeProto = t.Protocol
 			}
-			streamAttach := s.newCLIStreamAttach(resumeProto, wr, inputCh, resumeStopCh, &resumeReadStarted, resumeDone, func() error { return channel.Close() })
+			targetName := termSess.TargetName
+			if targetName == "" {
+				targetName = "(unknown)"
+			}
+			frame, bridgeResize, err := s.prepareCLIFrame(wr, screenCols, ptyRows, targetName, resumeProto, resumeStopCh, resizeChan)
+			if err != nil {
+				setStatus(fmt.Sprintf("Error: %v", err))
+				continue
+			}
+			defer frame.Leave()
+			streamAttach := s.newCLIStreamAttach(resumeProto, frame.SessionWriter(), inputCh, resumeStopCh, &resumeReadStarted, resumeDone, func() error { return channel.Close() })
 			select {
 			case termSess.AttachCh <- session.AttachReq{Conn: streamAttach}:
-				prompt("\r\nAttached. Disconnect with Ctrl+C or close the connection.\r\n\r\n")
+				select {
+				case bridgeResize <- sshproxy.TerminalSize{Cols: frame.SessionCols(), Rows: frame.SessionRows()}:
+				default:
+				}
 				select {
 				case <-resumeDone:
 				case <-termSess.Done():
@@ -842,12 +877,21 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				prompt("\r\nConnecting to %s...\r\n", target.Name)
 			}
 
+			connectStopCh := make(chan struct{})
+			frame, bridgeResize, err := s.prepareCLIFrame(wr, screenCols, ptyRows, target.Name, target.Protocol, connectStopCh, resizeChan)
+			if err != nil {
+				setStatus(fmt.Sprintf("Error: %v", err))
+				continue
+			}
+			defer frame.Leave()
+
 			sessionID := session.ID(time.Now().UTC().Format(time.RFC3339Nano))
 			bridgeDone := make(chan struct{})
-			connectStopCh := make(chan struct{})
 			readDone := make(chan struct{})
 			var readStarted bool
 			var bridgeErr error
+			sessionCols := frame.SessionCols()
+			sessionRows := frame.SessionRows()
 			opts := session.StartOptions{
 				UserID:      userID,
 				TargetID:    string(target.ID),
@@ -858,7 +902,11 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			_, err = s.sessionManager.Start(sessionID, opts, func(bridgeCtx context.Context, sess *session.Session) {
 				defer close(bridgeDone)
 				touch := func() { s.sessionManager.Touch(sessionID) }
-				streamAttach := s.newCLIStreamAttach(target.Protocol, wr, inputCh, connectStopCh, &readStarted, readDone, func() error { return channel.Close() })
+				streamAttach := s.newCLIStreamAttach(target.Protocol, frame.SessionWriter(), inputCh, connectStopCh, &readStarted, readDone, func() error { return channel.Close() })
+				select {
+				case bridgeResize <- sshproxy.TerminalSize{Cols: sessionCols, Rows: sessionRows}:
+				default:
+				}
 				var tee io.Writer
 				var stdinRecorder sshproxy.StdinRecorder
 				if s.recordingDir != "" && s.recordingStore != nil {
@@ -897,9 +945,9 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 					if stdinRecorder != nil {
 						telStdin = telnetproxy.StdinRecorderFunc(stdinRecorder.RecordInput)
 					}
-					bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, streamAttach, touch, tee, telStdin, ptyCols, ptyRows)
+					bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, streamAttach, touch, tee, telStdin, sessionCols, sessionRows, bridgeResize)
 				default:
-					bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, ptyCols, ptyRows)
+					bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, sessionCols, sessionRows, bridgeResize)
 				}
 			})
 			if err != nil {

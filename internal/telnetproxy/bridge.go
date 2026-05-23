@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/session"
+	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
 
 type resizeMsg struct {
@@ -33,6 +34,7 @@ func RunBridgeDetachable(
 	tee io.Writer,
 	stdinRecorder StdinRecorder,
 	initialCols, initialRows int,
+	externalResize <-chan sshproxy.TerminalSize,
 ) error {
 	dialer := net.Dialer{Timeout: 15 * time.Second}
 	addr := net.JoinHostPort(host, portString(port))
@@ -63,6 +65,23 @@ func RunBridgeDetachable(
 
 	go b.runStdinPump()
 	go b.runOutputPump()
+	if externalResize != nil {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case sz, ok := <-externalResize:
+					if !ok {
+						return
+					}
+					if sz.Cols > 0 && sz.Rows > 0 {
+						b.tryResize(sz.Cols, sz.Rows)
+					}
+				}
+			}
+		}()
+	}
 
 	return b.runAttachLoop(initialConn, attachCh)
 }

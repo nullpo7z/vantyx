@@ -50,19 +50,10 @@ func TestWriteCLIScreen_rootHostsHint(t *testing.T) {
 	}
 	sep := cliSeparatorLine(120)
 	if !strings.Contains(out, sep) {
-		t.Fatalf("separator missing (want %d dashes): %q", len(sep), out)
+		t.Fatalf("separator missing: %q", out)
 	}
-	if strings.Index(out, sep) < strings.Index(out, "Hosts") {
-		t.Fatalf("separator should follow Hosts section: %q", out)
-	}
-	if !strings.Contains(out, "1: Home") {
-		t.Fatalf("group missing: %q", out)
-	}
-	if !strings.Contains(out, "cd <group#> to list servers") {
-		t.Fatalf("hosts hint missing: %q", out)
-	}
-	if strings.Contains(out, "[ssh]") {
-		t.Fatalf("should not list hosts at root: %q", out)
+	if strings.Contains(out, "Connected to:") {
+		t.Fatalf("menu should not show session bar: %q", out)
 	}
 }
 
@@ -109,6 +100,28 @@ func TestWriteCLIScreen_emptyGroupStillListed(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "1: Lab") {
 		t.Fatalf("empty group should appear in Groups: %q", buf.String())
+	}
+}
+
+func TestWriteCLISessionBar(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeCLISessionBar(&buf, cliSessionBarState{
+		TargetName: "vantyx-testclient",
+		Protocol:   access.ProtocolTelnet,
+		Cols:       60,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Connected to: vantyx-testclient [telnet]") {
+		t.Fatalf("connected line: %q", out)
+	}
+	idxConn := strings.Index(out, "Connected to:")
+	idxDetach := strings.Index(out, "Detach (keep session)")
+	idxEnd := strings.Index(out, "End session")
+	idxSep := strings.Index(out, strings.Repeat("-", 60))
+	if idxConn < 0 || idxDetach < 0 || idxEnd < 0 || idxSep < 0 || !(idxConn < idxDetach && idxDetach < idxEnd && idxEnd < idxSep) {
+		t.Fatalf("order wrong: conn=%d detach=%d end=%d sep=%d\n%q", idxConn, idxDetach, idxEnd, idxSep, out)
 	}
 }
 

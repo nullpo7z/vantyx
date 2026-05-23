@@ -1044,7 +1044,7 @@ func TestRunBridgeDetachable_WithEchoServer(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			err := RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", "", "", output, attachCh, wsConn, nil, nil, nil, 0, 0)
+			err := RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", "", "", output, attachCh, wsConn, nil, nil, nil, 0, 0, nil)
 			bridgeErrCh <- err
 		}()
 	}))
@@ -1123,7 +1123,7 @@ func TestRunBridgeDetachable_StreamAttach(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		bridgeErrCh <- RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", "", "", output, attachCh, nil, nil, nil, nil, 0, 0)
+		bridgeErrCh <- RunBridgeDetachable(ctx, "127.0.0.1", port, "test", "test", "", "", output, attachCh, nil, nil, nil, nil, 0, 0, nil)
 	}()
 
 	// Trigger attach so StreamAttach gets replay via WriteBinary

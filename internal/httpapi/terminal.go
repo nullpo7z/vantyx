@@ -751,11 +751,11 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		if stdinRecorder != nil {
 			telStdin = telnetproxy.StdinRecorderFunc(stdinRecorder.RecordInput)
 		}
-		bridgeErr = telnetproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, termSess.Output, termSess.AttachCh, conn, touch, tee, telStdin, cols, rows)
+		bridgeErr = telnetproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, termSess.Output, termSess.AttachCh, conn, touch, tee, telStdin, cols, rows, nil)
 		endReason = "telnet_session_closed"
 		endMsg = "session_ended: Telnet session closed"
 	default:
-		bridgeErr = sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, conn, touch, tee, stdinRecorder, cols, rows)
+		bridgeErr = sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, conn, touch, tee, stdinRecorder, cols, rows, nil)
 		endReason = "ssh_session_closed"
 		endMsg = "session_ended: SSH session closed"
 	}

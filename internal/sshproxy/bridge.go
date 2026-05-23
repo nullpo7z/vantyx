@@ -463,7 +463,7 @@ func (s *StreamAttach) Close() error {
 // Touch is called on client activity. If tee is non-nil, a copy of stdout/stderr is written to tee (e.g. asciinema file).
 // If stdinRecorder is non-nil, it is called when data is written to the target stdin. The bridge exits when ctx is done or SSH session closes.
 // initialCols and initialRows are the terminal size for the PTY (e.g. from client); 0 lets the factory use defaults.
-func RunBridgeDetachable(ctx context.Context, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, output *session.RingBuffer, attachCh <-chan session.AttachReq, initialConn interface{}, touch func(), tee io.Writer, stdinRecorder StdinRecorder, initialCols, initialRows int) error {
+func RunBridgeDetachable(ctx context.Context, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, output *session.RingBuffer, attachCh <-chan session.AttachReq, initialConn interface{}, touch func(), tee io.Writer, stdinRecorder StdinRecorder, initialCols, initialRows int, externalResize <-chan TerminalSize) error {
 	auth, err := AuthMethods(password, privateKeyPEM, keyPassphrase)
 	if err != nil {
 		return err
@@ -663,6 +663,24 @@ func RunBridgeDetachable(ctx context.Context, host string, port uint16, username
 
 	if initialConn != nil {
 		doAttach(initialConn)
+	}
+
+	if externalResize != nil && windowChange != nil {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case sz, ok := <-externalResize:
+					if !ok {
+						return
+					}
+					if sz.Cols > 0 && sz.Rows > 0 {
+						_ = windowChange(sz.Cols, sz.Rows)
+					}
+				}
+			}
+		}()
 	}
 
 	for {

@@ -11,6 +11,20 @@ import (
 
 const cliClearScreen = "\033[2J\033[H"
 
+func cliSessionDisconnectLines() []string {
+	return []string{
+		"Detach (keep session): close SSH to Vantyx, return to menu, then use \"resume\" to reattach",
+		"End session: run \"exit\" on the remote host, or press Ctrl+D at the shell prompt",
+	}
+}
+
+// cliSessionBarState is the compact status bar shown during a target session.
+type cliSessionBarState struct {
+	TargetName string
+	Protocol   access.Protocol
+	Cols       int
+}
+
 func cliSeparatorLine(cols int) string {
 	if cols < 1 {
 		cols = 80
@@ -87,26 +101,34 @@ func cliPWDPath(entries []cliGroupEntry, currentGroupIndex int) string {
 	return "/"
 }
 
-// writeCLIScreen renders PWD, Groups, and Hosts sections. extraLines are printed after Hosts.
-func writeCLIScreen(w io.Writer, st cliScreenState, extraLines []string) error {
+type cliScreenLayout struct {
+	lines []string
+}
+
+func buildCLISessionBarLayout(bar cliSessionBarState) cliScreenLayout {
+	lines := []string{fmt.Sprintf("Connected to: %s [%s]", bar.TargetName, bar.Protocol)}
+	lines = append(lines, cliSessionDisconnectLines()...)
+	lines = append(lines, cliSeparatorLine(bar.Cols))
+	return cliScreenLayout{lines: lines}
+}
+
+func countCLISessionBarLines(bar cliSessionBarState) int {
+	return buildCLISessionBarLayout(bar).lineCount()
+}
+
+func writeCLISessionBar(w io.Writer, bar cliSessionBarState) error {
+	return buildCLISessionBarLayout(bar).writeTo(w)
+}
+
+func buildCLIScreenLayout(st cliScreenState, extraLines []string) cliScreenLayout {
 	termCols := cliTermWidth(st.Cols)
 	numCols := cliNumColumns(termCols)
+	var lines []string
 
-	write := func(format string, args ...interface{}) error {
-		_, err := fmt.Fprintf(w, format, args...)
-		return err
-	}
-
-	if err := write("PWD: %s\r\n\r\n", cliPWDPath(st.Entries, st.CurrentGroupIndex)); err != nil {
-		return err
-	}
-	if err := write("Groups\r\n"); err != nil {
-		return err
-	}
+	lines = append(lines, "PWD: "+cliPWDPath(st.Entries, st.CurrentGroupIndex), "")
+	lines = append(lines, "Groups")
 	if len(st.Entries) == 0 {
-		if err := write("  (no groups assigned)\r\n"); err != nil {
-			return err
-		}
+		lines = append(lines, "  (no groups assigned)")
 	} else {
 		groupEntries := make([]string, len(st.Entries))
 		for i, e := range st.Entries {
@@ -116,48 +138,51 @@ func writeCLIScreen(w io.Writer, st cliScreenState, extraLines []string) error {
 			}
 			groupEntries[i] = formatCLIEntry(i+1, e.Group.Name, marker)
 		}
-		for _, line := range formatCLIColumns(groupEntries, numCols) {
-			if err := write("%s\r\n", line); err != nil {
-				return err
-			}
-		}
+		lines = append(lines, formatCLIColumns(groupEntries, numCols)...)
 	}
 
-	if err := write("\r\nHosts\r\n"); err != nil {
-		return err
-	}
+	lines = append(lines, "", "Hosts")
 	if st.CurrentGroupIndex < 1 || st.CurrentGroupIndex > len(st.Entries) {
-		if err := write("  (cd <group#> to list servers — e.g. cd 1)\r\n"); err != nil {
-			return err
-		}
+		lines = append(lines, "  (cd <group#> to list servers — e.g. cd 1)")
 	} else {
 		targets := st.Entries[st.CurrentGroupIndex-1].Targets
 		if len(targets) == 0 {
-			if err := write("  (no SSH/Telnet servers in this group)\r\n"); err != nil {
-				return err
-			}
+			lines = append(lines, "  (no SSH/Telnet servers in this group)")
 		} else {
 			hostEntries := make([]string, len(targets))
 			for i, t := range targets {
 				hostEntries[i] = formatCLIEntry(i+1, formatCLITargetLabel(t), "")
 			}
-			for _, line := range formatCLIColumns(hostEntries, numCols) {
-				if err := write("%s\r\n", line); err != nil {
-					return err
-				}
-			}
+			lines = append(lines, formatCLIColumns(hostEntries, numCols)...)
 		}
 	}
 
-	if err := write("\r\n%s\r\n", cliSeparatorLine(st.Cols)); err != nil {
-		return err
-	}
-	for _, line := range extraLines {
-		if err := write("%s\r\n", line); err != nil {
+	lines = append(lines, "", cliSeparatorLine(st.Cols))
+	lines = append(lines, extraLines...)
+	return cliScreenLayout{lines: lines}
+}
+
+func (l cliScreenLayout) lineCount() int {
+	return len(l.lines)
+}
+
+func (l cliScreenLayout) writeTo(w io.Writer) error {
+	for _, line := range l.lines {
+		if _, err := fmt.Fprintf(w, "%s\r\n", line); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// countCLIScreenLines returns the number of menu header lines (including separator).
+func countCLIScreenLines(st cliScreenState) int {
+	return buildCLIScreenLayout(st, nil).lineCount()
+}
+
+// writeCLIScreen renders PWD, Groups, Hosts, separator, optional extra lines (menu mode).
+func writeCLIScreen(w io.Writer, st cliScreenState, extraLines []string) error {
+	return buildCLIScreenLayout(st, extraLines).writeTo(w)
 }
 
 // formatCLIActiveSessionLines formats active session rows below the header.

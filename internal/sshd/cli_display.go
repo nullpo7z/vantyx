@@ -175,11 +175,6 @@ func (l cliScreenLayout) writeTo(w io.Writer) error {
 	return nil
 }
 
-// countCLIScreenLines returns the number of menu header lines (including separator).
-func countCLIScreenLines(st cliScreenState) int {
-	return buildCLIScreenLayout(st, nil).lineCount()
-}
-
 // writeCLIScreen renders PWD, Groups, Hosts, separator, optional extra lines (menu mode).
 func writeCLIScreen(w io.Writer, st cliScreenState, extraLines []string) error {
 	return buildCLIScreenLayout(st, extraLines).writeTo(w)

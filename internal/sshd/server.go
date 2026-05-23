@@ -783,7 +783,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				setStatus(fmt.Sprintf("Error: %v", err))
 				continue
 			}
-			defer frame.Leave()
+			defer func() { _ = frame.Leave() }()
 			streamAttach := s.newCLIStreamAttach(resumeProto, frame.SessionWriter(), inputCh, resumeStopCh, &resumeReadStarted, resumeDone, func() error { return channel.Close() })
 			select {
 			case termSess.AttachCh <- session.AttachReq{Conn: streamAttach}:
@@ -883,7 +883,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				setStatus(fmt.Sprintf("Error: %v", err))
 				continue
 			}
-			defer frame.Leave()
+			defer func() { _ = frame.Leave() }()
 
 			sessionID := session.ID(time.Now().UTC().Format(time.RFC3339Nano))
 			bridgeDone := make(chan struct{})

@@ -26,6 +26,7 @@ func clampTerminalSize(cols, rows int) (uint16, uint16) {
 	if rows > 65535 {
 		rows = 65535
 	}
+	// #nosec G115 -- cols and rows clamped to 1-65535 above
 	return uint16(cols), uint16(rows)
 }
 

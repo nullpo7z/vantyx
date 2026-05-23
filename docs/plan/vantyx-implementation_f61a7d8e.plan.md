@@ -4,19 +4,19 @@ overview: Vantyx 要件定義をもとに、Go + Tailwind ベースでアクセ�
 todos:
   - id: setup-backend-frontend-skeleton
     content: Go バックエンドと Tailwind ベースのフロントエンドの最小プロジェクト構成を作成する
-    status: pending
+    status: completed
   - id: design-auth-and-access-model
     content: ユーザー・ロール・ターゲット・アクセスグループの認証／認可モデルと DB スキーマを設計する
-    status: pending
+    status: completed
   - id: implement-ssh-telnet-session-manager
     content: SSH/Telnet 用の WebSocket プロキシとセッション永続化マネージャを実装する
-    status: pending
+    status: completed
   - id: add-asciinema-recording-and-log-storage
     content: Asciinema 形式でのターミナル録画とテキストログ保存・検索機能を追加する
-    status: pending
+    status: completed
   - id: implement-file-transfer-sftp-tftp
     content: SFTP/TFTP ファイル転送バックエンドとファイルマネージャー UI を実装する
-    status: pending
+    status: completed
   - id: implement-vnc-rdp-remote-desktop
     content: noVNC ベースの VNC プロキシと RDP ブリッジを実装する
     status: pending

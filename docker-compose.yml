@@ -1,0 +1,49 @@
+services:
+  vantyx:
+    build: .
+    ports:
+      - "80:8080"    # HTTP → HTTPS リダイレクト（無効化不可）
+      - "443:8443"   # HTTPS (TLS)
+      - "2222:2222"  # CLI SSH ゲートウェイ (Phase 2)
+      # TFTP: コンテナは nonroot のため 69 不可。ホスト 69 → コンテナ 6969。スイッチは 10.10.20.105 のまま（ホスト 69）
+      - "69:6969/udp"
+    environment:
+      # リダイレクト先のホスト（どちらか必須）。本番では FQDN を指定
+      - VANTYX_EXTERNAL_HOST=10.10.20.105
+      # サーバーIP/ホスト名でアクセスする場合は SAN を追加（証明書再生成が必要）
+      # 例: VANTYX_TLS_SANS=192.168.1.10,vantyx.example.com
+      - VANTYX_TLS_SANS=10.10.20.105
+      # CLI アクセス: ssh -p 2222 admin@<host>
+      - VANTYX_SSH_LISTEN=:2222
+      # DB をボリュームに保存（未設定時は data/vantyx.db）
+      - VANTYX_SQLITE_PATH=/app/data/vantyx.db
+      # ターミナル録画（Asciinema）を有効にする場合に指定。未設定時は録画しない。
+      - VANTYX_RECORDINGS_DIR=/app/recordings
+      # サーバー登録で SSH パスワードを保存する場合に必須（AES-256-GCM 用、32 バイトを Base64 にした値）。未設定時はパスワード保存で 503。
+      # 生成: openssl rand -base64 32。本番では .env に記載して env_file で読み込むか、シークレット管理を推奨。
+      - VANTYX_SSH_PASSWORD_ENCRYPTION_KEY=${VANTYX_SSH_PASSWORD_ENCRYPTION_KEY:-}
+      # TFTP: コンテナは nonroot のため 69 不可。6969 で listen し、上記 69:6969/udp でホスト 69 に届く。
+      - VANTYX_TFTP_LISTEN=0.0.0.0:6969
+      # 監査ログ（永続化 + 外部転送）
+      # - VANTYX_AUDIT_LOG_FILE=/app/data/audit.log
+      # SIEM(Syslog)へ転送する場合:
+      # - VANTYX_AUDIT_FORWARD_ADDR=siem.example.com:514
+      # - VANTYX_AUDIT_FORWARD_PROTO=udp   # udp|tcp|unix|unixgram
+      # - VANTYX_AUDIT_FORWARD_APP=vantyx
+      # - VANTYX_AUDIT_FORWARD_BUFFER=2000
+      # ローカル syslog(/dev/log) に流す場合:
+      # - VANTYX_AUDIT_FORWARD_PROTO=unixgram
+      # - VANTYX_AUDIT_FORWARD_ADDR=/dev/log
+    env_file:
+      - .env
+    volumes:
+      - /path/to/vantyx/certs:/app/certs
+      - /path/to/vantyx/data:/app/data
+      - /path/to/vantyx/recordings:/app/recordings
+    # ホストの実パスにデータを置く場合: docker-compose.hostpath.example.yml を参照し
+    # docker-compose.override.yml で volumes を差し替え（例: /path/to/vantyx/data:/app/data）
+
+volumes:
+  vantyx_certs:
+  vantyx_data:
+  vantyx_recordings:

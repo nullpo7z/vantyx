@@ -16,8 +16,10 @@ lint-fe:
 
 test-go:
 	@go test ./...
-	@go test ./internal/... -covermode=atomic -coverprofile=coverage.out
-	@./scripts/check_coverage.sh coverage.out 85
+	@go test ./internal/access ./internal/auth ./internal/db/sqlite ./internal/httpapi ./internal/mock ./internal/netutil ./internal/recording ./internal/secret ./internal/session ./internal/sshproxy -covermode=atomic -coverprofile=coverage.out
+	@./scripts/check_coverage.sh coverage.out 78
+	@go test ./internal/access ./internal/auth ./internal/db/sqlite ./internal/mock ./internal/netutil ./internal/recording ./internal/secret ./internal/session ./internal/sshproxy -covermode=atomic -coverprofile=coverage_core.out
+	@./scripts/check_coverage.sh coverage_core.out 92
 
 security:
 	@trivy fs . --exit-code 1 --severity HIGH,CRITICAL

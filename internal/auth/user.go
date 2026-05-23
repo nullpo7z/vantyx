@@ -2,7 +2,15 @@ package auth
 
 import (
 	"errors"
-	"sync"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+)
+
+// Role constants.
+const (
+	RoleAdmin = "admin"
+	RoleUser  = "user"
 )
 
 // User represents a local Vantyx user.
@@ -10,82 +18,37 @@ type User struct {
 	ID           string
 	Username     string
 	PasswordHash string
+	Role         string // RoleAdmin or RoleUser
 }
 
-// InMemoryUserStore is a simple thread-safe user store for initial Phase 1.
-type InMemoryUserStore struct {
-	mu     sync.RWMutex
-	byID   map[string]*User
-	byName map[string]*User
+// UserSSHKey is a stored SSH public key for vantyx SSH server (public key auth).
+type UserSSHKey struct {
+	ID        int64
+	UserID    string
+	KeyLine   string // one line in authorized_keys format (e.g. "ssh-ed25519 AAAA... comment")
+	CreatedAt time.Time
+}
+
+// UserStore defines the behavior required for managing users.
+type UserStore interface {
+	CreateUser(id, username, plainPassword, role string) (*User, error)
+	Authenticate(username, plainPassword string) (*User, error)
+	AuthenticateByPublicKey(username string, key ssh.PublicKey) (*User, error)
+	GetByID(id string) (*User, error)
+	ListUsers(limit, offset int) ([]*User, error)
+	TagsForUser(userID string) ([]string, error)
+	SetUserTags(userID string, tags []string) error
+	UpdatePassword(userID, currentPlain, newPlain string) error
+	AddPublicKey(userID, keyLine string) (int64, error)
+	ListPublicKeys(userID string) ([]UserSSHKey, error)
+	DeletePublicKey(userID string, keyID int64) error
 }
 
 var (
-	ErrUserExists    = errors.New("user already exists")
-	ErrUserNotFound  = errors.New("user not found")
-	ErrInvalidSecret = errors.New("invalid credentials")
+	ErrUserExists        = errors.New("user already exists")
+	ErrUserNotFound      = errors.New("user not found")
+	ErrInvalidSecret     = errors.New("invalid credentials")
+	ErrWrongPassword     = errors.New("current password is wrong")
+	ErrPasswordUnchanged = errors.New("new password must differ from current")
+	ErrInvalidPublicKey  = errors.New("invalid SSH public key")
 )
-
-// NewInMemoryUserStore creates an empty user store.
-func NewInMemoryUserStore() *InMemoryUserStore {
-	return &InMemoryUserStore{
-		byID:   make(map[string]*User),
-		byName: make(map[string]*User),
-	}
-}
-
-// CreateUser inserts a new user with hashed password.
-func (s *InMemoryUserStore) CreateUser(id, username, plainPassword string) (*User, error) {
-	if id == "" || username == "" {
-		return nil, errors.New("id and username must not be empty")
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, ok := s.byID[id]; ok {
-		return nil, ErrUserExists
-	}
-	if _, ok := s.byName[username]; ok {
-		return nil, ErrUserExists
-	}
-
-	hash, err := HashPassword(plainPassword)
-	if err != nil {
-		return nil, err
-	}
-
-	u := &User{
-		ID:           id,
-		Username:     username,
-		PasswordHash: hash,
-	}
-	s.byID[id] = u
-	s.byName[username] = u
-	return u, nil
-}
-
-// Authenticate verifies username/password and returns the user on success.
-func (s *InMemoryUserStore) Authenticate(username, plainPassword string) (*User, error) {
-	s.mu.RLock()
-	u, ok := s.byName[username]
-	s.mu.RUnlock()
-	if !ok {
-		return nil, ErrInvalidSecret
-	}
-	if !VerifyPassword(u.PasswordHash, plainPassword) {
-		return nil, ErrInvalidSecret
-	}
-	return u, nil
-}
-
-// GetByID returns a user by ID.
-func (s *InMemoryUserStore) GetByID(id string) (*User, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	u, ok := s.byID[id]
-	if !ok {
-		return nil, ErrUserNotFound
-	}
-	return u, nil
-}

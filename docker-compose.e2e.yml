@@ -1,0 +1,24 @@
+# E2E テスト用: サーバーを Docker で起動し、Playwright から https://localhost:18443 でアクセスする
+# 本番と同様に SQLite ファイル（e2e/test-data/e2e.db）を使用。run-e2e-with-docker.sh で毎回削除してフレッシュな DB で実行。
+# 実行: ./scripts/run-e2e-with-docker.sh（推奨）または docker compose -f docker-compose.e2e.yml up -d
+services:
+  vantyx:
+    build: .
+    ports:
+      - "18443:18443"   # HTTPS (E2E_BASE_URL)
+      - "18080:18080"   # HTTP → HTTPS リダイレクト
+    environment:
+      - VANTYX_EXTERNAL_HOST=localhost
+      - VANTYX_HTTPS_ADDR=:18443
+      - VANTYX_HTTP_REDIRECT_ADDR=:18080
+      - VANTYX_SQLITE_PATH=/app/data/e2e.db
+      - VANTYX_TLS_CERT_FILE=/app/certs/tls.crt
+      - VANTYX_TLS_KEY_FILE=/app/certs/tls.key
+      # E2E: SSH パスワード保存（暗号化）を有効化するため固定キーを設定
+      # 32 bytes base64 ("0123456789abcdef0123456789abcdef")
+      - VANTYX_SSH_PASSWORD_ENCRYPTION_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      # E2E は各テストでログインするためレート制限を緩和
+      - VANTYX_LOGIN_RATE_LIMIT_N=200
+    volumes:
+      - ./e2e/certs:/app/certs
+      - ./e2e/test-data:/app/data

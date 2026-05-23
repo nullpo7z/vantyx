@@ -12,7 +12,7 @@ func TestManager_StartAndStopSession(t *testing.T) {
 
 	var ran atomic.Bool
 
-	sess, err := m.Start("s1", func(ctx context.Context) {
+	sess, err := m.Start("s1", StartOptions{}, func(ctx context.Context, _ *Session) {
 		ran.Store(true)
 		<-ctx.Done()
 	})
@@ -21,6 +21,22 @@ func TestManager_StartAndStopSession(t *testing.T) {
 	}
 	if sess == nil {
 		t.Fatalf("expected non-nil session")
+	}
+
+	// Cover Get, ID, CreatedAt
+	if got := sess.ID(); got != "s1" {
+		t.Fatalf("sess.ID() = %q, want s1", got)
+	}
+	if sess.CreatedAt().IsZero() {
+		t.Fatalf("expected CreatedAt to be set")
+	}
+	gotSess, ok := m.Get("s1")
+	if !ok || gotSess != sess {
+		t.Fatalf("Get(s1) = %v, %v; want sess, true", gotSess, ok)
+	}
+	_, ok = m.Get("nonexistent")
+	if ok {
+		t.Fatalf("Get(nonexistent) should return false")
 	}
 
 	if got := len(m.ActiveIDs()); got != 1 {
@@ -40,12 +56,12 @@ func TestManager_StartAndStopSession(t *testing.T) {
 func TestManager_StartDuplicateSessionFails(t *testing.T) {
 	m := NewManager()
 
-	_, err := m.Start("dup", func(ctx context.Context) {})
+	_, err := m.Start("dup", StartOptions{}, func(ctx context.Context, _ *Session) {})
 	if err != nil {
 		t.Fatalf("first Start returned error: %v", err)
 	}
 
-	if _, err := m.Start("dup", func(ctx context.Context) {}); err == nil {
+	if _, err := m.Start("dup", StartOptions{}, func(ctx context.Context, _ *Session) {}); err == nil {
 		t.Fatalf("expected error for duplicate session ID, got nil")
 	}
 }
@@ -55,7 +71,7 @@ func TestManager_TouchUpdatesLastSeen(t *testing.T) {
 	now := time.Now()
 	m.now = func() time.Time { return now }
 
-	sess, err := m.Start("touch", func(ctx context.Context) {
+	sess, err := m.Start("touch", StartOptions{}, func(ctx context.Context, _ *Session) {
 		<-ctx.Done()
 	})
 	if err != nil {
@@ -76,4 +92,13 @@ func TestManager_TouchUpdatesLastSeen(t *testing.T) {
 	}
 
 	m.Stop("touch")
+}
+
+func TestManager_StopUnknownIDNoOp(t *testing.T) {
+	m := NewManager()
+	// Stop with non-existent ID must not block or panic.
+	m.Stop("nonexistent")
+	if n := len(m.ActiveIDs()); n != 0 {
+		t.Fatalf("expected 0 active sessions, got %d", n)
+	}
 }

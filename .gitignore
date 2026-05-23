@@ -1,0 +1,78 @@
+# Binaries and build artifacts
+/vantyx
+/vantyx-server
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test and coverage
+*.test
+coverage.out
+coverage.html
+*.cover
+*.prof
+
+# Go workspace / vendor
+/vendor/
+go.work
+go.work.sum
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SQLite DB (default path when VANTYX_SQLITE_PATH is unset)
+/data/
+cmd/vantyx-server/data/
+
+# Local env and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Frontend (if present)
+/web/node_modules/
+/web/dist/
+/web/.cache/
+/web/npm-debug.log*
+/web/yarn-debug.log*
+/web/yarn-error.log*
+
+# Misc
+*.log
+/tmp/
+/dist/
+
+# Local coverage files
+coverage-*.out
+coverage_*.out
+cov_*.out
+coverage-*.html
+
+# Recording exports
+*.webm
+
+# E2E
+/e2e/node_modules/
+/e2e/certs/
+/e2e/test-data/
+/e2e/playwright-report/
+/e2e/test-results/
+/e2e/blob-report/
+/e2e/package-lock.json
+
+# Playwright artifacts (repo root)
+/test-results/
+/playwright-report/
+/blob-report/

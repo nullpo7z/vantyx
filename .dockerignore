@@ -1,0 +1,30 @@
+# Git and IDE
+.git
+.idea
+.vscode
+
+# Test and coverage (not needed in image)
+*.test
+coverage.out
+coverage.html
+.coverage
+
+# Frontend dev (built in container)
+web/node_modules
+web/dist
+web/.cache
+
+# Docs and plans (optional; docs/api は OpenAPI embed のためビルドに必要)
+*.md
+!web/README.md
+
+# CI and config (optional)
+.github
+configs
+scripts
+!scripts/docker-entrypoint.sh
+
+# Misc
+*.log
+.env
+.env.*

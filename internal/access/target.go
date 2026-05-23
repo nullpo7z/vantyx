@@ -1,8 +1,8 @@
 package access
 
 import (
+	"context"
 	"errors"
-	"sync"
 )
 
 // Protocol is the connection protocol for a target.
@@ -11,86 +11,51 @@ type Protocol string
 const (
 	ProtocolSSH    Protocol = "ssh"
 	ProtocolTelnet Protocol = "telnet"
+	ProtocolVNC    Protocol = "vnc"
+	ProtocolFTP    Protocol = "ftp"
+	ProtocolTFTP   Protocol = "tftp"
+	ProtocolRDP    Protocol = "rdp"
 )
 
 // Target represents a device that users can connect to via SSH or Telnet.
 type Target struct {
-	ID       string
+	ID       TargetID
 	Name     string
 	Host     string
 	Port     uint16
 	Protocol Protocol
+	// Path is an optional hierarchical folder path (e.g. "prod/network").
+	// Empty means root.
+	Path string
+	// SSH credentials (optional). Stored when registering the server.
+	SSHUsername string
+	SSHPassword string
+	// SSH public key auth: PEM-encoded private key and optional passphrase. Encrypted at rest like SSHPassword.
+	SSHPrivateKey           string
+	SSHPrivateKeyPassphrase string
+	// File transfer protocol toggles (for SSH/telnet: SFTP/FTP/TFTP の「ファイル転送で使用するプロトコル」の有効・無効). Stored in DB.
+	SFTPEnabled bool
+	FTPEnabled  bool
+	TFTPEnabled bool
 }
 
-// InMemoryTargetStore is a thread-safe in-memory store for targets.
-type InMemoryTargetStore struct {
-	mu   sync.RWMutex
-	byID map[string]*Target
+// TargetStore defines the behavior required for managing targets.
+type TargetStore interface {
+	Create(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol) (*Target, error)
+	CreateWithPath(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, groupID GroupID, path string, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string, sftpEnabled, ftpEnabled, tftpEnabled bool) (*Target, error)
+	Get(ctx context.Context, id TargetID) (*Target, error)
+	Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string, sftpEnabled, ftpEnabled, tftpEnabled bool) (*Target, error)
+	Delete(ctx context.Context, id TargetID) error
+	ListByIDs(ctx context.Context, ids []TargetID, opts *ListOpts) ([]*Target, error)
+	// ListByProtocol returns targets for the given protocol (e.g. TFTP). Credentials are not populated.
+	ListByProtocol(ctx context.Context, protocol Protocol) ([]*Target, error)
+	// Tags: ターゲットに付与されたタグ。ユーザーが同じタグを持つとアクセス可能。
+	TagsForTarget(ctx context.Context, targetID TargetID) ([]string, error)
+	SetTargetTags(ctx context.Context, targetID TargetID, tags []string) error
 }
 
 var (
-	ErrTargetExists   = errors.New("target already exists")
-	ErrTargetNotFound = errors.New("target not found")
+	ErrTargetExists          = errors.New("target already exists")
+	ErrTargetNotFound        = errors.New("target not found")
+	ErrEncryptionKeyRequired = errors.New("SSH password encryption key not configured (set VANTYX_SSH_PASSWORD_ENCRYPTION_KEY); required by ASVS L2 for sensitive data at rest")
 )
-
-// NewInMemoryTargetStore creates an empty target store.
-func NewInMemoryTargetStore() *InMemoryTargetStore {
-	return &InMemoryTargetStore{
-		byID: make(map[string]*Target),
-	}
-}
-
-// Create inserts a new target.
-func (s *InMemoryTargetStore) Create(id, name, host string, port uint16, protocol Protocol) (*Target, error) {
-	if id == "" || name == "" || host == "" {
-		return nil, errors.New("id, name and host must not be empty")
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, ok := s.byID[id]; ok {
-		return nil, ErrTargetExists
-	}
-
-	t := &Target{
-		ID:       id,
-		Name:     name,
-		Host:     host,
-		Port:     port,
-		Protocol: protocol,
-	}
-	s.byID[id] = t
-	return t, nil
-}
-
-// Get returns a target by ID.
-func (s *InMemoryTargetStore) Get(id string) (*Target, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	t, ok := s.byID[id]
-	if !ok {
-		return nil, ErrTargetNotFound
-	}
-	return t, nil
-}
-
-// ListByIDs returns targets for the given IDs; missing IDs are skipped.
-func (s *InMemoryTargetStore) ListByIDs(ids []string) []*Target {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var out []*Target
-	seen := make(map[string]bool)
-	for _, id := range ids {
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-		if t, ok := s.byID[id]; ok {
-			out = append(out, t)
-		}
-	}
-	return out
-}

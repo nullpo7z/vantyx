@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+/* xterm.js container */
+#terminal-container {
+  @apply h-full w-full min-h-[320px] p-2 bg-slate-900 rounded;
+}
+#terminal-container .xterm {
+  padding: 8px;
+}

@@ -114,13 +114,13 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
                 data-files-disabled="${showFileBtn ? '0' : '1'}"
               >ファイル</button>
               ${
-                t.protocol === 'ssh'
+                t.protocol === 'ssh' || t.protocol === 'telnet'
                   ? `<button type="button" data-terminal-target-id="${escapeHtml(
                       t.id,
-                    )}" data-terminal-target-name="${escapeHtml(t.name || '')}" data-has-stored-credentials="${
+                    )}" data-terminal-protocol="${escapeHtml(t.protocol)}" data-terminal-target-name="${escapeHtml(t.name || '')}" data-has-stored-credentials="${
                       t.has_stored_credentials ? '1' : ''
                     }" data-needs-password="${t.needs_password ? '1' : ''}" data-needs-passphrase="${
-                      t.needs_passphrase ? '1' : ''
+                      t.protocol === 'ssh' && t.needs_passphrase ? '1' : ''
                     }"
               class="connect-btn-in-group terminal-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50 w-[96px] text-center whitespace-nowrap">
               接続

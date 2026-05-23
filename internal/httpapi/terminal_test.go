@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/mock"
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
 	"github.com/nullpo7z/vantyx/internal/session"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
@@ -243,22 +244,22 @@ func TestHandleSSHWebSocket_ForbiddenTarget(t *testing.T) {
 	}
 }
 
-func TestHandleSSHWebSocket_NonSSHTargetReturns501(t *testing.T) {
+func TestHandleSSHWebSocket_NonTerminalTargetReturns501(t *testing.T) {
 	app := newTestAppForTerminal(t)
 	router := app.NewRouter()
 
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("telnet1"), "Telnet Host", "127.0.0.1", 23, access.ProtocolTelnet, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
-	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("telnet1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("vnc1"), "VNC Host", "127.0.0.1", 5900, access.ProtocolVNC, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("vnc1"))
 
 	httpSess, err := app.SessionStore.Create("admin")
 	if err != nil {
 		t.Fatalf("Create session: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/ws/ssh?target_id=telnet1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/ws/ssh?target_id=vnc1", nil)
 	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -266,6 +267,79 @@ func TestHandleSSHWebSocket_NonSSHTargetReturns501(t *testing.T) {
 	if w.Code != http.StatusNotImplemented {
 		t.Fatalf("expected 501 Not Implemented, got %d", w.Code)
 	}
+}
+
+func TestHandleSSHWebSocket_TelnetTargetUpgrades(t *testing.T) {
+	echoSrv := mock.NewTelnetEchoServer()
+	if err := echoSrv.Start(); err != nil {
+		t.Fatalf("telnet echo start: %v", err)
+	}
+	defer echoSrv.Close()
+	port := echoSrv.Port()
+	if port == 0 {
+		t.Fatal("echo port is 0")
+	}
+
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("telnet1"), "Telnet Host", "127.0.0.1", port, access.ProtocolTelnet, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("telnet1"))
+
+	httpSess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+	defer srv.CloseClientConnections()
+
+	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=telnet1"}
+	header := http.Header{}
+	header.Set("Origin", "http://"+srv.Listener.Addr().String())
+	header.Add("Cookie", (&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"}).String())
+
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)
+	if err != nil {
+		t.Fatalf("WebSocket dial failed: %v", err)
+	}
+	defer conn.Close()
+
+	// #nosec G101 -- test-only dummy credentials for WebSocket Telnet test
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"username":"u","password":"p"}`)); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	ready := false
+	for i := 0; i < 10 && !ready; i++ {
+		mt, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read before ready: %v", err)
+		}
+		if mt == websocket.TextMessage && len(msg) > 0 && msg[0] == '{' {
+			ready = true
+		}
+	}
+	if !ready {
+		t.Fatal("did not receive session_id after telnet upgrade")
+	}
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("x")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, echo, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+	if string(echo) != "x" {
+		t.Fatalf("expected echo x, got %q", echo)
+	}
+	_ = conn.Close()
+	srv.CloseClientConnections()
 }
 
 func TestHandleSSHWebSocket_UpgradeFailsWithoutWebSocketRequest(t *testing.T) {

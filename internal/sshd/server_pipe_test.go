@@ -17,13 +17,14 @@ import (
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
+	"github.com/nullpo7z/vantyx/internal/mock"
 	"github.com/nullpo7z/vantyx/internal/session"
 )
 
 const testAdminPassword = "Admin123!"
 
-// setupServerWithTCPEmptyGroups creates a server where admin has no SSH targets (e.g. group has only telnet target).
-func setupServerWithTCPEmptyGroups(t *testing.T) (*Server, string, ssh.Signer) {
+// setupServerWithTCPTelnetOnly creates a server where the group has only a Telnet target.
+func setupServerWithTCPTelnetOnly(t *testing.T) (*Server, string, ssh.Signer) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "sshd_empty.db")
 	db, err := dbsqlite.Open(dbsqlite.Config{Path: dbPath})
@@ -40,7 +41,6 @@ func setupServerWithTCPEmptyGroups(t *testing.T) (*Server, string, ssh.Signer) {
 	ctx := context.Background()
 	_, _ = groupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = groupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	// Only telnet target -> no SSH targets -> loadGroupsWithSSHTargets returns empty
 	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "telnet1", "127.0.0.1", 23, access.ProtocolTelnet, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
 	_ = groupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 	mgr := session.NewManager()
@@ -352,10 +352,57 @@ func TestServer_Serve_ConnectUsagePrompt(t *testing.T) {
 	runSession(t, addr, signer, "connect", "list", "cd 1", "connect", "exit")
 }
 
-func TestServer_Serve_EmptyGroups(t *testing.T) {
-	_, addr, signer := setupServerWithTCPEmptyGroups(t)
-	// No SSH targets -> list/ls show "No groups or servers" or empty; cd triggers load, gets empty
+func TestServer_Serve_TelnetOnlyList(t *testing.T) {
+	_, addr, signer := setupServerWithTCPTelnetOnly(t)
 	runSession(t, addr, signer, "list", "ls", "cd", "exit")
+}
+
+func setupServerWithTCPTelnetEcho(t *testing.T, port uint16) (*Server, string, ssh.Signer) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "sshd_telnet.db")
+	db, err := dbsqlite.Open(dbsqlite.Config{Path: dbPath})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := dbsqlite.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	userStore := auth.NewSQLiteUserStore(db)
+	_, _ = userStore.CreateUser("admin", "admin", testAdminPassword, auth.RoleAdmin)
+	groupStore := access.NewSQLiteAccessGroupStore(db, nil)
+	targetStore := access.NewSQLiteTargetStore(db, nil, nil)
+	ctx := context.Background()
+	_, _ = groupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = groupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "telnet-echo", "127.0.0.1", port, access.ProtocolTelnet, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
+	_ = groupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+	mgr := session.NewManager()
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	signer, _ := ssh.NewSignerFromKey(key)
+	srv, err := NewServer(Config{
+		UserStore: userStore, TargetStore: targetStore, GroupStore: groupStore,
+		SessionManager: mgr, HostKey: signer,
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	go func() { _ = srv.Serve(ln) }()
+	return srv, ln.Addr().String(), signer
+}
+
+func TestServer_Serve_TelnetConnect(t *testing.T) {
+	echo := mock.NewTelnetEchoServer()
+	if err := echo.Start(); err != nil {
+		t.Fatalf("echo start: %v", err)
+	}
+	defer echo.Close()
+	port := echo.Port()
+	if port == 0 {
+		t.Fatal("echo port is 0")
+	}
+	_, addr, signer := setupServerWithTCPTelnetEcho(t, port)
+	runSession(t, addr, signer, "list", "connect 1 1", "", "", "user", "pass", "x", "exit")
 }
 
 // setupServerWithTCPNoCreds: one SSH target with no stored credentials (connect will prompt for user/pass).

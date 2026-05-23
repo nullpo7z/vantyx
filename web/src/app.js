@@ -976,13 +976,15 @@ export function renderApp(container) {
   /** 保存済み認証のターゲット用: 接続前にモーダルで不足情報を入力させる。
    * パスワード認証・パスフレーズ無しの公開鍵・パスフレーズありで登録済みの場合はセッション名と説明のみ。
    * パスワード未登録のときはパスワード欄、パスフレーズ未登録のときはパスフレーズ欄を表示する。 */
-  function showStoredCredentialModal(targetId, targetName, needsPassword, needsPassphrase) {
+  function showStoredCredentialModal(targetId, targetName, needsPassword, needsPassphrase, protocol = 'ssh') {
+    const isTelnet = protocol === 'telnet'
+    if (isTelnet) needsPassphrase = false
     const modal = document.getElementById('ssh-credential-modal')
     modal.classList.remove('hidden')
     const passwordBlock = needsPassword
       ? `
       <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード <span class="text-amber-600">（未登録のため入力してください）</span></label>
+        <label class="block text-xs font-medium text-slate-600 mb-1.5">${isTelnet ? 'Telnet' : 'SSH'} パスワード <span class="text-amber-600">（未登録のため入力してください）</span></label>
         <input type="password" id="ssh-cred-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
       </div>`
       : ''
@@ -1054,11 +1056,12 @@ export function renderApp(container) {
       const params = new URLSearchParams()
       params.set('target_id', targetId)
       params.set('target_name', targetName || '')
+      params.set('protocol', protocol)
       params.set('use_stored_credentials', '1')
       params.set('session_name', sessionName)
       params.set('session_description', sessionDesc)
       const token = randomToken()
-      pendingTerminalCreds[token] = { targetId, targetName, password: password || '', passphrase: passphrase || '', sessionName, sessionDesc, useStoredCredentials: true }
+      pendingTerminalCreds[token] = { targetId, targetName, protocol, password: password || '', passphrase: isTelnet ? '' : (passphrase || ''), sessionName, sessionDesc, useStoredCredentials: true }
       params.set('channel', token)
       openTerminalTabWithParent(`/terminal?${params.toString()}`)
 
@@ -1074,13 +1077,16 @@ export function renderApp(container) {
         const creds = pendingTerminalCreds[token]
         if (!creds) return
         try {
-          bc.postMessage({
+          const storedMsg = {
             type: 'stored_credentials',
             password: creds.password || '',
-            private_key_passphrase: creds.passphrase || '',
             name: creds.sessionName || '',
             description: creds.sessionDesc || '',
-          })
+          }
+          if (creds.protocol !== 'telnet' && creds.passphrase) {
+            storedMsg.private_key_passphrase = creds.passphrase
+          }
+          bc.postMessage(storedMsg)
         } finally {
           window.clearTimeout(timeoutId)
           try { bc.close() } catch { /* ignore */ }
@@ -1091,7 +1097,9 @@ export function renderApp(container) {
     })
   }
 
-  function showSSHCredentialModal(targetId, targetName) {
+  function showSSHCredentialModal(targetId, targetName, protocol = 'ssh') {
+    const isTelnet = protocol === 'telnet'
+    const authLabel = isTelnet ? 'Telnet' : 'SSH'
     const modal = document.getElementById('ssh-credential-modal')
     modal.classList.remove('hidden')
     modal.innerHTML = `
@@ -1105,17 +1113,17 @@ export function renderApp(container) {
             <div class="px-6 py-5 space-y-5">
               <p class="text-sm text-slate-600">接続に必要な情報を入力してください。入力後にコンソールを開きます。</p>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${authLabel} ユーザー名</label>
                 <input type="text" id="ssh-cred-username" autocomplete="username" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${authLabel} パスワード</label>
                 <input type="password" id="ssh-cred-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
               </div>
-              <div>
+              ${isTelnet ? '' : `<div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
                 <input type="password" id="ssh-cred-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="保存済み鍵が暗号化されている場合のみ" />
-              </div>
+              </div>`}
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">セッション名（任意）</label>
                 <input type="text" id="ssh-cred-session-name" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: 本番デプロイ用" />
@@ -1154,8 +1162,8 @@ export function renderApp(container) {
         return
       }
       const token = randomToken()
-      pendingTerminalCreds[token] = { targetId, targetName, username, password, passphrase, sessionName, sessionDesc }
-      const url = `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&channel=${encodeURIComponent(token)}`
+      pendingTerminalCreds[token] = { targetId, targetName, protocol, username, password, passphrase: isTelnet ? '' : passphrase, sessionName, sessionDesc }
+      const url = `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=${encodeURIComponent(protocol)}&channel=${encodeURIComponent(token)}`
       // NOTE: ターミナルの「戻る/セッション終了」で元タブに戻れるよう、opener を残す（noreferrer/noopener は付けない）
       openTerminalTabWithParent(url)
 
@@ -1171,14 +1179,17 @@ export function renderApp(container) {
         const creds = pendingTerminalCreds[token]
         if (!creds) return
         try {
-          bc.postMessage({
+          const credMsg = {
             type: 'credentials',
             username: creds.username,
             password: creds.password,
-            private_key_passphrase: creds.passphrase || '',
             name: creds.sessionName || '',
             description: creds.sessionDesc || '',
-          })
+          }
+          if (creds.protocol !== 'telnet' && creds.passphrase) {
+            credMsg.private_key_passphrase = creds.passphrase
+          }
+          bc.postMessage(credMsg)
         } finally {
           window.clearTimeout(timeoutId)
           try { bc.close() } catch { /* ignore */ }
@@ -1590,11 +1601,12 @@ export function renderApp(container) {
             e.preventDefault()
             const id = btn.dataset.terminalTargetId || ''
             const name = btn.dataset.terminalTargetName || ''
+            const protocol = btn.dataset.terminalProtocol || 'ssh'
             if (!id) return
             if (btn.dataset.hasStoredCredentials) {
-              showStoredCredentialModal(id, name, btn.dataset.needsPassword === '1', btn.dataset.needsPassphrase === '1')
+              showStoredCredentialModal(id, name, btn.dataset.needsPassword === '1', btn.dataset.needsPassphrase === '1', protocol)
             } else {
-              showSSHCredentialModal(id, name)
+              showSSHCredentialModal(id, name, protocol)
             }
           })
         })
@@ -1625,10 +1637,10 @@ export function renderApp(container) {
           })
         })
 
-        // 未対応プロトコル (telnet等) はアラート表示。
+        // 未対応プロトコル (tftp/ftp 等) はアラート表示。
         mainContent.querySelectorAll('.connect-btn-in-group:not(.terminal-open-btn):not(.vnc-open-btn):not([data-popup-protocol]):not(a)').forEach((btn) => {
           btn.addEventListener('click', () => {
-            alert('このターゲットは SSH / VNC / RDP のみ対応しています。')
+            alert('このターゲットは SSH / Telnet / VNC / RDP のみ対応しています。')
           })
         })
       }
@@ -1817,7 +1829,7 @@ export function renderApp(container) {
     const addTftpCheckbox = modal.querySelector('#add-target-enable-tftp')
     function syncAddAuthType() {
       const proto = addProtoSelect.value
-      if (proto === 'rdp') {
+      if (proto === 'rdp' || proto === 'telnet') {
         addPasswordWrap.classList.remove('hidden')
         addKeyWrap.classList.add('hidden')
         addPassphraseWrap.classList.add('hidden')
@@ -1831,11 +1843,19 @@ export function renderApp(container) {
     }
     function syncAddProtocol() {
       const proto = addProtoSelect.value
-      const hasCreds = proto === 'ssh' || proto === 'rdp' || proto === 'ftp'
+      const hasCreds = proto === 'ssh' || proto === 'telnet' || proto === 'rdp' || proto === 'ftp'
       addCredFields.style.display = hasCreds ? '' : 'none'
       addAuthTypeWrap.classList.toggle('hidden', proto !== 'ssh')
-      addUsernameLabel.textContent = proto === 'rdp' ? 'RDP ユーザー名（任意）' : proto === 'ftp' ? 'FTP ユーザー名（任意）' : 'SSH ユーザー名（任意）'
-      addPasswordLabel.textContent = proto === 'rdp' ? 'RDP パスワード（任意）' : proto === 'ftp' ? 'FTP パスワード（任意）' : 'SSH パスワード（任意）'
+      addUsernameLabel.textContent =
+        proto === 'telnet' ? 'Telnet ユーザー名（任意）'
+          : proto === 'rdp' ? 'RDP ユーザー名（任意）'
+            : proto === 'ftp' ? 'FTP ユーザー名（任意）'
+              : 'SSH ユーザー名（任意）'
+      addPasswordLabel.textContent =
+        proto === 'telnet' ? 'Telnet パスワード（任意）'
+          : proto === 'rdp' ? 'RDP パスワード（任意）'
+            : proto === 'ftp' ? 'FTP パスワード（任意）'
+              : 'SSH パスワード（任意）'
       addRdpResWrap.classList.toggle('hidden', proto !== 'rdp')
       const canEditFileProtocols = proto === 'ssh' || proto === 'telnet'
       addFileProtocolsWrap.classList.toggle('hidden', !canEditFileProtocols)
@@ -1879,7 +1899,7 @@ export function renderApp(container) {
       const ssh_username = modal.querySelector('#add-target-ssh-username').value.trim()
       const authType = protocol === 'ssh' ? (modal.querySelector('input[name="add-target-auth-type"]:checked')?.value || 'password') : 'password'
       const payload = { name, host, port, protocol, group_id, ssh_username }
-      if (protocol === 'rdp' || protocol === 'ftp' || authType === 'password') {
+      if (protocol === 'rdp' || protocol === 'ftp' || protocol === 'telnet' || authType === 'password') {
         const v = modal.querySelector('#add-target-ssh-password').value
         if (v !== '') payload.ssh_password = v
       }
@@ -2099,7 +2119,7 @@ export function renderApp(container) {
 
     function syncEditAuthType() {
       const proto = editProtoSelect.value
-      if (proto === 'rdp') {
+      if (proto === 'rdp' || proto === 'telnet') {
         editPasswordWrap.classList.remove('hidden')
         editKeyWrap.classList.add('hidden')
         editPassphraseWrap.classList.add('hidden')
@@ -2113,11 +2133,19 @@ export function renderApp(container) {
     }
     function syncEditProtocol() {
       const proto = editProtoSelect.value
-      const hasCreds = proto === 'ssh' || proto === 'rdp' || proto === 'ftp'
+      const hasCreds = proto === 'ssh' || proto === 'telnet' || proto === 'rdp' || proto === 'ftp'
       editCredFields.style.display = hasCreds ? '' : 'none'
       editAuthTypeWrap.classList.toggle('hidden', proto !== 'ssh')
-      editUsernameLabel.textContent = proto === 'rdp' ? 'RDP ユーザー名（任意）' : proto === 'ftp' ? 'FTP ユーザー名（任意）' : 'SSH ユーザー名（任意）'
-      editPasswordLabel.textContent = proto === 'rdp' ? 'RDP パスワード（任意）' : proto === 'ftp' ? 'FTP パスワード（任意）' : 'SSH パスワード（任意）'
+      editUsernameLabel.textContent =
+        proto === 'telnet' ? 'Telnet ユーザー名（任意）'
+          : proto === 'rdp' ? 'RDP ユーザー名（任意）'
+            : proto === 'ftp' ? 'FTP ユーザー名（任意）'
+              : 'SSH ユーザー名（任意）'
+      editPasswordLabel.textContent =
+        proto === 'telnet' ? 'Telnet パスワード（任意）'
+          : proto === 'rdp' ? 'RDP パスワード（任意）'
+            : proto === 'ftp' ? 'FTP パスワード（任意）'
+              : 'SSH パスワード（任意）'
       editRdpResWrap.classList.toggle('hidden', proto !== 'rdp')
       const canEditFileProtocols = proto === 'ssh' || proto === 'telnet'
       if (editFileProtocolsWrap) {
@@ -2192,7 +2220,7 @@ export function renderApp(container) {
       const authType = protocol === 'ssh' ? (modal.querySelector('input[name="edit-target-auth-type"]:checked')?.value || 'password') : 'password'
       const clearKeyChecked = modal.querySelector('#edit-target-clear-ssh-key') && modal.querySelector('#edit-target-clear-ssh-key').checked
       let ssh_password, ssh_private_key, ssh_private_key_passphrase
-      if (protocol === 'rdp' || authType === 'password') {
+      if (protocol === 'rdp' || protocol === 'telnet' || authType === 'password') {
         const pwVal = modal.querySelector('#edit-target-ssh-password').value
         ssh_password = pwVal === '' ? undefined : pwVal
       }

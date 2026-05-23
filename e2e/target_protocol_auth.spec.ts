@@ -82,4 +82,22 @@ test.describe('ターゲット編集: プロトコル・認証方式の表示切
     await page.getByRole('radio', { name: '公開鍵認証（パスフレーズあり）' }).check();
     await expect(page.locator('#edit-target-ssh-key-passphrase')).toBeVisible();
   });
+
+  test('Telnet選択時にユーザー名・パスワード欄が表示される', async ({ page }) => {
+    const groupName = uniq('e2e-telnet-creds');
+    await forceClick(page.locator('#btn-add-group'));
+    await page.getByLabel('名前').fill(groupName);
+    await forceClick(page.locator('#add-group-submit'));
+    await page.getByRole('heading', { name: 'サーバー管理グループを追加' }).waitFor({ state: 'hidden', timeout: 10000 });
+    await page.waitForTimeout(500);
+    await expect(groupInTree(page, groupName)).toBeVisible({ timeout: 30000 });
+    await forceClick(groupInTree(page, groupName));
+
+    await forceClick(page.locator('#btn-add-target-in-group'));
+    await page.locator('#add-target-protocol').selectOption('telnet');
+    await expect(page.locator('#add-target-ssh-username')).toBeVisible();
+    await expect(page.locator('#add-target-ssh-password')).toBeVisible();
+    await expect(page.getByText('Telnet ユーザー名（任意）')).toBeVisible();
+    await expect(page.getByText('公開鍵認証（パスフレーズなし）')).not.toBeVisible();
+  });
 });

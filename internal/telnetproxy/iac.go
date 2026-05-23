@@ -140,11 +140,11 @@ func filterIACBytes(b []byte, replyTo func([]byte) error) (out, rest []byte) {
 // encodeNAWS builds IAC SB NAWS width height IAC SE (RFC 1073, 16-bit big-endian each).
 func encodeNAWS(cols, rows uint16) []byte {
 	c, r := clampTerminalSize(int(cols), int(rows))
-	cols, rows = c, r
+	// #nosec G115 -- NAWS wire format: high/low bytes of clamped uint16 dimensions
 	return []byte{
 		iac, sb, optNAWS,
-		byte(cols >> 8), byte(cols),
-		byte(rows >> 8), byte(rows),
+		byte(c >> 8), byte(c),
+		byte(r >> 8), byte(r),
 		iac, se,
 	}
 }

@@ -383,7 +383,7 @@ type TerminalSessionItem struct {
 	TargetID    string    `json:"target_id"`
 	TargetName  string    `json:"target_name"`
 	TargetPath  string    `json:"target_path,omitempty"` // ターゲットの階層パス（例: prod/network）
-	Protocol    string    `json:"protocol"` // ターゲットのプロトコル（ssh / telnet 等）
+	Protocol    string    `json:"protocol"`              // ターゲットのプロトコル（ssh / telnet 等）
 	Name        string    `json:"name,omitempty"`
 	Description string    `json:"description,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`

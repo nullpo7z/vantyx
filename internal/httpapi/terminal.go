@@ -392,14 +392,6 @@ type TerminalSessionItem struct {
 	IdleSeconds int       `json:"idle_seconds,omitempty"`
 }
 
-// terminalIdleWarnAfter returns the configured idle warning threshold from the terminal session manager.
-func (a *App) terminalIdleWarnAfter() time.Duration {
-	if m, ok := a.TerminalSessionManager.(*session.Manager); ok {
-		return m.IdleWarnAfter()
-	}
-	return 0
-}
-
 func terminalSessionItemFrom(sess *session.Session, mgr *session.Manager, protocol access.Protocol, targetPath string) TerminalSessionItem {
 	item := TerminalSessionItem{
 		SessionID:   string(sess.ID()),

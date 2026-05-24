@@ -1,0 +1,394 @@
+import API from './api.js'
+
+/** Relative last-activity label for display. */
+export function formatLastSeen(value) {
+  if (!value) return '—'
+  const t = new Date(value).getTime()
+  if (Number.isNaN(t)) return '—'
+  const sec = Math.floor((Date.now() - t) / 1000)
+  if (sec < 60) return 'たった今'
+  if (sec < 3600) return `${Math.floor(sec / 60)}分前`
+  if (sec < 86400) return `${Math.floor(sec / 3600)}時間前`
+  return `${Math.floor(sec / 86400)}日前`
+}
+
+function sessionEndLabel(name, targetName, targetId) {
+  const title = (name || '').trim() || '(無題)'
+  const target = (targetName || '').trim() || targetId || ''
+  return target ? `${title}（${target}）` : title
+}
+
+function sessionEndModalContext(s, { kind = 'terminal' } = {}) {
+  const name =
+    kind === 'rdp'
+      ? (s.target_name || s.target_id || '').trim() || '(無題)'
+      : (s.name || '').trim() || '(無題)'
+  const fullPath = targetFullPathForDisplay(s)
+  const descRaw = sessionDescriptionForDisplay(s)
+  return {
+    name,
+    fullPath,
+    description: descRaw === '—' ? '' : descRaw,
+    label: sessionEndLabel(s.name || s.target_name, s.target_name, s.target_id),
+  }
+}
+
+function sessionEndButtonAttrs(s, escapeHtml, { kind = 'terminal' } = {}) {
+  const ctx = sessionEndModalContext(s, { kind })
+  return [
+    'data-session-end="1"',
+    `data-session-id="${escapeHtml(s.session_id)}"`,
+    `data-session-kind="${kind}"`,
+    `data-session-label="${escapeHtml(ctx.label)}"`,
+    `data-session-name="${escapeHtml(ctx.name)}"`,
+    `data-session-fullpath="${escapeHtml(ctx.fullPath)}"`,
+    `data-session-description="${escapeHtml(ctx.description)}"`,
+  ].join(' ')
+}
+
+function isTftpConsoleSession(s) {
+  return typeof s.description === 'string' && s.description.startsWith('TFTP_CONSOLE:')
+}
+
+function tftpTargetFromDescription(desc) {
+  if (!desc || !desc.startsWith('TFTP_CONSOLE:')) return ''
+  const m = desc.match(/tftp_target_id=([^;]+)/)
+  return m && m[1] ? m[1] : ''
+}
+
+/** 一覧の「種別」列用ラベル（SSH / Telnet / TFTP コンソール / RDP） */
+export function sessionProtocolLabel(s, { kind = 'terminal' } = {}) {
+  if (kind === 'rdp') return 'RDP'
+  if (isTftpConsoleSession(s)) return 'TFTP コンソール'
+  const p = String(s.protocol || '').toLowerCase()
+  if (p === 'ssh') return 'SSH'
+  if (p === 'telnet') return 'Telnet'
+  if (p === 'vnc') return 'VNC'
+  if (p === 'tftp') return 'TFTP'
+  if (p === 'rdp') return 'RDP'
+  if (s.protocol) return String(s.protocol).toUpperCase()
+  return '—'
+}
+
+/** ターゲットのフルパス（階層 path + 名前。例: prod/network/router1） */
+export function targetFullPathForDisplay(s) {
+  const name = (s.target_name || s.target_id || '').trim()
+  const path = (s.target_path || '').trim().replace(/\/+$/, '')
+  if (path && name) return `${path}/${name}`
+  if (path) return path
+  return name || '—'
+}
+
+/** ユーザー向け説明（TFTP 内部メタデータは表示しない） */
+export function sessionDescriptionForDisplay(s) {
+  if (!s.description) return '—'
+  if (isTftpConsoleSession(s)) return '—'
+  return s.description
+}
+
+const SESSIONS_CELL = 'px-4 py-3 align-middle'
+const SESSIONS_CELL_SHRINK = 'sessions-col-shrink px-2 py-3 align-middle text-sm'
+const SESSIONS_CELL_ACTIONS = 'sessions-col-actions px-2 py-3 align-middle'
+const SESSIONS_ACTION_BTNS =
+  'inline-flex flex-nowrap items-center justify-start gap-1.5 shrink-0'
+const SESSIONS_BTN =
+  'rounded px-2 py-1 text-xs font-medium whitespace-nowrap'
+
+function sessionTableRowClass(idle) {
+  return idle
+    ? 'border-b border-amber-200/80 bg-amber-50 hover:bg-amber-100/80'
+    : 'border-b border-slate-200 hover:bg-slate-50'
+}
+
+function sessionListItemClass(idle) {
+  return idle
+    ? 'flex items-start justify-between gap-3 py-2 px-3 rounded border border-amber-200 bg-amber-50 hover:bg-amber-100/80'
+    : 'flex items-start justify-between gap-3 py-2 px-3 rounded border border-slate-100 hover:bg-slate-50'
+}
+
+/**
+ * Renders session rows grouped by target (for modal). Returns HTML string.
+ */
+export function buildGroupedSessionListHTML(sessions, rdpSessions, escapeHtml) {
+  const parts = []
+  if (sessions.length > 0) {
+    const byTarget = {}
+    sessions.forEach((s) => {
+      const id = s.target_id
+      if (!byTarget[id]) byTarget[id] = []
+      byTarget[id].push(s)
+    })
+    const targetIds = Object.keys(byTarget).sort((a, b) => {
+      const na = targetFullPathForDisplay(byTarget[a][0])
+      const nb = targetFullPathForDisplay(byTarget[b][0])
+      return na.localeCompare(nb)
+    })
+    parts.push(
+      targetIds
+        .map((targetId) => {
+          const list = byTarget[targetId]
+          const fullPath = targetFullPathForDisplay(list[0])
+          const rows = list.map((s) => renderSessionRowHTML(s, escapeHtml, { compact: true })).join('')
+          return `<div class="mb-4"><h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2 font-mono normal-case">${escapeHtml(fullPath)}</h4><ul class="space-y-2">${rows}</ul></div>`
+        })
+        .join(''),
+    )
+  }
+  if (rdpSessions.length > 0) {
+    const rdpHtml = rdpSessions
+      .map((r) => {
+        const fullPath = escapeHtml(targetFullPathForDisplay(r))
+        const url = `/rdp?target_id=${encodeURIComponent(r.target_id)}&target_name=${encodeURIComponent(r.target_name || r.target_id)}&session_id=${encodeURIComponent(r.session_id)}`
+        const lastSeen = formatLastSeen(r.last_seen || r.created_at)
+        return `<li class="${sessionListItemClass(r.idle)}">
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-medium text-slate-800 font-mono break-all">${fullPath}</p>
+            <p class="text-xs text-slate-500 mt-0.5">RDP · 最終活動 ${escapeHtml(lastSeen)}</p>
+          </div>
+          <div class="flex flex-col gap-1 shrink-0 self-center">
+            <a href="${url}" target="_blank" rel="noopener noreferrer" data-rdp-reconnect="1" data-rdp-target-id="${escapeHtml(r.target_id)}" data-rdp-href="${escapeHtml(url)}" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 text-center">再接続</a>
+            <button type="button" ${sessionEndButtonAttrs(r, escapeHtml, { kind: 'rdp' })} class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">終了</button>
+          </div>
+        </li>`
+      })
+      .join('')
+    parts.push(`<div class="mb-4"><h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">RDP（ブラウザ）</h4><ul class="space-y-2">${rdpHtml}</ul></div>`)
+  }
+  return parts.join('')
+}
+
+function renderSessionRowHTML(s, escapeHtml, { compact = false }) {
+  const titleText = s.name ? escapeHtml(s.name) : '(無題)'
+  const descText = sessionDescriptionForDisplay(s)
+  const descHtml =
+    descText !== '—'
+      ? `<p class="text-sm text-slate-600 mt-1 break-words leading-normal">${escapeHtml(descText)}</p>`
+      : ''
+  const protoLabel = sessionProtocolLabel(s)
+  const lastSeen = formatLastSeen(s.last_seen || s.created_at)
+  const isTftp = isTftpConsoleSession(s)
+  const reconnectLabel = isTftp ? 'TFTP で再接続' : '再接続'
+  const tftpTargetId = isTftp ? tftpTargetFromDescription(s.description) : ''
+  const reconnectAttrs = isTftp
+    ? `data-terminal-reconnect="1" data-session-id="${escapeHtml(s.session_id)}" data-reconnect-mode="tftp" data-target-id="${escapeHtml(s.target_id)}" data-tftp-target-id="${escapeHtml(tftpTargetId)}"`
+    : `data-terminal-reconnect="1" data-session-id="${escapeHtml(s.session_id)}" data-target-id="${escapeHtml(s.target_id)}" data-target-name="${escapeHtml(s.target_name || '')}"`
+  const meta = compact
+    ? `<p class="text-sm text-slate-500 mt-1">${escapeHtml(protoLabel)} · 最終活動 ${escapeHtml(lastSeen)}</p>`
+    : ''
+  return `<li class="${sessionListItemClass(s.idle)}">
+    <div class="min-w-0 flex-1">
+      <p class="text-sm font-medium text-slate-800">${titleText}</p>
+      ${descHtml}
+      ${meta}
+    </div>
+    <div class="flex flex-col gap-1 shrink-0 self-center">
+      <button type="button" ${reconnectAttrs} class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700">${reconnectLabel}</button>
+      <button type="button" ${sessionEndButtonAttrs(s, escapeHtml, { kind: 'terminal' })} class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">終了</button>
+    </div>
+  </li>`
+}
+
+/**
+ * Table body rows for the full sessions page.
+ */
+export function buildSessionsTableHTML(sessions, rdpSessions, escapeHtml) {
+  const rows = []
+  sessions.forEach((s) => {
+    const titleText = s.name ? escapeHtml(s.name) : '(無題)'
+    const descText = sessionDescriptionForDisplay(s)
+    const descCell =
+      descText === '—'
+        ? '<span class="text-slate-400">—</span>'
+        : `<span class="break-words">${escapeHtml(descText)}</span>`
+    const isTftp = isTftpConsoleSession(s)
+    const tftpTargetId = isTftp ? tftpTargetFromDescription(s.description) : ''
+    const reconnectAttrs = isTftp
+      ? `data-terminal-reconnect="1" data-session-id="${escapeHtml(s.session_id)}" data-reconnect-mode="tftp" data-target-id="${escapeHtml(s.target_id)}" data-tftp-target-id="${escapeHtml(tftpTargetId)}"`
+      : `data-terminal-reconnect="1" data-session-id="${escapeHtml(s.session_id)}" data-target-id="${escapeHtml(s.target_id)}" data-target-name="${escapeHtml(s.target_name || '')}"`
+    rows.push(`<tr class="${sessionTableRowClass(s.idle)}">
+      <td class="${SESSIONS_CELL} text-sm font-medium text-slate-900 whitespace-nowrap">${titleText}</td>
+      <td class="${SESSIONS_CELL} text-sm text-slate-600 min-w-[8rem] max-w-md">${descCell}</td>
+      <td class="${SESSIONS_CELL} text-sm text-slate-700 break-all font-mono">${escapeHtml(targetFullPathForDisplay(s))}</td>
+      <td class="${SESSIONS_CELL_SHRINK} text-slate-800 font-medium">${escapeHtml(sessionProtocolLabel(s))}</td>
+      <td class="${SESSIONS_CELL_SHRINK} text-slate-600">${escapeHtml(formatLastSeen(s.last_seen || s.created_at))}</td>
+      <td class="${SESSIONS_CELL_ACTIONS}">
+        <div class="${SESSIONS_ACTION_BTNS}">
+          <button type="button" ${reconnectAttrs} class="${SESSIONS_BTN} bg-sky-600 text-white hover:bg-sky-700">再接続</button>
+          <button type="button" ${sessionEndButtonAttrs(s, escapeHtml, { kind: 'terminal' })} class="${SESSIONS_BTN} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">終了</button>
+        </div>
+      </td>
+    </tr>`)
+  })
+  rdpSessions.forEach((r) => {
+    const url = `/rdp?target_id=${encodeURIComponent(r.target_id)}&target_name=${encodeURIComponent(r.target_name || r.target_id)}&session_id=${encodeURIComponent(r.session_id)}`
+    rows.push(`<tr class="${sessionTableRowClass(r.idle)}">
+      <td class="${SESSIONS_CELL} text-sm font-medium text-slate-900 break-words">${escapeHtml(r.target_name || r.target_id)}</td>
+      <td class="${SESSIONS_CELL} text-sm text-slate-400">—</td>
+      <td class="${SESSIONS_CELL} text-sm text-slate-700 break-all font-mono">${escapeHtml(targetFullPathForDisplay(r))}</td>
+      <td class="${SESSIONS_CELL_SHRINK} text-slate-800 font-medium">RDP</td>
+      <td class="${SESSIONS_CELL_SHRINK} text-slate-600">${escapeHtml(formatLastSeen(r.last_seen || r.created_at))}</td>
+      <td class="${SESSIONS_CELL_ACTIONS}">
+        <div class="${SESSIONS_ACTION_BTNS}">
+          <a href="${url}" target="_blank" rel="noopener noreferrer" data-rdp-reconnect="1" data-rdp-target-id="${escapeHtml(r.target_id)}" data-rdp-href="${escapeHtml(url)}" class="${SESSIONS_BTN} bg-sky-600 text-white hover:bg-sky-700">再接続</a>
+          <button type="button" ${sessionEndButtonAttrs(r, escapeHtml, { kind: 'rdp' })} class="${SESSIONS_BTN} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">終了</button>
+        </div>
+      </td>
+    </tr>`)
+  })
+  return { body: rows.join('') }
+}
+
+export function countIdleSessions(sessions, rdpSessions) {
+  let n = 0
+  for (const s of sessions) {
+    if (s.idle) n++
+  }
+  for (const r of rdpSessions) {
+    if (r.idle) n++
+  }
+  return n
+}
+
+/** Confirmation modal before ending a session. */
+export function showSessionEndConfirmModal(
+  modalEl,
+  escapeHtml,
+  { kind, name, fullPath, description, label },
+  onConfirm,
+) {
+  if (!modalEl) return
+  const kindLabel = kind === 'rdp' ? 'RDP' : 'SSH / Telnet'
+  const displayName = (name || label || '').trim() || 'このセッション'
+  const displayPath = (fullPath || '').trim() || '—'
+  const displayDesc = (description || '').trim()
+  const descBlock = displayDesc
+    ? `<div>
+            <dt class="text-xs font-medium text-slate-500 mb-0.5">説明</dt>
+            <dd class="text-sm text-slate-800 break-words">${escapeHtml(displayDesc)}</dd>
+          </div>`
+    : ''
+  modalEl.classList.remove('hidden')
+  modalEl.innerHTML = `
+    <div id="session-end-backdrop" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50" role="dialog" aria-labelledby="session-end-title">
+        <div class="px-5 py-4 border-b border-slate-200 bg-slate-50">
+          <h3 id="session-end-title" class="font-semibold text-slate-800">セッションを終了</h3>
+        </div>
+        <div class="px-6 py-5">
+          <p class="text-sm text-slate-700">次の ${escapeHtml(kindLabel)} セッションを終了しますか？</p>
+          <dl class="mt-3 space-y-2.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+            <div>
+              <dt class="text-xs font-medium text-slate-500 mb-0.5">名前</dt>
+              <dd class="text-sm font-medium text-slate-900 break-words">${escapeHtml(displayName)}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-slate-500 mb-0.5">ターゲット</dt>
+              <dd class="text-sm text-slate-800 font-mono break-all">${escapeHtml(displayPath)}</dd>
+            </div>
+            ${descBlock}
+          </dl>
+          <p class="mt-3 text-xs text-slate-500">バックグラウンドの接続が切断され、一覧から削除されます。</p>
+        </div>
+        <div class="px-6 py-4 border-t border-slate-200 flex justify-end gap-2 bg-slate-50">
+          <button type="button" id="session-end-cancel" class="rounded border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">キャンセル</button>
+          <button type="button" id="session-end-confirm" class="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700">終了する</button>
+        </div>
+      </div>
+    </div>
+  `
+  const close = () => {
+    modalEl.classList.add('hidden')
+    modalEl.innerHTML = ''
+  }
+  modalEl.querySelector('#session-end-cancel')?.addEventListener('click', close)
+  modalEl.querySelector('#session-end-backdrop')?.addEventListener('click', (e) => {
+    if (e.target.id === 'session-end-backdrop') close()
+  })
+  modalEl.querySelector('#session-end-confirm')?.addEventListener('click', async () => {
+    const confirmBtn = modalEl.querySelector('#session-end-confirm')
+    if (confirmBtn) confirmBtn.disabled = true
+    try {
+      await onConfirm()
+      close()
+    } catch (err) {
+      alert(err.message || 'セッションの終了に失敗しました。')
+      if (confirmBtn) confirmBtn.disabled = false
+    }
+  })
+}
+
+/**
+ * Wire reconnect/end buttons inside container.
+ */
+export function bindSessionListActions(container, { openTerminalTab, getRdpResolutionForTarget, onEnded, escapeHtml, sessionEndModal }) {
+  if (!container) return
+  container.querySelectorAll('[data-terminal-reconnect]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sid = btn.getAttribute('data-session-id') || ''
+      if (!sid) return
+      const mode = btn.getAttribute('data-reconnect-mode') || ''
+      const targetId = btn.getAttribute('data-target-id') || ''
+      if (mode === 'tftp' && targetId) {
+        const tftpTargetId = btn.getAttribute('data-tftp-target-id') || ''
+        if (!tftpTargetId) {
+          alert('TFTP 用セッション情報を解析できませんでした。')
+          return
+        }
+        const name = `${targetId} (TFTP)`
+        const url = `/tftp-console?tftp_target_id=${encodeURIComponent(tftpTargetId)}&ssh_target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(name)}&session_id=${encodeURIComponent(sid)}`
+        openTerminalTab(url)
+        return
+      }
+      const targetName = btn.getAttribute('data-target-name') || ''
+      const params = new URLSearchParams()
+      if (targetId) params.set('target_id', targetId)
+      if (targetName) params.set('target_name', targetName)
+      params.set('session_id', sid)
+      openTerminalTab(`/terminal?${params.toString()}`)
+    })
+  })
+  container.querySelectorAll('[data-rdp-reconnect]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault()
+      const id = el.getAttribute('data-rdp-target-id') || ''
+      const href = el.getAttribute('data-rdp-href') || el.href
+      const u = new URL(href, window.location.origin)
+      if (getRdpResolutionForTarget) {
+        const { w, h } = getRdpResolutionForTarget(id)
+        if (w) u.searchParams.set('rw', String(w))
+        if (h) u.searchParams.set('rh', String(h))
+      }
+      openTerminalTab(u.toString())
+    })
+  })
+  container.querySelectorAll('[data-session-end]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sid = btn.getAttribute('data-session-id') || ''
+      const kind = btn.getAttribute('data-session-kind') || 'terminal'
+      const label = btn.getAttribute('data-session-label') || ''
+      if (!sid) return
+      const doEnd = async () => {
+        if (kind === 'rdp') {
+          await API.rdpSessionDelete(sid)
+        } else {
+          await API.terminalSessionDelete(sid)
+        }
+        if (typeof onEnded === 'function') onEnded()
+      }
+      if (sessionEndModal && typeof escapeHtml === 'function') {
+        showSessionEndConfirmModal(sessionEndModal, escapeHtml, {
+          kind,
+          name: btn.getAttribute('data-session-name') || '',
+          fullPath: btn.getAttribute('data-session-fullpath') || '',
+          description: btn.getAttribute('data-session-description') || '',
+          label,
+        }, doEnd)
+        return
+      }
+      if (!window.confirm('このセッションを終了しますか？')) return
+      doEnd().catch((err) => {
+        alert(err.message || 'セッションの終了に失敗しました。')
+      })
+    })
+  })
+}

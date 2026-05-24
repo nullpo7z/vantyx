@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -166,4 +167,27 @@ func (a *App) getSessionAndTargetWithAccess(w http.ResponseWriter, r *http.Reque
 		return "", nil, false
 	}
 	return userID, target, true
+}
+
+// allowedTargetIDSet returns target IDs the user may access via groups/tags.
+func (a *App) allowedTargetIDSet(ctx context.Context, userID string) (map[access.TargetID]struct{}, error) {
+	allowedIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[access.TargetID]struct{}, len(allowedIDs))
+	for _, id := range allowedIDs {
+		set[id] = struct{}{}
+	}
+	return set, nil
+}
+
+// userCanAccessTarget reports whether userID may access the given target.
+func (a *App) userCanAccessTarget(ctx context.Context, userID string, targetID access.TargetID) (bool, error) {
+	set, err := a.allowedTargetIDSet(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	_, ok := set[targetID]
+	return ok, nil
 }

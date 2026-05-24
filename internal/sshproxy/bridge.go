@@ -178,7 +178,7 @@ func AuthMethods(password, privateKeyPEM, keyPassphrase string) ([]ssh.AuthMetho
 // and bridges WebSocket messages to SSH stdin and SSH stdout/stderr to WebSocket.
 // The first message from the client is not read here; the caller must pass credentials
 // and consume the first message before calling RunBridge.
-// If touch is non-nil, it is called on each client message (e.g. for session keepalive).
+// If touch is non-nil, it is called on each client message and when remote stdout/stderr is received.
 // If tee is non-nil, a copy of stdout and stderr is written to tee for session replay.
 // If stdinRecorder is non-nil, it is called when data is written to the target stdin.
 // RunBridge blocks until ctx is done or the WebSocket or SSH session closes.
@@ -257,6 +257,9 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 		for {
 			n, err := stdout.Read(buf)
 			if n > 0 {
+				if touch != nil {
+					touch()
+				}
 				if writeErr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); writeErr != nil {
 					return
 				}
@@ -278,6 +281,9 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 		for {
 			n, err := stderr.Read(buf)
 			if n > 0 {
+				if touch != nil {
+					touch()
+				}
 				if writeErr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); writeErr != nil {
 					return
 				}
@@ -308,7 +314,7 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 // and target stdout/stderr -> localStdout. Used for CLI (non-WebSocket) access.
 // ptyCols and ptyRows are the terminal size (from client pty-req); if <= 0, defaults (120x40) are used.
 // If resizeChan is non-nil, terminal size updates (e.g. from SSH window-change) are forwarded to the target PTY.
-// If touch is non-nil, it is called when data is read from localStdin.
+// If touch is non-nil, it is called when data is read from localStdin or target stdout/stderr.
 // If tee is non-nil, target stdout/stderr is also written to tee.
 // If stdinRecorder is non-nil, it is called when data is written to the target stdin.
 func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.Writer, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, ptyCols, ptyRows int, resizeChan <-chan TerminalSize, touch func(), tee io.Writer, stdinRecorder StdinRecorder) error {
@@ -381,6 +387,9 @@ func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.W
 		for {
 			n, err := stdout.Read(buf)
 			if n > 0 {
+				if touch != nil {
+					touch()
+				}
 				if _, wErr := localStdout.Write(buf[:n]); wErr != nil {
 					return
 				}
@@ -402,6 +411,9 @@ func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.W
 		for {
 			n, err := stderr.Read(buf)
 			if n > 0 {
+				if touch != nil {
+					touch()
+				}
 				if _, wErr := localStdout.Write(buf[:n]); wErr != nil {
 					return
 				}
@@ -461,7 +473,7 @@ func (s *StreamAttach) Close() error {
 // RunBridgeDetachable runs an SSH bridge that keeps running when the client disconnects.
 // Output is written to output (e.g. session RingBuffer) for replay. AttachCh receives new
 // client connections to attach; initialConn is the first client (may be nil), either *websocket.Conn or *StreamAttach.
-// Touch is called on client activity. If tee is non-nil, a copy of stdout/stderr is written to tee (e.g. asciinema file).
+// Touch is called on client or remote I/O. If tee is non-nil, a copy of stdout/stderr is written to tee (e.g. asciinema file).
 // If stdinRecorder is non-nil, it is called when data is written to the target stdin. The bridge exits when ctx is done or SSH session closes.
 // initialCols and initialRows are the terminal size for the PTY (e.g. from client); 0 lets the factory use defaults.
 func RunBridgeDetachable(ctx context.Context, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, output *session.RingBuffer, attachCh <-chan session.AttachReq, initialConn interface{}, touch func(), tee io.Writer, stdinRecorder StdinRecorder, initialCols, initialRows int, externalResize <-chan TerminalSize) error {

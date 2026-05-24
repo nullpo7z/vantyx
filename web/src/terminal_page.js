@@ -27,8 +27,11 @@ export function renderTerminalPage(container) {
   const urlSessionDesc = params.get('session_description') ?? ''
   const hasSessionParamsFromUrl = params.has('session_name') || params.has('session_description')
 
+  document.documentElement.classList.add('terminal-standalone')
+  document.body.classList.add('terminal-standalone')
+
   container.innerHTML = `
-    <div class="min-h-screen w-screen flex flex-col bg-slate-100 font-sans text-slate-900">
+    <div class="terminal-page-root flex flex-1 min-h-0 w-full flex-col overflow-hidden font-sans text-slate-900">
       <header class="relative z-30 bg-sky-800 text-white px-6 py-3 flex items-center justify-between shadow shrink-0">
         <div class="flex items-center gap-8 min-w-0">
           <h1 class="text-xl font-semibold tracking-wide">Vantyx</h1>
@@ -96,8 +99,8 @@ export function renderTerminalPage(container) {
         </form>
       </div>
 
-      <div id="term-shell" class="hidden relative z-0 flex-1 min-h-0 flex flex-col overflow-hidden bg-white border-t border-slate-200">
-        <div id="xterm" class="flex-1 min-h-0"></div>
+      <div id="term-shell" class="hidden relative z-0 flex-1 min-h-0 flex flex-col overflow-hidden bg-[#020617]">
+        <div id="xterm" class="terminal-xterm-host flex-1 min-h-0 w-full"></div>
       </div>
     </div>
   `
@@ -556,53 +559,52 @@ export function renderTerminalPage(container) {
       connectWithCredentials(username, password, sessionName, sessionDesc, passphraseOptional)
   })
 
-  // session_id のみで開いた場合（レジューム用リンク）は認証なしで再接続
-  if (resumeSessionId && !targetId) {
+  // session_id がある場合は既存セッションへアタッチ（target_id はヘッダ表示用に付くことがある）
+  if (resumeSessionId) {
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
     connectResume(resumeSessionId)
-  }
+  } else {
+    // 保存済み認証: 以前は localStorage で不足分（パスワード/パスフレーズ）を受け渡ししていたが、
+    // 機密情報をブラウザ永続ストレージに残さないため BroadcastChannel に統一した。
+    let usedPendingCreds = false
 
-  // 保存済み認証: 以前は localStorage で不足分（パスワード/パスフレーズ）を受け渡ししていたが、
-  // 機密情報をブラウザ永続ストレージに残さないため BroadcastChannel に統一した。
-  let usedPendingCreds = false
+    // 保存済み認証: 上で即接続していない場合、パスワード/パスフレーズが必要な場合はフォーム表示。不要かつ URL でセッション名・説明があれば即接続
+    const needsExtraCreds = useStoredCredentials && targetId && (needsPassword || needsPassphrase)
+    if (usedPendingCreds) {
+      // すでに connectWithStoredCredentials を呼んだ
+    } else if (useStoredCredentials && targetId && hasSessionParamsFromUrl && !needsPassword && !needsPassphrase && !channelToken) {
+      credsWrap.classList.add('hidden')
+      shellWrap.classList.remove('hidden')
+      connectWithStoredCredentials(urlSessionName, urlSessionDesc)
+    } else if (needsExtraCreds) {
+      const authPrompt = container.querySelector('#term-auth-prompt')
+      const storedCredHint = container.querySelector('#term-stored-cred-hint')
+      const needsPasswordHint = container.querySelector('#term-needs-password-hint')
+      const needsPassphraseHint = container.querySelector('#term-needs-passphrase-hint')
+      const usernameWrap = container.querySelector('#term-username-wrap')
+      const passwordWrap = container.querySelector('#term-password-wrap')
+      const passphraseWrap = container.querySelector('#term-passphrase-wrap')
+      const passphraseOptionalWrap = container.querySelector('#term-passphrase-optional-wrap')
+      if (authPrompt) authPrompt.classList.add('hidden')
+      if (storedCredHint) storedCredHint.classList.remove('hidden')
+      if (needsPassword && needsPasswordHint) needsPasswordHint.classList.remove('hidden')
+      if (needsPassphrase && needsPassphraseHint) needsPassphraseHint.classList.remove('hidden')
+      if (usernameWrap) usernameWrap.classList.add('hidden')
+      if (passwordWrap) passwordWrap.classList.toggle('hidden', !needsPassword)
+      if (passphraseWrap) passphraseWrap.classList.toggle('hidden', !needsPassphrase)
+      if (passphraseOptionalWrap) passphraseOptionalWrap.classList.add('hidden')
+    } else if (useStoredCredentials && targetId) {
+      const authPrompt = container.querySelector('#term-auth-prompt')
+      const authFields = container.querySelector('#term-auth-fields')
+      const storedCredHint = container.querySelector('#term-stored-cred-hint')
+      if (authPrompt) authPrompt.classList.add('hidden')
+      if (authFields) authFields.classList.add('hidden')
+      if (storedCredHint) storedCredHint.classList.remove('hidden')
+    }
 
-  // 保存済み認証: 上で即接続していない場合、パスワード/パスフレーズが必要な場合はフォーム表示。不要かつ URL でセッション名・説明があれば即接続
-  const needsExtraCreds = useStoredCredentials && targetId && (needsPassword || needsPassphrase)
-  if (usedPendingCreds) {
-    // すでに connectWithStoredCredentials を呼んだ
-  } else if (useStoredCredentials && targetId && hasSessionParamsFromUrl && !needsPassword && !needsPassphrase && !channelToken) {
-    credsWrap.classList.add('hidden')
-    shellWrap.classList.remove('hidden')
-    connectWithStoredCredentials(urlSessionName, urlSessionDesc)
-  } else if (needsExtraCreds) {
-    const authPrompt = container.querySelector('#term-auth-prompt')
-    const storedCredHint = container.querySelector('#term-stored-cred-hint')
-    const needsPasswordHint = container.querySelector('#term-needs-password-hint')
-    const needsPassphraseHint = container.querySelector('#term-needs-passphrase-hint')
-    const usernameWrap = container.querySelector('#term-username-wrap')
-    const passwordWrap = container.querySelector('#term-password-wrap')
-    const passphraseWrap = container.querySelector('#term-passphrase-wrap')
-    const passphraseOptionalWrap = container.querySelector('#term-passphrase-optional-wrap')
-    if (authPrompt) authPrompt.classList.add('hidden')
-    if (storedCredHint) storedCredHint.classList.remove('hidden')
-    if (needsPassword && needsPasswordHint) needsPasswordHint.classList.remove('hidden')
-    if (needsPassphrase && needsPassphraseHint) needsPassphraseHint.classList.remove('hidden')
-    if (usernameWrap) usernameWrap.classList.add('hidden')
-    if (passwordWrap) passwordWrap.classList.toggle('hidden', !needsPassword)
-    if (passphraseWrap) passphraseWrap.classList.toggle('hidden', !needsPassphrase)
-    if (passphraseOptionalWrap) passphraseOptionalWrap.classList.add('hidden')
-  } else if (useStoredCredentials && targetId) {
-    const authPrompt = container.querySelector('#term-auth-prompt')
-    const authFields = container.querySelector('#term-auth-fields')
-    const storedCredHint = container.querySelector('#term-stored-cred-hint')
-    if (authPrompt) authPrompt.classList.add('hidden')
-    if (authFields) authFields.classList.add('hidden')
-    if (storedCredHint) storedCredHint.classList.remove('hidden')
-  }
-
-  // 親タブから開かれた場合、BroadcastChannel 経由で認証情報を受け取り自動接続する（noopener でも動く）
-  if (channelToken && targetId) {
+    // 親タブから開かれた場合、BroadcastChannel 経由で認証情報を受け取り自動接続する（noopener でも動く）
+    if (channelToken && targetId) {
     const infoEl = document.createElement('p')
     infoEl.className = 'text-xs text-slate-500'
     infoEl.textContent = '親タブから認証情報を受信中…（数秒かかる場合があります）'
@@ -683,6 +685,7 @@ export function renderTerminalPage(container) {
       window.clearTimeout(timeoutId)
       try { bc.close() } catch { /* ignore */ }
       connectBtn.disabled = false
+    }
     }
   }
 

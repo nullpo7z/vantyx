@@ -235,6 +235,15 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, "session not found or access denied", http.StatusNotFound)
 			return
 		}
+		canAccess, err := a.userCanAccessTarget(r.Context(), sess.UserID, access.TargetID(termSess.TargetID))
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		if !canAccess {
+			writeJSONError(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		conn, err := wsUpgrader.Upgrade(w, r, nil)
 		if err != nil {
 			audit("terminal_ws_upgrade_failed_attach", auditFields{
@@ -373,9 +382,41 @@ type TerminalSessionItem struct {
 	SessionID   string    `json:"session_id"`
 	TargetID    string    `json:"target_id"`
 	TargetName  string    `json:"target_name"`
-	Name        string    `json:"name,omitempty"`        // セッション名（識別用）
-	Description string    `json:"description,omitempty"` // 説明
+	TargetPath  string    `json:"target_path,omitempty"` // ターゲットの階層パス（例: prod/network）
+	Protocol    string    `json:"protocol"` // ターゲットのプロトコル（ssh / telnet 等）
+	Name        string    `json:"name,omitempty"`
+	Description string    `json:"description,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
+	LastSeen    time.Time `json:"last_seen"`
+	Idle        bool      `json:"idle"`
+	IdleSeconds int       `json:"idle_seconds,omitempty"`
+}
+
+// terminalIdleWarnAfter returns the configured idle warning threshold from the terminal session manager.
+func (a *App) terminalIdleWarnAfter() time.Duration {
+	if m, ok := a.TerminalSessionManager.(*session.Manager); ok {
+		return m.IdleWarnAfter()
+	}
+	return 0
+}
+
+func terminalSessionItemFrom(sess *session.Session, mgr *session.Manager, protocol access.Protocol, targetPath string) TerminalSessionItem {
+	item := TerminalSessionItem{
+		SessionID:   string(sess.ID()),
+		TargetID:    sess.TargetID,
+		TargetName:  sess.TargetName,
+		TargetPath:  targetPath,
+		Protocol:    string(protocol),
+		Name:        sess.Name,
+		Description: sess.Description,
+		CreatedAt:   sess.CreatedAt(),
+		LastSeen:    sess.LastSeen(),
+	}
+	if mgr != nil && mgr.IsIdle(sess) {
+		item.Idle = true
+		item.IdleSeconds = int(mgr.IdleDuration(sess).Seconds())
+	}
+	return item
 }
 
 // handleTerminalSessions returns the list of active terminal sessions for the current user.
@@ -391,6 +432,16 @@ func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]interface{}{"items": []TerminalSessionItem{}})
 		return
 	}
+	ctx := r.Context()
+	allowedSet, err := a.allowedTargetIDSet(ctx, userID)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	var mgr *session.Manager
+	if m, ok := a.TerminalSessionManager.(*session.Manager); ok {
+		mgr = m
+	}
 	ids := lister.ActiveIDs()
 	items := make([]TerminalSessionItem, 0, len(ids))
 	for _, id := range ids {
@@ -398,14 +449,16 @@ func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 		if !ok || sess.UserID != userID {
 			continue
 		}
-		items = append(items, TerminalSessionItem{
-			SessionID:   string(sess.ID()),
-			TargetID:    sess.TargetID,
-			TargetName:  sess.TargetName,
-			Name:        sess.Name,
-			Description: sess.Description,
-			CreatedAt:   sess.CreatedAt(),
-		})
+		if _, ok := allowedSet[access.TargetID(sess.TargetID)]; !ok {
+			continue
+		}
+		protocol := access.ProtocolSSH
+		targetPath := ""
+		if target, err := a.TargetStore.Get(ctx, access.TargetID(sess.TargetID)); err == nil && target != nil {
+			protocol = target.Protocol
+			targetPath = target.Path
+		}
+		items = append(items, terminalSessionItemFrom(sess, mgr, protocol, targetPath))
 	}
 	writeJSON(w, map[string]interface{}{"items": items})
 }
@@ -426,6 +479,15 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 	termSess, ok := a.TerminalSessionManager.Get(id)
 	if !ok || termSess.UserID != userID {
 		writeJSONError(w, "session not found or access denied", http.StatusNotFound)
+		return
+	}
+	canAccess, err := a.userCanAccessTarget(r.Context(), userID, access.TargetID(termSess.TargetID))
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if !canAccess {
+		writeJSONError(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	a.TerminalSessionManager.Stop(id)

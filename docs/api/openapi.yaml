@@ -85,7 +85,7 @@ components:
           description: syslog 転送プロトコル
         addr:
           type: string
-          description: 宛先（udp/tcp: host:port、unix/unixgram: /dev/log 等）。unix/unixgram で空の場合は /dev/log を既定にする。
+          description: "宛先（udp/tcp: host:port、unix/unixgram: /dev/log 等）。unix/unixgram で空の場合は /dev/log を既定にする。"
         app:
           type: string
           description: syslog の app-name
@@ -108,7 +108,7 @@ components:
         source:
           type: string
           enum: [db, env]
-          description: 現在の設定ソース（db: 設定画面で保存済み、env: 環境変数のフォールバック）
+          description: "現在の設定ソース（db: 設定画面で保存済み、env: 環境変数のフォールバック）"
       required:
         - config
         - source
@@ -363,6 +363,9 @@ components:
           type: string
         target_name:
           type: string
+        target_path:
+          type: string
+          description: "ターゲットの階層パス（例: prod/network）。未設定の場合は省略。"
         name:
           type: string
           description: セッション名（識別用・任意）。接続時の最初の JSON で name を送信可能。

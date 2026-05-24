@@ -7,3 +7,127 @@
 #terminal-container .xterm {
   padding: 8px;
 }
+
+/* スタンドアロン SSH/Telnet ターミナル（/terminal）: 画面下端の余白をなくす */
+html.terminal-standalone,
+body.terminal-standalone {
+  height: 100%;
+  overflow: hidden;
+  background: #020617;
+}
+body.terminal-standalone #app {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+.terminal-page-root {
+  flex: 1 1 0%;
+  min-height: 0;
+}
+.terminal-xterm-host {
+  flex: 1 1 0%;
+  min-height: 0;
+  width: 100%;
+  background: #020617;
+}
+.terminal-xterm-host .xterm {
+  height: 100%;
+  padding: 8px;
+}
+
+/* 継続中セッション一覧: テーブルセル内テキストの見切れ・縦位置ずれを防ぐ */
+#sessions-table-wrap table {
+  border-collapse: collapse;
+  table-layout: auto;
+}
+#sessions-table-wrap th,
+#sessions-table-wrap td {
+  vertical-align: middle;
+  overflow: visible;
+  line-height: 1.5;
+  text-align: left;
+}
+#sessions-table-wrap td > * {
+  overflow: visible;
+}
+/* 最終活動・種別・操作は内容幅に合わせる（w-full で横に伸びない） */
+#sessions-table-wrap th.sessions-col-shrink,
+#sessions-table-wrap td.sessions-col-shrink {
+  width: 1%;
+  white-space: nowrap;
+}
+#sessions-table-wrap th.sessions-col-actions,
+#sessions-table-wrap td.sessions-col-actions {
+  width: 1%;
+  white-space: nowrap;
+}
+
+/* ヘッダー: ロゴ・ナビ・ユーザーの縦横位置を揃える */
+#app header .vantyx-header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 0.75rem 1.5rem;
+  box-sizing: border-box;
+}
+#app header .vantyx-header-start {
+  display: flex;
+  align-items: baseline;
+  column-gap: 1.5rem;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+#app header .vantyx-header-end {
+  display: flex;
+  align-items: center;
+  column-gap: 1rem;
+  flex-shrink: 0;
+}
+#app header .vantyx-brand {
+  margin: 0;
+  padding: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.25rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#app header nav.vantyx-nav {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: nowrap;
+  column-gap: 1.5rem;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+#app header nav.vantyx-nav::-webkit-scrollbar {
+  display: none;
+}
+#app header .vantyx-nav-link {
+  display: block;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 500;
+  white-space: nowrap;
+  color: inherit;
+  opacity: 0.85;
+  text-decoration: none;
+  box-shadow: inset 0 -2px 0 0 transparent;
+  transition: opacity 0.15s ease;
+  flex-shrink: 0;
+}
+#app header .vantyx-nav-link:hover {
+  opacity: 1;
+}
+#app header .vantyx-nav-link[aria-current='page'] {
+  opacity: 1;
+  box-shadow: inset 0 -2px 0 0 #fff;
+}

@@ -711,6 +711,11 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 		return out
 	}
 
+	var cliSessionMgr *session.Manager
+	if m, ok := s.sessionManager.(*session.Manager); ok {
+		cliSessionMgr = m
+	}
+
 	getPrompt := func() string {
 		if currentGroupIndex >= 1 && currentGroupIndex <= len(lastList) {
 			return "vantyx:/" + lastList[currentGroupIndex-1].Group.Name + "> "
@@ -804,7 +809,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			setStatus("Refreshed.")
 			continue
 		case "list", "sessions":
-			pendingExtra = formatCLIActiveSessionLines(activeSessionsForScope())
+			pendingExtra = formatCLIActiveSessionLines(activeSessionsForScope(), cliSessionMgr)
 			continue
 		case "resume":
 			activeSessions := activeSessionsForScope()
@@ -813,7 +818,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				continue
 			}
 			if len(args) == 0 {
-				pendingExtra = formatCLIActiveSessionLines(activeSessions)
+				pendingExtra = formatCLIActiveSessionLines(activeSessions, cliSessionMgr)
 				pendingExtra = append(pendingExtra, "Use resume <n> to attach (e.g. resume 1).")
 				continue
 			}
@@ -823,6 +828,9 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				continue
 			}
 			termSess := activeSessions[n-1]
+			if cliSessionMgr != nil && cliSessionMgr.IsIdle(termSess) {
+				setStatus("Warning: session has been idle for a long time (not auto-stopped).")
+			}
 			resumeStopCh := make(chan struct{})
 			resumeDone := make(chan struct{})
 			var resumeReadStarted bool

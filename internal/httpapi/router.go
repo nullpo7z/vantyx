@@ -29,6 +29,29 @@ import (
 	"github.com/nullpo7z/vantyx/internal/tftp"
 )
 
+// applyTerminalSessionIdleWarn configures idle warning threshold on the session manager from env.
+// VANTYX_TERMINAL_SESSION_IDLE_WARN_AFTER: duration (default 30m). Set "0" to disable idle warnings.
+func applyTerminalSessionIdleWarn(m *session.Manager) {
+	if m == nil {
+		return
+	}
+	v := strings.TrimSpace(os.Getenv("VANTYX_TERMINAL_SESSION_IDLE_WARN_AFTER"))
+	if v == "0" {
+		return
+	}
+	if v == "" {
+		m.SetIdleWarnAfter(30 * time.Minute)
+		return
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		log.Printf("invalid VANTYX_TERMINAL_SESSION_IDLE_WARN_AFTER %q: %v (using default 30m)", v, err)
+		m.SetIdleWarnAfter(30 * time.Minute)
+		return
+	}
+	m.SetIdleWarnAfter(d)
+}
+
 const (
 	loginRateLimitWindow = 15 * time.Minute
 	loginRateLimitN      = 5
@@ -269,6 +292,7 @@ func NewApp() *App {
 	targetStore := access.NewSQLiteTargetStore(db, storeCfg, encKey)
 	groupStore := access.NewSQLiteAccessGroupStore(db, storeCfg)
 	terminalSessions := session.NewManager()
+	applyTerminalSessionIdleWarn(terminalSessions)
 
 	// Ensure admin user exists (password meets policy: 8+ chars, upper, lower, digit, special).
 	if _, err := userStore.CreateUser("admin", "admin", defaultAdminPassword, auth.RoleAdmin); err != nil && !errors.Is(err, auth.ErrUserExists) {

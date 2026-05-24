@@ -20,9 +20,10 @@ type StartOptions struct {
 
 // Manager manages long-lived sessions backed by goroutines.
 type Manager struct {
-	mu       sync.RWMutex
-	sessions map[ID]*Session
-	now      func() time.Time
+	mu            sync.RWMutex
+	sessions      map[ID]*Session
+	now           func() time.Time
+	idleWarnAfter time.Duration // 0 = idle warnings disabled
 }
 
 // Session is a long-lived backend session. Output holds terminal stdout/stderr for replay on resume.
@@ -116,6 +117,42 @@ func (s *Session) Done() <-chan struct{} { return s.done }
 
 // CreatedAt returns when the session was created.
 func (s *Session) CreatedAt() time.Time { return s.createdAt }
+
+// LastSeen returns the last activity timestamp (updated by Touch on client or remote I/O).
+func (s *Session) LastSeen() time.Time { return s.lastSeen }
+
+// SetIdleWarnAfter sets how long without Touch before IsIdle returns true. Zero disables idle detection.
+func (m *Manager) SetIdleWarnAfter(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.idleWarnAfter = d
+}
+
+// IdleWarnAfter returns the configured idle warning threshold.
+func (m *Manager) IdleWarnAfter() time.Duration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.idleWarnAfter
+}
+
+// IdleDuration returns time since last activity for the session.
+func (m *Manager) IdleDuration(sess *Session) time.Duration {
+	if sess == nil {
+		return 0
+	}
+	return m.now().Sub(sess.LastSeen())
+}
+
+// IsIdle reports whether the session has exceeded the idle warning threshold.
+func (m *Manager) IsIdle(sess *Session) bool {
+	m.mu.RLock()
+	threshold := m.idleWarnAfter
+	m.mu.RUnlock()
+	if threshold <= 0 || sess == nil {
+		return false
+	}
+	return m.IdleDuration(sess) >= threshold
+}
 
 // Touch updates the lastSeen timestamp for the session.
 func (m *Manager) Touch(id ID) {

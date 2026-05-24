@@ -43,6 +43,28 @@ test.describe('ナビゲーション（Web操作）', () => {
     await expect(main.getByText('監査ログを syslog / SIEM に転送する')).toBeVisible({ timeout: 10000 });
   });
 
+  test('ナビのハイライトは同時に1つだけ', async ({ page }) => {
+    await forceClick(page.locator('#nav-sessions'));
+    await expect(page.locator('#nav-sessions')).toHaveAttribute('aria-current', 'page', { timeout: 5000 });
+    await expect(page.locator('#app header .vantyx-nav-link[aria-current="page"]')).toHaveCount(1);
+    await expect(page.locator('#app header .vantyx-nav-link.border-b-2')).toHaveCount(0);
+
+    await forceClick(page.locator('#nav-targets'));
+    await expect(page.locator('#nav-targets')).toHaveAttribute('aria-current', 'page');
+    await expect(page.locator('#app header .vantyx-nav-link[aria-current="page"]')).toHaveCount(1);
+    await expect(page.locator('#nav-targets')).toHaveClass(/vantyx-nav-link/);
+
+    await goToServerManagement(page);
+    await expect(page.locator('#nav-groups')).toHaveAttribute('aria-current', 'page');
+    await expect(page.locator('#app header .vantyx-nav-link[aria-current="page"]')).toHaveCount(1);
+
+    await forceClick(page.locator('#nav-users'));
+    await expect(page.getByRole('heading', { name: 'ユーザー管理' })).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('#nav-users')).toHaveAttribute('aria-current', 'page');
+    await expect(page.locator('#nav-groups')).not.toHaveAttribute('aria-current', 'page');
+    await expect(page.locator('#app header .vantyx-nav-link[aria-current="page"]')).toHaveCount(1);
+  });
+
   test('API リファレンスリンクで /docs が開く', async ({ page }) => {
     const link = page.locator('#nav-api-ref');
     await expect(link).toBeVisible();

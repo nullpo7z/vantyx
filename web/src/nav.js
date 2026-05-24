@@ -1,18 +1,36 @@
-const NAV_BASE = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
-const NAV_ACTIVE = 'text-sm font-semibold border-b-2 border-white pb-1 transition-opacity'
-
 let state = {
   navTargets: null,
+  navSessions: null,
   navRecordings: null,
   navGroups: null,
   navUsers: null,
   navAudit: null,
   navSettings: null,
+  navApiRef: null,
   getMe: null,
+}
+
+function navLinks() {
+  const { navTargets, navSessions, navRecordings, navGroups, navUsers, navAudit, navSettings, navApiRef } = state
+  return [navTargets, navSessions, navRecordings, navGroups, navUsers, navAudit, navSettings, navApiRef].filter(Boolean)
+}
+
+function isAdminOnlyNav(el) {
+  const { navGroups, navUsers, navAudit, navSettings } = state
+  return el === navGroups || el === navUsers || el === navAudit || el === navSettings
+}
+
+function setNavLinkVisible(el, visible) {
+  if (visible) {
+    el.classList.remove('hidden')
+  } else {
+    el.classList.add('hidden')
+  }
 }
 
 export function initNav({
   navTargets,
+  navSessions,
   navRecordings,
   navGroups,
   navUsers,
@@ -20,13 +38,15 @@ export function initNav({
   navSettings,
   getMe,
   onHome,
+  onSessions,
   onRecordings,
   onGroups,
   onUsers,
   onAudit,
   onSettings,
 }) {
-  state = { navTargets, navRecordings, navGroups, navUsers, navAudit, navSettings, getMe }
+  const navApiRef = document.getElementById('nav-api-ref')
+  state = { navTargets, navSessions, navRecordings, navGroups, navUsers, navAudit, navSettings, navApiRef, getMe }
 
   navTargets.addEventListener('click', (e) => {
     e.preventDefault()
@@ -34,6 +54,15 @@ export function initNav({
     if (!me) return
     if (typeof onHome === 'function') onHome()
   })
+
+  if (navSessions) {
+    navSessions.addEventListener('click', (e) => {
+      e.preventDefault()
+      const me = state.getMe && state.getMe()
+      if (!me) return
+      if (typeof onSessions === 'function') onSessions()
+    })
+  }
 
   navRecordings.addEventListener('click', (e) => {
     e.preventDefault()
@@ -76,52 +105,45 @@ export function initNav({
 }
 
 export function setActiveNav(tab) {
-  const { navTargets, navRecordings, navGroups, navUsers, navAudit, navSettings, getMe } = state
+  const { navTargets, navRecordings, navGroups, getMe } = state
   if (!navTargets || !navRecordings || !navGroups) return
   const me = getMe && getMe()
   const isAdmin = me?.role === 'admin'
-  const navHidden = isAdmin ? '' : ' hidden'
 
-  navTargets.className = NAV_BASE
-  navGroups.className = NAV_BASE + navHidden
-  if (navUsers) {
-    navUsers.className = NAV_BASE + navHidden
+  for (const el of navLinks()) {
+    el.removeAttribute('aria-current')
+    const visible = isAdminOnlyNav(el) ? isAdmin : true
+    el.className = 'vantyx-nav-link' + (visible ? '' : ' hidden')
   }
-  if (navAudit) {
-    navAudit.className = NAV_BASE + navHidden
-  }
-  if (navSettings) {
-    navSettings.className = NAV_BASE + navHidden
-  }
-  navRecordings.className = NAV_BASE
 
-  switch (tab) {
-    case 'targets':
-      navTargets.className = NAV_ACTIVE
-      break
-    case 'groups':
-      navGroups.className = NAV_ACTIVE + navHidden
-      break
-    case 'users':
-      if (navUsers) {
-        navUsers.className = NAV_ACTIVE + navHidden
-      }
-      break
-    case 'audit':
-      if (navAudit) {
-        navAudit.className = NAV_ACTIVE + navHidden
-      }
-      break
-    case 'settings':
-      if (navSettings) {
-        navSettings.className = NAV_ACTIVE + navHidden
-      }
-      break
-    case 'recordings':
-      navRecordings.className = NAV_ACTIVE
-      break
-    default:
-      break
+  const activeEl = {
+    targets: state.navTargets,
+    sessions: state.navSessions,
+    recordings: state.navRecordings,
+    groups: state.navGroups,
+    users: state.navUsers,
+    audit: state.navAudit,
+    settings: state.navSettings,
+  }[tab]
+
+  if (activeEl) {
+    activeEl.setAttribute('aria-current', 'page')
   }
 }
 
+/** ログイン後にユーザー向けナビ項目を表示する */
+export function showAuthenticatedNav(isAdmin) {
+  const { navSessions, navRecordings } = state
+  setNavLinkVisible(navSessions, true)
+  setNavLinkVisible(navRecordings, true)
+  if (isAdmin) {
+    for (const el of navLinks()) {
+      if (isAdminOnlyNav(el)) {
+        setNavLinkVisible(el, true)
+      }
+    }
+    if (state.navApiRef) {
+      setNavLinkVisible(state.navApiRef, true)
+    }
+  }
+}

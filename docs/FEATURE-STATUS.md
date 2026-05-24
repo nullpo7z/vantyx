@@ -44,10 +44,12 @@
 - フロント: 録画一覧表示・Asciinema プレイヤーでの再生
 - **証跡ログの高度な検索**: 監査画面で監査イベント・コマンドログを期間・ユーザー・ターゲットで検索。録画画面で期間・チャネル絞り込み（管理者は他ユーザーの録画も `user_id` で参照可）。監査ログ・コマンドログは `after_id` / `next_cursor` によるキーセットページング対応
 
-### ファイル転送（Phase 4 の一部）
+### ファイル転送（Phase 4）
 - **SFTP** バックエンド（`internal/sftp`）: ターゲットへのリスト・アップロード・ダウンロード・削除
-- ファイル操作 API: `GET/POST/GET/DELETE /api/targets/{id}/files/*`
-- ファイルマネージャー UI（`/files`）: ディレクトリツリー・一覧・アップロード・ダウンロード・削除
+- **FTP** バックエンド（`internal/ftp`）: SFTP と同様のファイル操作 API（`protocol=ftp` ターゲット）
+- **TFTP（リモートクライアント）**: サーバー管理で `protocol=tftp` を登録（プロトコルが TFTP のため SFTP/FTP 等の併用選択はなし）。**ホーム**の当該行「ファイル」→ `/files?protocol=tftp`（外部 TFTP へ Get/Put）
+- **TFTP（Vantyx 組み込みサーバー）**: SSH/Telnet で「TFTP を有効」にしホームでトグル ON。内部用 `protocol=tftp` レコードは一覧非表示。**ホーム**の SSH 行「ファイル」→ TFTP + コンソール（`/tftp-console`）。REST: `/api/tftp/targets/{id}/files/*`
+- ファイルマネージャー UI（`/files`）: SFTP/FTP はディレクトリツリー・一覧・転送・削除。TFTP クライアントはパス指定転送のみ
 
 ### VNC リモートデスクトップ（Phase 5 の一部）
 - **VNC** WebSocket プロキシ（`internal/vncproxy`）: ブラウザ↔VNC サーバー間のバイトブリッジ
@@ -74,9 +76,6 @@
 ---
 
 ## 未実装機能
-
-### ファイル転送（Phase 4）
-- **TFTP**: プロトコル・バックエンド・UI のいずれも未実装（SFTP のみ対応）
 
 ### リモートデスクトップ（Phase 5）
 - **RDP ブリッジ**: FreeRDP ラップまたは Go 実装の RDP プロキシ未実装（VNC のみ対応）
@@ -111,7 +110,7 @@
 | アクセス制御       | グループ・ターゲット・タグ、水平/垂直制御   | （特になし）                             |
 | ターミナル         | SSH/Telnet プロキシ、ブラウザ+CLI、永続化・レジューム、Telnet NAWS/自動ログイン | —                                        |
 | 録画・証跡         | Asciinema 録画、一覧・再生、期間/ユーザー/ターゲット検索、監査・コマンドログ DB・ページング | 完全シェル履歴保証                       |
-| ファイル転送       | SFTP、ファイルマネージャー UI              | TFTP                                     |
+| ファイル転送       | SFTP/FTP、TFTP クライアント・組み込みサーバー、ファイル UI | リモート TFTP の一覧・削除（プロトコル制約） |
 | リモートデスクトップ | VNC（noVNC + WebSocket プロキシ）          | RDP ブリッジ                             |
 | セキュリティ       | ASVS L2 対応、暗号化、監査ログ DB・転送設定 | （特になし）                             |
 | インフラ           | Docker 1 コンテナ、SQLite、自己署名 TLS    | PostgreSQL、オブジェクトストレージ、K8s   |

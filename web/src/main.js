@@ -1,4 +1,5 @@
 import API from './api.js'
+import { initFileTransferManager } from './file_transfer_manager.js'
 import { renderLogin } from './login.js'
 import { renderApp } from './app.js'
 import { renderTerminalPage } from './terminal_page.js'
@@ -10,6 +11,16 @@ import { renderRdpPage } from './rdp_page.js'
 const appEl = document.getElementById('app')
 
 async function init() {
+  const bootTransfers = async () => {
+    try {
+      await API.me()
+      initFileTransferManager()
+    } catch {
+      /* not logged in */
+    }
+  }
+  void bootTransfers()
+
   // Standalone full-screen terminal page (opened in a new tab).
   if (window.location.pathname === '/terminal') {
     try {

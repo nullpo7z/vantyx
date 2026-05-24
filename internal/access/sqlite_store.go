@@ -1022,7 +1022,8 @@ func (s *SQLiteTargetStore) ListByProtocol(ctx context.Context, protocol Protoco
 	defer cancel()
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, host, port, protocol, path
+		SELECT id, name, host, port, protocol, path,
+			COALESCE(sftp_enabled, 1), COALESCE(ftp_enabled, 0), COALESCE(tftp_enabled, 0)
 		FROM targets
 		WHERE protocol = ?
 	`, string(protocol))
@@ -1037,13 +1038,17 @@ func (s *SQLiteTargetStore) ListByProtocol(ctx context.Context, protocol Protoco
 		var idStr string
 		var port int
 		var proto string
-		if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path); err != nil {
+		var sftpVal, ftpVal, tftpVal int
+		if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &sftpVal, &ftpVal, &tftpVal); err != nil {
 			return nil, err
 		}
 		if port >= 0 && port <= 65535 {
 			t.ID = TargetID(idStr)
 			t.Port = uint16(port)
 			t.Protocol = Protocol(proto)
+			t.SFTPEnabled = sftpVal != 0
+			t.FTPEnabled = ftpVal != 0
+			t.TFTPEnabled = tftpVal != 0
 			out = append(out, &t)
 		}
 	}

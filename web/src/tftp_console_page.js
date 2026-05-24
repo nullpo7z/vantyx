@@ -1,4 +1,9 @@
 import API from './api.js'
+import {
+  initFileTransferManager,
+  startBackgroundDownload,
+  startBackgroundUpload,
+} from './file_transfer_manager.js'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -30,6 +35,12 @@ export function renderTFTPConsolePage(container) {
   const targetName = params.get('target_name') || ''
   const resumeSessionId = params.get('session_id') || ''
   const parentToken = params.get('parent_token') || ''
+  const channelToken = params.get('channel') || ''
+  const useStoredCredentials = params.get('use_stored_credentials') === '1'
+  const needsPassword = params.get('needs_password') === '1'
+  const needsPassphrase = params.get('needs_passphrase') === '1'
+  const urlSessionName = params.get('session_name') ?? ''
+  const urlSessionDesc = params.get('session_description') ?? ''
 
   const tftpServerHost = window.location.hostname || ''
   const tftpServerAddr = tftpServerHost || ''
@@ -68,14 +79,7 @@ export function renderTFTPConsolePage(container) {
       listEl.innerHTML = '<div class="py-6 text-center text-slate-500 text-sm">読み込み中…</div>'
     }
     try {
-      const q = new URLSearchParams()
-      if (currentPath && currentPath !== '') q.set('path', currentPath)
-      const res = await fetch(`/api/tftp/targets/${encodeURIComponent(tftpTargetId)}/files?${q.toString()}`, { credentials: 'include' })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ message: res.statusText }))
-        throw new Error(err.message || '一覧の取得に失敗しました')
-      }
-      const entries = await res.json()
+      const entries = await API.tftpServerFilesList(tftpTargetId, currentPath || '/')
       renderList(entries || [])
     } catch (e) {
       setError(e.message || '一覧の取得に失敗しました')
@@ -124,6 +128,8 @@ export function renderTFTPConsolePage(container) {
     listEl.innerHTML = rows
   }
 
+  initFileTransferManager()
+
   function renderLayout() {
     container.innerHTML = `
       <div class="h-screen w-full flex flex-col bg-slate-100 overflow-hidden">
@@ -171,9 +177,31 @@ export function renderTFTPConsolePage(container) {
     ? '<span class="text-[11px] text-slate-400">対象機器側で TFTP コマンドを実行してください。</span>'
     : '<span class="text-[11px] text-red-300">SSH ターゲット ID が指定されていません。</span>'}
             </div>
-            <div id="tftp-xterm-wrap" class="flex-1 min-h-0 bg-black flex flex-col">
+            <div id="tftp-xterm-wrap" class="flex-1 min-h-0 bg-black flex flex-col relative">
               ${sshTargetId
-    ? '<div id="tftp-xterm" class="flex-1 min-h-0 w-full" style="height: 100%;"></div>'
+    ? `
+              <div id="tftp-ssh-creds" class="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/95 p-4 overflow-auto">
+                <form id="tftp-ssh-cred-form" class="w-full max-w-md bg-slate-800 border border-slate-600 rounded-lg shadow-lg p-5 space-y-4">
+                  <p id="tftp-ssh-cred-prompt" class="text-sm text-slate-200">SSH 認証情報を入力してコンソールに接続します。</p>
+                  <p id="tftp-ssh-stored-hint" class="text-sm text-slate-300 hidden">保存済み認証を使用します。不足がある場合は入力してください。</p>
+                  <div id="tftp-ssh-username-wrap">
+                    <label class="block text-xs text-slate-400 mb-1">SSH ユーザー名</label>
+                    <input type="text" id="tftp-ssh-username" autocomplete="username" class="w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white" />
+                  </div>
+                  <div id="tftp-ssh-password-wrap">
+                    <label class="block text-xs text-slate-400 mb-1">SSH パスワード</label>
+                    <input type="password" id="tftp-ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white" />
+                  </div>
+                  <div id="tftp-ssh-passphrase-wrap" class="hidden">
+                    <label class="block text-xs text-slate-400 mb-1">秘密鍵のパスフレーズ</label>
+                    <input type="password" id="tftp-ssh-passphrase" autocomplete="off" class="w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white" />
+                  </div>
+                  <p id="tftp-ssh-cred-error" class="text-xs text-red-400 hidden"></p>
+                  <button type="submit" id="tftp-ssh-connect" class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700">接続</button>
+                </form>
+              </div>
+              <div id="tftp-xterm" class="flex-1 min-h-0 w-full hidden" style="height: 100%;"></div>
+              `
     : '<div class="h-full flex items-center justify-center text-xs text-slate-300">SSH ターゲットが指定されていないため、コンソールを表示できません。</div>'}
             </div>
           </section>
@@ -232,21 +260,16 @@ export function renderTFTPConsolePage(container) {
         if (!file || !tftpTargetId) return
         setError('')
         let remotePath = currentPath === '/' ? '/' + file.name : currentPath + '/' + file.name
+        uploadInput.value = ''
         try {
-          const form = new FormData()
-          form.append('path', remotePath)
-          form.append('file', file)
-          const res = await fetch(`/api/tftp/targets/${encodeURIComponent(tftpTargetId)}/files/upload`, {
-            method: 'POST',
-            credentials: 'include',
-            body: form,
+          await startBackgroundUpload({
+            backend: 'tftp_server',
+            targetId: tftpTargetId,
+            path: remotePath,
+            file,
           })
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({ message: res.statusText }))
-            throw new Error(err.message || 'アップロードに失敗しました')
-          }
-          uploadInput.value = ''
-          await loadList()
+          setError('')
+          setTimeout(() => loadList(), 2000)
         } catch (e) {
           setError(e.message || 'アップロードに失敗しました')
         }
@@ -269,22 +292,11 @@ export function renderTFTPConsolePage(container) {
         if (!path || !tftpTargetId) return
         setError('')
         try {
-          const q = new URLSearchParams({ path })
-          const res = await fetch(`/api/tftp/targets/${encodeURIComponent(tftpTargetId)}/files/download?${q.toString()}`, {
-            credentials: 'include',
+          await startBackgroundDownload({
+            backend: 'tftp_server',
+            targetId: tftpTargetId,
+            path,
           })
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({ message: res.statusText }))
-            throw new Error(err.message || 'ダウンロードに失敗しました')
-          }
-          const blob = await res.blob()
-          const a = document.createElement('a')
-          const url = URL.createObjectURL(blob)
-          a.href = url
-          const filename = (row && row.dataset.name) || 'download'
-          a.download = filename
-          a.click()
-          URL.revokeObjectURL(url)
         } catch (err) {
           setError(err.message || 'ダウンロードに失敗しました')
         }
@@ -306,15 +318,7 @@ export function renderTFTPConsolePage(container) {
         if (!confirm(`「${name}」を削除しますか？`)) return
         setError('')
         try {
-          const q = new URLSearchParams({ path })
-          const res = await fetch(`/api/tftp/targets/${encodeURIComponent(tftpTargetId)}/files?${q.toString()}`, {
-            method: 'DELETE',
-            credentials: 'include',
-          })
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({ message: res.statusText }))
-            throw new Error(err.message || '削除に失敗しました')
-          }
+          await API.tftpServerDelete(tftpTargetId, path)
           await loadList()
         } catch (err) {
           setError(err.message || '削除に失敗しました')
@@ -327,6 +331,50 @@ export function renderTFTPConsolePage(container) {
     // 下半分の SSH コンソール（xterm + WebSocket）
     if (sshTargetId) {
       const xtermEl = container.querySelector('#tftp-xterm')
+      const credsWrap = container.querySelector('#tftp-ssh-creds')
+      const credForm = container.querySelector('#tftp-ssh-cred-form')
+      const credError = container.querySelector('#tftp-ssh-cred-error')
+      const credPrompt = container.querySelector('#tftp-ssh-cred-prompt')
+      const storedHint = container.querySelector('#tftp-ssh-stored-hint')
+      const usernameWrap = container.querySelector('#tftp-ssh-username-wrap')
+      const passwordWrap = container.querySelector('#tftp-ssh-password-wrap')
+      const passphraseWrap = container.querySelector('#tftp-ssh-passphrase-wrap')
+      const usernameInput = container.querySelector('#tftp-ssh-username')
+      const passwordInput = container.querySelector('#tftp-ssh-password')
+      const passphraseInput = container.querySelector('#tftp-ssh-passphrase')
+
+      function showCredError(msg) {
+        if (!credError) return
+        if (!msg) {
+          credError.classList.add('hidden')
+          credError.textContent = ''
+          return
+        }
+        credError.textContent = msg
+        credError.classList.remove('hidden')
+      }
+
+      function hideCredsShowTerm() {
+        credsWrap?.classList.add('hidden')
+        xtermEl?.classList.remove('hidden')
+        try { fitAddon?.fit() } catch { /* ignore */ }
+      }
+
+      function buildAuthPayload({ useStored, username, password, passphrase, sessionName, sessionDesc }) {
+        const description = `TFTP_CONSOLE:tftp_target_id=${tftpTargetId || ''}`
+        const metaDesc = sessionDesc || description
+        const metaName = sessionName || `${targetName || sshTargetId} TFTP`
+        if (useStored) {
+          const p = { use_stored_credentials: true, name: metaName, description: metaDesc }
+          if (password) p.password = password
+          if (passphrase) p.private_key_passphrase = passphrase
+          return p
+        }
+        const out = { username, password: password || '', name: metaName, description: metaDesc }
+        if (passphrase) out.private_key_passphrase = passphrase
+        return out
+      }
+
       if (xtermEl) {
         // 初期化
         term = new Terminal({
@@ -379,18 +427,14 @@ export function renderTFTPConsolePage(container) {
           setTimeout(() => { try { fitAddon.fit() } catch { /* ignore */ } }, 200)
         })
 
-        function connectSSH() {
+        function connectSSH(authPayload) {
           const ws = new WebSocket(currentSessionId ? getWsUrlResume(currentSessionId) : getWsUrlNew())
           ws.binaryType = 'arraybuffer'
           sshWs = ws
           ws.onopen = () => {
-            if (!currentSessionId) {
-              // 新規接続時のみ、保存済み認証情報と TFTP 用メタデータを送る。
-              const name = `${targetName || sshTargetId || 'TFTP コンソール'}`
-              const description = `TFTP_CONSOLE:tftp_target_id=${tftpTargetId || ''}`
-              const payload = { use_stored_credentials: true, name, description }
+            if (!currentSessionId && authPayload) {
               try {
-                ws.send(JSON.stringify(payload))
+                ws.send(JSON.stringify(authPayload))
               } catch {
                 // ignore
               }
@@ -400,20 +444,26 @@ export function renderTFTPConsolePage(container) {
           }
           ws.onmessage = (ev) => {
             if (typeof ev.data === 'string') {
-              // 新規接続時のみ、最初に送られる {"session_id":"..."} をターミナルに表示しないで保持する。
               if (!currentSessionId && ev.data.trim().startsWith('{')) {
                 try {
                   const obj = JSON.parse(ev.data)
                   if (obj && typeof obj.session_id === 'string' && obj.session_id) {
                     currentSessionId = obj.session_id
+                    hideCredsShowTerm()
                     return
                   }
                 } catch {
                   // JSON でなければそのまま表示
                 }
               }
+              if (ev.data.startsWith('error:')) {
+                showCredError(ev.data.replace(/^error:\s*/, ''))
+                credsWrap?.classList.remove('hidden')
+                xtermEl?.classList.add('hidden')
+              }
               term.write(ev.data)
             } else {
+              hideCredsShowTerm()
               term.write(new Uint8Array(ev.data))
             }
           }
@@ -434,7 +484,129 @@ export function renderTFTPConsolePage(container) {
           }, { once: true })
         }
 
-        connectSSH()
+        function startConnect(authPayload) {
+          showCredError('')
+          hideCredsShowTerm()
+          connectSSH(authPayload)
+        }
+
+        credForm?.addEventListener('submit', (e) => {
+          e.preventDefault()
+          const sessionName = urlSessionName
+          const sessionDesc = urlSessionDesc
+          if (useStoredCredentials) {
+            const password = needsPassword ? (passwordInput?.value ?? '') : ''
+            const passphrase = needsPassphrase ? (passphraseInput?.value ?? '') : ''
+            if (needsPassword && !password) {
+              showCredError('パスワードを入力してください。')
+              return
+            }
+            if (needsPassphrase && !passphrase) {
+              showCredError('秘密鍵のパスフレーズを入力してください。')
+              return
+            }
+            startConnect(buildAuthPayload({
+              useStored: true,
+              password,
+              passphrase,
+              sessionName,
+              sessionDesc,
+            }))
+            return
+          }
+          const username = (usernameInput?.value ?? '').trim()
+          const password = passwordInput?.value ?? ''
+          const passphrase = passphraseInput?.value ?? ''
+          if (!username) {
+            showCredError('ユーザー名を入力してください。')
+            return
+          }
+          startConnect(buildAuthPayload({
+            useStored: false,
+            username,
+            password,
+            passphrase,
+            sessionName,
+            sessionDesc,
+          }))
+        })
+
+        if (resumeSessionId) {
+          hideCredsShowTerm()
+          connectSSH(null)
+        } else if (channelToken) {
+          if (credPrompt) credPrompt.classList.add('hidden')
+          if (storedHint) {
+            storedHint.textContent = '親タブから認証情報を受信中…'
+            storedHint.classList.remove('hidden')
+          }
+          const bc = new BroadcastChannel(`vantyx-terminal-${channelToken}`)
+          const timeoutId = window.setTimeout(() => {
+            try { bc.close() } catch { /* ignore */ }
+            showCredError('認証情報を受信できませんでした。この画面で入力して接続してください。')
+            if (credPrompt) credPrompt.classList.remove('hidden')
+          }, 10_000)
+          bc.onmessage = (ev) => {
+            const typ = ev?.data?.type
+            if (typ !== 'credentials' && typ !== 'stored_credentials') return
+            window.clearTimeout(timeoutId)
+            try { bc.close() } catch { /* ignore */ }
+            const name = typeof ev.data.name === 'string' ? ev.data.name : urlSessionName
+            const desc = typeof ev.data.description === 'string' ? ev.data.description : urlSessionDesc
+            if (typ === 'stored_credentials') {
+              const p = ev.data.password != null ? ev.data.password : ''
+              const passphrase = typeof ev.data.private_key_passphrase === 'string' ? ev.data.private_key_passphrase : ''
+              startConnect(buildAuthPayload({
+                useStored: true,
+                password: typeof p === 'string' ? p : '',
+                passphrase,
+                sessionName: name,
+                sessionDesc: desc,
+              }))
+              return
+            }
+            const u = ev.data.username
+            const p = ev.data.password != null ? ev.data.password : ''
+            const passphrase = typeof ev.data.private_key_passphrase === 'string' ? ev.data.private_key_passphrase : ''
+            if (!u || !p) {
+              if (usernameInput) usernameInput.value = typeof u === 'string' ? u : ''
+              if (passwordInput) passwordInput.value = typeof p === 'string' ? p : ''
+              if (passphraseInput && passphrase) passphraseInput.value = passphrase
+              showCredError('認証情報が不足しています。入力して接続してください。')
+              if (credPrompt) credPrompt.classList.remove('hidden')
+              return
+            }
+            startConnect(buildAuthPayload({
+              useStored: false,
+              username: u,
+              password: p,
+              passphrase,
+              sessionName: name,
+              sessionDesc: desc,
+            }))
+          }
+          try {
+            bc.postMessage({ type: 'ready', target_id: sshTargetId })
+          } catch {
+            window.clearTimeout(timeoutId)
+          }
+        } else if (useStoredCredentials) {
+          if (credPrompt) credPrompt.classList.add('hidden')
+          if (storedHint) storedHint.classList.remove('hidden')
+          if (usernameWrap) usernameWrap.classList.add('hidden')
+          if (passwordWrap) passwordWrap.classList.toggle('hidden', !needsPassword)
+          if (passphraseWrap) passphraseWrap.classList.toggle('hidden', !needsPassphrase)
+          if (!needsPassword && !needsPassphrase) {
+            startConnect(buildAuthPayload({
+              useStored: true,
+              sessionName: urlSessionName,
+              sessionDesc: urlSessionDesc,
+            }))
+          }
+        } else {
+          // 直接 URL で開いた場合など: 認証フォームを表示（自動接続しない）
+          if (credPrompt) credPrompt.classList.remove('hidden')
+        }
       }
     }
   }

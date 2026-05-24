@@ -37,9 +37,18 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 	if !ok {
 		return nil, nil
 	}
+	client, ok := a.openFileTransferClient(w, r, userID, string(target.ID), target)
+	if !ok {
+		return nil, nil
+	}
+	return target, client
+}
+
+// openFileTransferClient connects a file transfer client for an already-authorized target.
+func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, userID, targetID string, target *access.Target) (FileTransferClient, bool) {
 	if !protocols.SupportsFileTransfer(target.Protocol) {
 		writeJSONError(w, "file transfer only for SSH, FTP, or TFTP targets", http.StatusBadRequest)
-		return nil, nil
+		return nil, false
 	}
 	ctx := r.Context()
 	switch target.Protocol {
@@ -52,21 +61,21 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 				"error":     err.Error(),
 			})
 			writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
-			return nil, nil
+			return nil, false
 		}
-		return target, &tftpClientAdapter{Client: tftpClient}
+		return &tftpClientAdapter{Client: tftpClient}, true
 	case access.ProtocolSSH:
 		if target.SSHUsername == "" || (target.SSHPassword == "" && target.SSHPrivateKey == "") {
 			writeJSONError(w, "stored credentials (password or SSH key) required for file transfer", http.StatusBadRequest)
-			return nil, nil
+			return nil, false
 		}
 		if !target.SFTPEnabled {
 			writeJSONError(w, "SFTP file transfer is disabled for this target", http.StatusForbidden)
-			return nil, nil
+			return nil, false
 		}
 		if target.SSHPrivateKey != "" && strings.HasPrefix(target.SSHPrivateKey, secret.CiphertextVersionPrefix) {
 			writeJSONError(w, "保存された認証情報の復号に失敗しています。VANTYX_ENCRYPTION_KEY を確認してください", http.StatusInternalServerError)
-			return nil, nil
+			return nil, false
 		}
 		if a.SFTPClientFactory != nil {
 			client, err := a.SFTPClientFactory(ctx, target)
@@ -77,9 +86,9 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 					"error":     proxyerrors.UnwrapForAudit(err),
 				})
 				writeJSONError(w, proxyerrors.BridgeErrorMessage(err), http.StatusBadGateway)
-				return nil, nil
+				return nil, false
 			}
-			return target, client
+			return client, true
 		}
 		client, err := sftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase)
 		if err != nil {
@@ -89,13 +98,13 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 				"error":     proxyerrors.UnwrapForAudit(err),
 			})
 			writeJSONError(w, proxyerrors.BridgeErrorMessage(err), http.StatusBadGateway)
-			return nil, nil
+			return nil, false
 		}
-		return target, &sftpClientAdapter{Client: client}
+		return &sftpClientAdapter{Client: client}, true
 	case access.ProtocolFTP:
 		if target.SSHUsername == "" || target.SSHPassword == "" {
 			writeJSONError(w, "stored username and password are required for FTP file transfer", http.StatusBadRequest)
-			return nil, nil
+			return nil, false
 		}
 		client, err := ftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword)
 		if err != nil {
@@ -105,12 +114,12 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 				"error":     err.Error(),
 			})
 			writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
-			return nil, nil
+			return nil, false
 		}
-		return target, &ftpClientAdapter{Client: client}
+		return &ftpClientAdapter{Client: client}, true
 	default:
 		writeJSONError(w, "file transfer only for SSH, FTP, or TFTP targets", http.StatusBadRequest)
-		return nil, nil
+		return nil, false
 	}
 }
 

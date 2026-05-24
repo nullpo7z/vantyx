@@ -318,6 +318,65 @@ const API = {
     return res.json()
   },
 
+  /** 組み込み TFTP サーバー — ディレクトリ一覧 */
+  async tftpServerFilesList(targetId, path = '/') {
+    const q = new URLSearchParams()
+    if (path) q.set('path', path)
+    const res = await fetch(
+      `/api/tftp/targets/${encodeURIComponent(targetId)}/files` + (q.toString() ? `?${q.toString()}` : ''),
+      { credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to list TFTP files')
+    }
+    return res.json()
+  },
+
+  /** 組み込み TFTP サーバー — ファイルアップロード */
+  async tftpServerUpload(targetId, path, file) {
+    const form = new FormData()
+    form.append('path', path)
+    form.append('file', file)
+    const res = await fetch(`/api/tftp/targets/${encodeURIComponent(targetId)}/files/upload`, {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to upload TFTP file')
+    }
+    return res.json().catch(() => ({}))
+  },
+
+  /** 組み込み TFTP サーバー — ファイルダウンロード（Blob） */
+  async tftpServerDownload(targetId, path) {
+    const q = new URLSearchParams({ path })
+    const res = await fetch(
+      `/api/tftp/targets/${encodeURIComponent(targetId)}/files/download?${q.toString()}`,
+      { credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to download TFTP file')
+    }
+    return res.blob()
+  },
+
+  /** 組み込み TFTP サーバー — ファイル削除 */
+  async tftpServerDelete(targetId, path) {
+    const q = new URLSearchParams({ path })
+    const res = await fetch(`/api/tftp/targets/${encodeURIComponent(targetId)}/files?${q.toString()}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete TFTP file')
+    }
+  },
+
   /** アクティブな RDP（ブラウザ）セッション一覧（再接続用） */
   async rdpSessions() {
     const res = await fetch('/api/rdp/sessions', { credentials: 'include' })
@@ -535,6 +594,61 @@ const API = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
       throw new Error(err.message || 'Upload failed')
+    }
+    return res.json()
+  },
+
+  /** バックグラウンド転送一覧 */
+  async fileTransfers() {
+    const res = await fetch('/api/file-transfers', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load file transfers')
+    }
+    return res.json()
+  },
+
+  async fileTransferGet(transferId) {
+    const res = await fetch(`/api/file-transfers/${encodeURIComponent(transferId)}`, { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load transfer')
+    }
+    return res.json()
+  },
+
+  async fileTransferCancel(transferId) {
+    const res = await fetch(`/api/file-transfers/${encodeURIComponent(transferId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to cancel transfer')
+    }
+  },
+
+  async fileTransferContent(transferId) {
+    const res = await fetch(`/api/file-transfers/${encodeURIComponent(transferId)}/content`, {
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Download failed')
+    }
+    return res.blob()
+  },
+
+  async fileTransferStartDownload({ backend, target_id, path }) {
+    const res = await fetch('/api/file-transfers/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ backend, target_id, path }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to start download')
     }
     return res.json()
   },

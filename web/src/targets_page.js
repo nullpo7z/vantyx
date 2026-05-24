@@ -1,3 +1,14 @@
+/** 組み込み TFTP 用の内部ターゲット（SSH/Telnet の TFTP トグルで自動作成）。一覧には出さず SSH 行の「ファイル」から操作する。 */
+function isEmbeddedTftpCompanionTarget(t, targets) {
+  if (t.protocol !== 'tftp' || !t.host) return false
+  return targets.some(
+    (x) =>
+      x.host === t.host &&
+      (x.protocol === 'ssh' || x.protocol === 'telnet') &&
+      x.tftp_enabled,
+  )
+}
+
 export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, renderTagPills) {
   const isManageMode = mode === 'manage'
   if (!targets || targets.length === 0) {
@@ -21,7 +32,7 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
       tftpCapableByTargetId[t.id] = true
     }
   })
-  const visibleTargets = targets.filter((t) => isManageMode || t.protocol !== 'tftp')
+  const visibleTargets = targets.filter((t) => !isEmbeddedTftpCompanionTarget(t, targets))
   const rows = visibleTargets
     .slice()
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
@@ -35,7 +46,8 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
       const showFileBtn =
         (t.protocol === 'ssh' &&
           ((hasSftpEnabled && (t.has_stored_credentials || t.has_ssh_key)) || activeFtp || activeTftp)) ||
-        t.protocol === 'ftp'
+        t.protocol === 'ftp' ||
+        t.protocol === 'tftp'
       // ホーム画面では、「TFTP を使用するホスト」（サーバー管理で機能フラグ ON のホスト）のみトグルを表示する。
       // トグルがない行でも同じ幅のプレースホルダを表示しておき、横幅のガタつきを防ぐ。
       const tftpToggleHtml =
@@ -97,7 +109,22 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
               </button>
             </div>
             `
-                : `
+                : t.protocol === 'tftp'
+                  ? `
+            <div class="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                class="files-open-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors w-[104px] text-center whitespace-nowrap"
+                data-files-target-id="${escapeHtml(t.id)}"
+                data-files-target-name="${escapeHtml(t.name || '')}"
+                data-files-protocol="tftp"
+                data-files-host="${escapeHtml(t.host)}"
+                data-files-sftp-enabled="0"
+                data-files-disabled="0"
+              >ファイル</button>
+            </div>
+            `
+                  : `
             <div class="flex items-center justify-end gap-2">
               ${tftpToggleHtml}
               <button
@@ -141,12 +168,7 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
               class="connect-btn-in-group rdp-open-link rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block w-[96px] text-center whitespace-nowrap">
               接続
             </a>`
-                      : `<button data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(
-                          t.name,
-                        )}" data-protocol="${escapeHtml(t.protocol)}"
-              class="connect-btn-in-group rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50 w-[96px] text-center whitespace-nowrap">
-              接続
-            </button>`
+                      : ''
               }
               <button type="button" class="active-sessions-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors w-[200px] text-center whitespace-nowrap" data-target-id="${escapeHtml(
                 t.id,

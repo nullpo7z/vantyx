@@ -21,6 +21,7 @@ import (
 
 	api "github.com/nullpo7z/vantyx/docs/api"
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/filetransfer"
 	"github.com/nullpo7z/vantyx/internal/auth"
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
@@ -238,6 +239,9 @@ type App struct {
 
 	// CommandLogStore persists terminal stdin lines for search.
 	CommandLogStore *commandLogStore
+
+	// FileTransferManager tracks background file upload/download jobs.
+	FileTransferManager *filetransfer.Manager
 }
 
 // newAppDBOpen, newAppMigrate, and newAppUserStore are set in tests to inject failures for coverage.
@@ -315,6 +319,11 @@ func NewApp() *App {
 		panic(err)
 	}
 
+	transferDir := filepath.Join(filepath.Dir(path), "file-transfers")
+	if err := os.MkdirAll(transferDir, 0o700); err != nil {
+		panic(err)
+	}
+
 	return &App{
 		UserStore:              userStore,
 		SessionStore:           sessionStore,
@@ -326,6 +335,7 @@ func NewApp() *App {
 		RDPVNCManager:          rdpSessions,
 		SessionEventBroker:     NewSessionEventBroker(),
 		CommandLogStore:        newCommandLogStore(db),
+		FileTransferManager:    filetransfer.NewManager(transferDir),
 	}
 }
 
@@ -468,6 +478,14 @@ func (a *App) NewRouter() http.Handler {
 	// Recordings (asciinema): list and download (owner only)
 	r.Get("/api/recordings", a.handleListRecordings)
 	r.Get("/api/recordings/{recording_id}/file", a.handleGetRecordingFile)
+
+	// Background file transfers (continue after leaving the files UI).
+	r.Get("/api/file-transfers", a.handleFileTransfersList)
+	r.Post("/api/file-transfers/download", a.handleFileTransferStartDownload)
+	r.Post("/api/file-transfers/upload", a.handleFileTransferUpload)
+	r.Get("/api/file-transfers/{transfer_id}", a.handleFileTransferGet)
+	r.Delete("/api/file-transfers/{transfer_id}", a.handleFileTransferDelete)
+	r.Get("/api/file-transfers/{transfer_id}/content", a.handleFileTransferContent)
 
 	// File transfer (SFTP/FTP): list, download, upload, delete (requires auth + target access + stored credentials)
 	r.Get("/api/targets/{target_id}/files/download", a.handleDownloadFile)

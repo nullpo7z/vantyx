@@ -955,7 +955,7 @@ export function renderApp(container) {
   /** 保存済み認証のターゲット用: 接続前にモーダルで不足情報を入力させる。
    * パスワード認証・パスフレーズ無しの公開鍵・パスフレーズありで登録済みの場合はセッション名と説明のみ。
    * パスワード未登録のときはパスワード欄、パスフレーズ未登録のときはパスフレーズ欄を表示する。 */
-  function showStoredCredentialModal(targetId, targetName, needsPassword, needsPassphrase, protocol = 'ssh') {
+  function showStoredCredentialModal(targetId, targetName, needsPassword, needsPassphrase, protocol = 'ssh', urlOpts = null) {
     const isTelnet = protocol === 'telnet'
     if (isTelnet) needsPassphrase = false
     const modal = document.getElementById('ssh-credential-modal')
@@ -1042,17 +1042,24 @@ export function renderApp(container) {
       const token = randomToken()
       pendingTerminalCreds[token] = { targetId, targetName, protocol, password: password || '', passphrase: isTelnet ? '' : (passphrase || ''), sessionName, sessionDesc, useStoredCredentials: true }
       params.set('channel', token)
-      openTerminalTabWithParent(`/terminal?${params.toString()}`)
+      if (urlOpts?.toUrl) {
+        params.set('needs_password', needsPassword ? '1' : '0')
+        params.set('needs_passphrase', needsPassphrase ? '1' : '0')
+        openTerminalTabWithParent(urlOpts.toUrl(params))
+      } else {
+        openTerminalTabWithParent(`/terminal?${params.toString()}`)
+      }
 
       // 新しいタブとは BroadcastChannel で不足分（パスワード/パスフレーズ）を受け渡しする（localStorageに保存しない）
       const bc = new BroadcastChannel(`vantyx-terminal-${token}`)
+      const channelTargetId = urlOpts?.channelTargetId || targetId
       const timeoutId = window.setTimeout(() => {
         try { bc.close() } catch { /* ignore */ }
         delete pendingTerminalCreds[token]
       }, 15_000)
       bc.onmessage = (ev) => {
         if (ev?.data?.type !== 'ready') return
-        if (ev?.data?.target_id !== targetId) return
+        if (ev?.data?.target_id !== channelTargetId) return
         const creds = pendingTerminalCreds[token]
         if (!creds) return
         try {
@@ -1076,7 +1083,7 @@ export function renderApp(container) {
     })
   }
 
-  function showSSHCredentialModal(targetId, targetName, protocol = 'ssh') {
+  function showSSHCredentialModal(targetId, targetName, protocol = 'ssh', urlOpts = null) {
     const isTelnet = protocol === 'telnet'
     const authLabel = isTelnet ? 'Telnet' : 'SSH'
     const modal = document.getElementById('ssh-credential-modal')
@@ -1142,19 +1149,29 @@ export function renderApp(container) {
       }
       const token = randomToken()
       pendingTerminalCreds[token] = { targetId, targetName, protocol, username, password, passphrase: isTelnet ? '' : passphrase, sessionName, sessionDesc }
-      const url = `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=${encodeURIComponent(protocol)}&channel=${encodeURIComponent(token)}`
+      let url
+      if (urlOpts?.toUrl) {
+        const p = new URLSearchParams()
+        p.set('channel', token)
+        p.set('session_name', sessionName)
+        p.set('session_description', sessionDesc)
+        url = urlOpts.toUrl(p)
+      } else {
+        url = `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=${encodeURIComponent(protocol)}&channel=${encodeURIComponent(token)}`
+      }
       // NOTE: ターミナルの「戻る/セッション終了」で元タブに戻れるよう、opener を残す（noreferrer/noopener は付けない）
       openTerminalTabWithParent(url)
 
       // 新しいタブとは BroadcastChannel で認証情報を受け渡しする
       const bc = new BroadcastChannel(`vantyx-terminal-${token}`)
+      const channelTargetId = urlOpts?.channelTargetId || targetId
       const timeoutId = window.setTimeout(() => {
         try { bc.close() } catch { /* ignore */ }
         delete pendingTerminalCreds[token]
       }, 15_000)
       bc.onmessage = (ev) => {
         if (ev?.data?.type !== 'ready') return
-        if (ev?.data?.target_id !== targetId) return
+        if (ev?.data?.target_id !== channelTargetId) return
         const creds = pendingTerminalCreds[token]
         if (!creds) return
         try {
@@ -1538,70 +1555,6 @@ export function renderApp(container) {
             }
           })
         })
-        // ファイルボタン: SFTP/FTP/TFTP（+コンソール）どれで開くか選択させる。
-        mainContent.querySelectorAll('.files-open-btn').forEach((btn) => {
-          btn.addEventListener('click', (e) => {
-            e.preventDefault()
-            if (btn.disabled || btn.dataset.filesDisabled === '1') {
-              return
-            }
-            const targetId = btn.dataset.filesTargetId || ''
-            const targetName = btn.dataset.filesTargetName || ''
-            const proto = btn.dataset.filesProtocol || 'ssh'
-            const hostForTftp = btn.dataset.filesHost || ''
-            if (!targetId) return
-            const actions = []
-            const sftpEnabled = btn.dataset.filesSftpEnabled === '1'
-            if (proto === 'ssh') {
-              if (sftpEnabled) {
-                actions.push({
-                  label: 'SFTP (SSH)',
-                  onSelect: () => {
-                    const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=sftp`
-                    window.location.href = url
-                  },
-                })
-              }
-              if (hostForTftp) {
-                const ftpTarget = targets.find((t) => t.protocol === 'ftp' && t.host === hostForTftp)
-                if (ftpTarget) {
-                  actions.push({
-                    label: 'FTP',
-                    onSelect: () => {
-                      const url = `/files?target_id=${encodeURIComponent(ftpTarget.id)}&target_name=${encodeURIComponent(ftpTarget.name || targetName || '')}&protocol=ftp`
-                      window.location.href = url
-                    },
-                  })
-                }
-                const tftpTarget = targets.find((t) => t.protocol === 'tftp' && t.host === hostForTftp)
-                if (tftpTarget) {
-                  actions.push({
-                    label: 'TFTP（TFTP + コンソール）',
-                    onSelect: () => {
-                      const name = tftpTarget.name || hostForTftp
-                      const url = `/tftp-console?tftp_target_id=${encodeURIComponent(tftpTarget.id)}&ssh_target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(name)}`
-                      openTerminalTabWithParent(url)
-                    },
-                  })
-                }
-              }
-            }
-            if (proto === 'ftp') {
-              actions.push({
-                label: 'FTP',
-                onSelect: () => {
-                  const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=ftp`
-                  window.location.href = url
-                },
-              })
-            }
-            showFileProtocolModal({
-              title: 'ファイル転送プロトコルの選択',
-              targetName,
-              actions,
-            })
-          })
-        })
         // SSH: 認証情報が保存済みならタブを直接開き、未保存なら認証モーダル表示。
         mainContent.querySelectorAll('.terminal-open-btn').forEach((btn) => {
           btn.addEventListener('click', (e) => {
@@ -1651,6 +1604,102 @@ export function renderApp(container) {
           })
         })
       }
+
+      // ファイルボタン（ホーム・サーバー管理の両方）: SFTP/FTP/TFTP（+コンソール）を開く。
+      mainContent.querySelectorAll('.files-open-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault()
+          if (btn.disabled || btn.dataset.filesDisabled === '1') {
+            return
+          }
+          const targetId = btn.dataset.filesTargetId || ''
+          const targetName = btn.dataset.filesTargetName || ''
+          const proto = btn.dataset.filesProtocol || 'ssh'
+          const hostForTftp = btn.dataset.filesHost || ''
+          if (!targetId) return
+          const actions = []
+          const sftpEnabled = btn.dataset.filesSftpEnabled === '1'
+          if (proto === 'ssh') {
+            if (sftpEnabled) {
+              actions.push({
+                label: 'SFTP (SSH)',
+                onSelect: () => {
+                  const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=sftp`
+                  window.location.href = url
+                },
+              })
+            }
+            if (hostForTftp) {
+              const ftpTarget = targets.find((t) => t.protocol === 'ftp' && t.host === hostForTftp)
+              if (ftpTarget) {
+                actions.push({
+                  label: 'FTP',
+                  onSelect: () => {
+                    const url = `/files?target_id=${encodeURIComponent(ftpTarget.id)}&target_name=${encodeURIComponent(ftpTarget.name || targetName || '')}&protocol=ftp`
+                    window.location.href = url
+                  },
+                })
+              }
+              const tftpTarget = targets.find((t) => t.protocol === 'tftp' && t.host === hostForTftp)
+              const sshTarget = targets.find((t) => t.id === targetId)
+              if (tftpTarget && sshTarget) {
+                actions.push({
+                  label: 'TFTP（TFTP + コンソール）',
+                  onSelect: () => {
+                    const name = tftpTarget.name || hostForTftp
+                    const urlOpts = {
+                      channelTargetId: sshTarget.id,
+                      toUrl: (p) => {
+                        p.delete('target_id')
+                        p.delete('protocol')
+                        p.set('ssh_target_id', sshTarget.id)
+                        p.set('tftp_target_id', tftpTarget.id)
+                        p.set('target_name', name)
+                        return `/tftp-console?${p.toString()}`
+                      },
+                    }
+                    if (sshTarget.has_stored_credentials) {
+                      showStoredCredentialModal(
+                        sshTarget.id,
+                        sshTarget.name || targetName,
+                        sshTarget.needs_password,
+                        sshTarget.needs_passphrase,
+                        'ssh',
+                        urlOpts,
+                      )
+                    } else {
+                      showSSHCredentialModal(sshTarget.id, sshTarget.name || targetName, 'ssh', urlOpts)
+                    }
+                  },
+                })
+              }
+            }
+          }
+          if (proto === 'ftp') {
+            actions.push({
+              label: 'FTP',
+              onSelect: () => {
+                const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=ftp`
+                window.location.href = url
+              },
+            })
+          }
+          if (proto === 'tftp') {
+            const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=tftp`
+            window.location.href = url
+            return
+          }
+          if (actions.length === 1) {
+            actions[0].onSelect()
+            return
+          }
+          showFileProtocolModal({
+            title: 'ファイル転送プロトコルの選択',
+            targetName,
+            actions,
+          })
+        })
+      })
 
       mainContent.querySelectorAll('[data-group-toggle="1"]').forEach((el) => {
         el.addEventListener('click', (e) => {

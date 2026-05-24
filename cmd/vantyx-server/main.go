@@ -97,7 +97,9 @@ func main() {
 	}
 
 	app := httpapi.NewApp()
-	tftp.DisableAtStartup(context.Background(), app.TargetStore)
+	ctx := context.Background()
+	tftp.DisableAtStartup(ctx, app.TargetStore)
+	tftp.StartServerIfNeeded(ctx, app.TargetStore)
 	httpsHandler := securityHeadersMiddleware(corsMiddleware(app.NewRouter()))
 	// ReadTimeout covers the whole request including body; increase via VANTYX_HTTPS_READ_TIMEOUT_SEC for large uploads, or use TimeoutHandler/MaxBytesReader in router.
 	httpsServer := &http.Server{

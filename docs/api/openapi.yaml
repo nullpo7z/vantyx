@@ -18,7 +18,8 @@ info:
     - ターゲットの一覧・作成・更新・削除 (GET/POST/PUT/DELETE /api/targets, /api/targets/{target_id})。プロトコルは ssh / telnet / vnc / tftp。一覧は limit / after_id でキーセットページネーション対応。
     - ターミナル WebSocket (GET /ws/ssh)。認証後、ターゲットへの SSH または Telnet をブリッジ。セッション永続化・レジューム対応（GET /api/terminal/sessions で一覧、session_id で再接続）。
     - VNC WebSocket (GET /ws/vnc)。認証後、protocol=vnc のターゲットへ noVNC 用に RFB をブリッジ。クエリ target_id 必須。
-    - ファイル転送: GET /api/targets/{target_id}/files（一覧・クエリ path）、GET /api/targets/{target_id}/files/download（ダウンロード・クエリ path）、POST /api/targets/{target_id}/files/upload（multipart: path, file）、DELETE /api/targets/{target_id}/files（削除・クエリ path）。SSH ターゲットは SFTP（保存済み認証必須）、TFTP ターゲットは TFTP（認証不要）。TFTP はディレクトリ一覧なし・削除未対応。
+    - ファイル転送: GET /api/targets/{target_id}/files（一覧・クエリ path）、GET /api/targets/{target_id}/files/download（ダウンロード・クエリ path）、POST /api/targets/{target_id}/files/upload（multipart: path, file）、DELETE /api/targets/{target_id}/files（削除・クエリ path）。SSH ターゲットは SFTP（保存済み認証必須）、リモート TFTP ターゲットは TFTP クライアント（認証不要・一覧・削除未対応）。
+    - 組み込み TFTP サーバー（Vantyx 内蔵）: GET/POST/DELETE /api/tftp/targets/{target_id}/files/*。protocol=tftp のターゲット向け。ローカルディスク（VANTYX_TFTP_ROOT）上のファイルを操作。
     - 録画: GET /api/recordings（メタデータ一覧。クエリ target_id でフィルタ可）。GET /api/recordings/{recording_id}/file でファイル取得。クエリ format=cast|gif|webm（省略時 cast）。cast=Asciinema 形式。gif/webm は agg（および WebM は ffmpeg）必要、未導入時 503。ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象。
     - CLI SSH ゲートウェイ: VANTYX_SSH_LISTEN で有効化。ssh user@vantyx でログイン後、メニューからターゲット選択してプロキシ接続。VANTYX_RECORDINGS_DIR 設定時は CLI 接続も録画対象。
     - OpenAPI 仕様 (GET /api/spec) と Swagger UI (GET /docs) は admin のみアクセス可。
@@ -1121,6 +1122,126 @@ paths:
         '403':
         '404':
         '502':
+
+  /api/tftp/targets/{target_id}/files:
+    get:
+      summary: 組み込み TFTP サーバー — ファイル一覧
+      description: |
+        Vantyx 組み込み TFTP サーバー用のローカルディレクトリ（`VANTYX_TFTP_ROOT/{target_id}/`）を一覧します。
+        ターゲットは `protocol=tftp` である必要があります（リモート TFTP クライアント向けの `/api/targets/.../files` とは別 API）。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+            default: /
+          description: ディレクトリパス（デフォルト `/`）
+      responses:
+        '200':
+          description: ディレクトリエントリ配列
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileEntry'
+        '400':
+        '401':
+        '403':
+    delete:
+      summary: 組み込み TFTP サーバー — ファイル削除
+      description: ローカル TFTP ディレクトリ内のファイルまたは空ディレクトリを削除します。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 削除完了
+        '400':
+        '401':
+        '403':
+        '404':
+
+  /api/tftp/targets/{target_id}/files/download:
+    get:
+      summary: 組み込み TFTP サーバー — ファイルダウンロード
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ファイル内容（バイナリ）
+        '400':
+        '401':
+        '403':
+        '404':
+
+  /api/tftp/targets/{target_id}/files/upload:
+    post:
+      summary: 組み込み TFTP サーバー — ファイルアップロード
+      description: multipart/form-data で path と file を送信。最大 64MB。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [path, file]
+              properties:
+                path:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: アップロード完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+        '400':
+        '401':
+        '403':
 
   /api/groups:
     get:

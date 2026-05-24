@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/auth"
 	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/recording"
 	"github.com/nullpo7z/vantyx/internal/secret"
@@ -494,6 +495,7 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 }
 
 // handleListRecordings returns recordings for the current user (metadata only, no file_path).
+// Admins may pass user_id to list another user's recordings.
 func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
@@ -506,13 +508,54 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	q := r.URL.Query()
-	targetID := q.Get("target_id")
+
+	filterUserID := userID
+	if requestedUser := strings.TrimSpace(q.Get("user_id")); requestedUser != "" && requestedUser != userID {
+		u, err := a.UserStore.GetByID(userID)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		if u == nil || u.Role != auth.RoleAdmin {
+			writeJSONError(w, "forbidden: admin only", http.StatusForbidden)
+			return
+		}
+		filterUserID = requestedUser
+	}
+
+	from, to, err := parseTimeRange(q.Get("from"), q.Get("to"), time.Now().UTC())
+	if err != nil {
+		writeTimeRangeError(w, err)
+		return
+	}
+
+	targetID := strings.TrimSpace(q.Get("target_id"))
+	channelType := strings.TrimSpace(q.Get("channel_type"))
+	sessionID := strings.TrimSpace(q.Get("session_id"))
+
 	query := `SELECT id, user_id, target_id, session_id, channel_type, started_at, ended_at, COALESCE(session_name, ''), COALESCE(session_description, '') FROM recordings WHERE user_id = ?`
-	args := []interface{}{userID}
+	args := []interface{}{filterUserID}
 	if targetID != "" {
 		query += ` AND target_id = ?`
 		args = append(args, targetID)
 	}
+	if channelType != "" {
+		query += ` AND channel_type = ?`
+		args = append(args, channelType)
+	}
+	if sessionID != "" {
+		query += ` AND session_id = ?`
+		args = append(args, sessionID)
+	}
+	// Recordings may use "2006-01-02 15:04:05" (browser) or RFC3339 (CLI/tests).
+	// Extend upper bound slightly so rows inserted at "now" are included (to is exclusive).
+	toRec := to.Add(time.Minute)
+	fromSpace := formatRecordingTime(from)
+	toSpace := formatRecordingTime(toRec)
+	fromRFC := from.UTC().Format(time.RFC3339)
+	toRFC := toRec.UTC().Format(time.RFC3339)
+	query += ` AND ((started_at >= ? AND started_at < ?) OR (started_at >= ? AND started_at < ?))`
+	args = append(args, fromSpace, toSpace, fromRFC, toRFC)
 	query += ` ORDER BY started_at DESC LIMIT 200`
 	rows, err := a.DB.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -786,7 +829,7 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		}
 	}
 
-	// Command log recorder: records stdin lines into command_logs for search.
+	// Command log recorder: stdin + PTY echo (for tab completion) into command_logs.
 	cmdRec := newCommandLogRecorder(a.CommandLogStore, string(id), termSess.UserID, termSess.TargetID)
 	if cmdRec != nil {
 		prev := stdinRecorder
@@ -796,6 +839,12 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 			}
 			cmdRec.RecordInput(p)
 		})
+		stdoutTap := commandLogStdoutWriter{rec: cmdRec}
+		if tee != nil {
+			tee = io.MultiWriter(tee, stdoutTap)
+		} else {
+			tee = stdoutTap
+		}
 	}
 
 	var bridgeErr error

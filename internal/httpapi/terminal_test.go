@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/auth"
 	"github.com/nullpo7z/vantyx/internal/mock"
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
 	"github.com/nullpo7z/vantyx/internal/session"
@@ -1013,6 +1014,74 @@ func TestHandleListRecordings_WithTargetFilter(t *testing.T) {
 	items, _ := result["items"].([]interface{})
 	if len(items) == 0 {
 		t.Fatal("expected at least 1 recording")
+	}
+}
+
+func TestHandleListRecordings_AdminUserFilter(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, _ = app.UserStore.CreateUser("bob", "bob", "User123!", auth.RoleUser)
+	if err := app.InsertRecording(ctx, "rec-bob-1", "bob", "t1", "s1", "browser", "/tmp/b.cast", time.Now().UTC().Format(time.RFC3339), "", ""); err != nil {
+		t.Fatalf("InsertRecording: %v", err)
+	}
+
+	adminSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings?user_id=bob", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: adminSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var result map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&result)
+	items, _ := result["items"].([]interface{})
+	if len(items) != 1 {
+		t.Fatalf("expected 1 recording for bob, got %d", len(items))
+	}
+}
+
+func TestHandleListRecordings_NonAdminUserFilterForbidden(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	_, _ = app.UserStore.CreateUser("u1", "user1", "User123!", auth.RoleUser)
+	userSess, _ := app.SessionStore.Create("u1")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings?user_id=admin", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: userSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleListRecordings_ChannelFilter(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	started := time.Now().UTC().Format(time.RFC3339)
+	if err := app.InsertRecording(ctx, "rec-cli-1", "admin", "t1", "s1", "cli", "/tmp/c.cast", started, "", ""); err != nil {
+		t.Fatalf("InsertRecording cli: %v", err)
+	}
+	if err := app.InsertRecording(ctx, "rec-br-1", "admin", "t1", "s2", "browser", "/tmp/b.cast", started, "", ""); err != nil {
+		t.Fatalf("InsertRecording browser: %v", err)
+	}
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings?channel_type=cli", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&result)
+	items, _ := result["items"].([]interface{})
+	if len(items) != 1 {
+		t.Fatalf("expected 1 cli recording, got %d", len(items))
 	}
 }
 

@@ -93,6 +93,10 @@ export function renderApp(container) {
   let selectedRecordingsGroupId = ''
   let selectedRecordingsTargetId = ''
   let selectedRecordingsTargetName = ''
+  let recordingsFilterFrom = ''
+  let recordingsFilterTo = ''
+  let recordingsFilterChannel = ''
+  let recordingsFilterUserId = ''
   /** 新しいタブに渡す SSH 認証情報（BroadcastChannel 用） */
   const pendingTerminalCreds = Object.create(null)
   /** ターミナルタブ用: 親タブへフォーカス要求するための待受（opener が無い環境向け） */
@@ -249,6 +253,7 @@ export function renderApp(container) {
     setActiveNav('recordings')
     await renderRecordingsPage({
       mainContent,
+      meData,
       escapeHtml,
       buildGroupTree,
       renderGroupTree,
@@ -261,11 +266,19 @@ export function renderApp(container) {
         groupId: selectedRecordingsGroupId,
         targetId: selectedRecordingsTargetId,
         targetName: selectedRecordingsTargetName,
+        filterFrom: recordingsFilterFrom,
+        filterTo: recordingsFilterTo,
+        filterChannel: recordingsFilterChannel,
+        filterUserId: recordingsFilterUserId,
       }),
       setState: (partial) => {
         if ('groupId' in partial) selectedRecordingsGroupId = partial.groupId
         if ('targetId' in partial) selectedRecordingsTargetId = partial.targetId
         if ('targetName' in partial) selectedRecordingsTargetName = partial.targetName
+        if ('filterFrom' in partial) recordingsFilterFrom = partial.filterFrom
+        if ('filterTo' in partial) recordingsFilterTo = partial.filterTo
+        if ('filterChannel' in partial) recordingsFilterChannel = partial.filterChannel
+        if ('filterUserId' in partial) recordingsFilterUserId = partial.filterUserId
       },
       refresh: () => showRecordingsPage(),
     })

@@ -2,8 +2,19 @@ import API from './api.js'
 import * as AsciinemaPlayer from 'asciinema-player'
 import 'asciinema-player/dist/bundle/asciinema-player.css'
 
+function defaultDateRange() {
+  const to = new Date()
+  const from = new Date(to)
+  from.setDate(from.getDate() - 30)
+  return {
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
+  }
+}
+
 export async function renderRecordingsPage({
   mainContent,
+  meData,
   escapeHtml,
   buildGroupTree,
   renderGroupTree,
@@ -14,7 +25,19 @@ export async function renderRecordingsPage({
   setState,
   refresh,
 }) {
-  const { groupId: selectedRecordingsGroupId, targetId: selectedRecordingsTargetId, targetName: selectedRecordingsTargetName } = getState()
+  const {
+    groupId: selectedRecordingsGroupId,
+    targetId: selectedRecordingsTargetId,
+    targetName: selectedRecordingsTargetName,
+    filterFrom: recordingsFilterFrom,
+    filterTo: recordingsFilterTo,
+    filterChannel: recordingsFilterChannel,
+    filterUserId: recordingsFilterUserId,
+  } = getState()
+  const isAdmin = meData && meData.role === 'admin'
+  const dates = defaultDateRange()
+  const fromVal = recordingsFilterFrom || dates.from
+  const toVal = recordingsFilterTo || dates.to
 
   function showRecordingPlayerModal(recordingId, label, userId, sessionId) {
     const modal = document.getElementById('recording-player-modal')
@@ -86,7 +109,31 @@ export async function renderRecordingsPage({
     let sectionHeader = ''
 
     if (selectedRecordingsTargetId) {
-      const res = await API.recordings({ target_id: selectedRecordingsTargetId })
+      let adminUsers = []
+      if (isAdmin) {
+        try {
+          const usersRes = await API.users()
+          adminUsers = (usersRes && usersRes.items) || []
+        } catch {
+          /* ignore */
+        }
+      }
+      const userOptions =
+        `<option value=""${recordingsFilterUserId === '' ? ' selected' : ''}>(自分)</option>` +
+        adminUsers
+          .map(
+            (u) =>
+              `<option value="${escapeHtml(u.id)}"${recordingsFilterUserId === u.id ? ' selected' : ''}>${escapeHtml(u.id)}</option>`,
+          )
+          .join('')
+      const recParams = {
+        target_id: selectedRecordingsTargetId,
+        from: fromVal,
+        to: toVal,
+      }
+      if (recordingsFilterChannel) recParams.channel_type = recordingsFilterChannel
+      if (isAdmin && recordingsFilterUserId) recParams.user_id = recordingsFilterUserId
+      const res = await API.recordings(recParams)
       const items = (res && res.items) || []
       const rows = items
         .map((r) => {
@@ -132,6 +179,33 @@ export async function renderRecordingsPage({
           </div>
         `
       sectionContent = `
+          <div class="px-4 py-3 border-b border-slate-200 flex gap-3 flex-wrap items-end bg-white">
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">開始日</label>
+              <input id="rec-filter-from" type="date" value="${escapeHtml(fromVal)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">終了日</label>
+              <input id="rec-filter-to" type="date" value="${escapeHtml(toVal)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">チャネル</label>
+              <select id="rec-filter-channel" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
+                <option value=""${recordingsFilterChannel === '' ? ' selected' : ''}>すべて</option>
+                <option value="browser"${recordingsFilterChannel === 'browser' ? ' selected' : ''}>browser</option>
+                <option value="cli"${recordingsFilterChannel === 'cli' ? ' selected' : ''}>cli</option>
+              </select>
+            </div>
+            ${
+              isAdmin
+                ? `<div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">ユーザー（管理者）</label>
+              <select id="rec-filter-user" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white min-w-[8rem]">${userOptions}</select>
+            </div>`
+                : ''
+            }
+            <button type="button" id="rec-filter-apply" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">絞り込み</button>
+          </div>
           <div class="overflow-x-auto flex-1 min-h-0">
             <table class="min-w-full text-left text-sm">
               <thead class="bg-slate-50 border-b border-slate-200">
@@ -210,6 +284,16 @@ export async function renderRecordingsPage({
           </section>
         </div>
       `
+
+    mainContent.querySelector('#rec-filter-apply')?.addEventListener('click', () => {
+      setState({
+        filterFrom: mainContent.querySelector('#rec-filter-from')?.value || '',
+        filterTo: mainContent.querySelector('#rec-filter-to')?.value || '',
+        filterChannel: mainContent.querySelector('#rec-filter-channel')?.value || '',
+        filterUserId: mainContent.querySelector('#rec-filter-user')?.value || '',
+      })
+      refresh()
+    })
 
     mainContent.querySelector('#recordings-back-to-servers')?.addEventListener('click', () => {
       setState({ targetId: '', targetName: '' })

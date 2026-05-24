@@ -103,6 +103,20 @@ func TestHandleCommandLogs_ForbiddenNonAdmin(t *testing.T) {
 	}
 }
 
+func TestHandleCommandLogs_InvalidTimeRange(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/commands?from=2026-06-01&to=2026-01-01", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
+	}
+}
+
 func TestHandleCommandLogs_DefaultLimit(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()

@@ -1677,8 +1677,9 @@ paths:
     get:
       summary: 監査ログ取得（管理者のみ）
       description: |
-        監査ログを新しい順に返します。`limit`/`event`/`user_id` でフィルタできます。
+        監査ログを新しい順に返します。`limit`/`event`/`user_id`/`from`/`to` でフィルタできます。
         実装は DB 永続ログ（audit_logs）を優先し、DB が使えない場合はメモリ上の直近分にフォールバックします。
+        `from`/`to` 未指定時は直近 30 日。最大範囲は 90 日（超過は 400）。
       security:
         - cookieAuth: []
       parameters:
@@ -1702,6 +1703,24 @@ paths:
           schema:
             type: string
           description: user_id の完全一致
+        - name: exclude_event
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 除外する event（カンマ区切り可。例: http_request）
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 期間開始（RFC3339 または YYYY-MM-DD、UTC 日境界）
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 期間終了（排他的。RFC3339 または YYYY-MM-DD）
       responses:
         '200':
           description: 監査ログ一覧
@@ -1717,6 +1736,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: 期間パラメータ不正（from > to、範囲超過など）
           content:
             application/json:
               schema:
@@ -1795,6 +1820,7 @@ paths:
       description: |
         ターミナルで入力された行（stdin）の一部を検索します。
         best-effort であり、シェルの編集操作等により完全なコマンド履歴とは一致しない場合があります。
+        `from`/`to` 未指定時は直近 30 日。最大範囲は 90 日（超過は 400）。
       security:
         - cookieAuth: []
       parameters:
@@ -1822,6 +1848,18 @@ paths:
             minimum: 1
             maximum: 500
             default: 200
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 期間開始（RFC3339 または YYYY-MM-DD）
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 期間終了（排他的）
       responses:
         '200':
           description: コマンドログ一覧
@@ -1837,6 +1875,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: 期間パラメータ不正
           content:
             application/json:
               schema:
@@ -1876,6 +1920,9 @@ paths:
       description: |
         ログイン中のユーザーに属する録画のメタデータ一覧を返します。ファイルパスは含まれません。
         クエリ target_id を指定すると、そのターゲット（サーバー）に紐づく録画のみに絞り込みます。
+        `from`/`to` で started_at を期間絞り込み（未指定時は直近 30 日、最大 90 日）。
+        `channel_type`（browser / cli 等）、`session_id`（完全一致）でさらに絞り込み可能。
+        管理者は `user_id` を指定して他ユーザーの録画を参照できます（非管理者が指定した場合は 403）。
         ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象です（VANTYX_RECORDINGS_DIR 設定時）。
       security:
         - cookieAuth: []
@@ -1886,6 +1933,36 @@ paths:
           schema:
             type: string
           description: このターゲットに紐づく録画のみ返す（省略時は全件、最大 200 件）
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+          description: started_at の期間開始
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+          description: started_at の期間終了（排他的）
+        - name: channel_type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: チャネル種別（browser / cli 等）
+        - name: session_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: セッション ID（完全一致）
+        - name: user_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 録画所有者（管理者のみ。未指定時は自分の録画のみ）
       responses:
         '200':
           description: 録画一覧（items 配列）
@@ -1895,6 +1972,18 @@ paths:
                 $ref: '#/components/schemas/RecordingListResponse'
         '401':
           description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 非管理者が user_id を指定した場合など
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: 期間パラメータ不正
           content:
             application/json:
               schema:

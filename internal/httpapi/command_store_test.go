@@ -11,6 +11,28 @@ func TestNewCommandLogStore_NilDB(t *testing.T) {
 	}
 }
 
+func TestCommandLogRecorder_TabCompletionEcho(t *testing.T) {
+	app := newTestApp(t)
+	store := newCommandLogStore(app.DB)
+	rec := newCommandLogRecorder(store, "sess-tab", "admin", "t1")
+
+	rec.RecordInput([]byte("ls /u"))
+	rec.recordStdout([]byte("\r\x1b"))
+	rec.recordStdout([]byte("[Kls /usr/bin/"))
+	rec.RecordInput([]byte("\n"))
+
+	var line string
+	err := app.DB.QueryRowContext(context.Background(),
+		`SELECT line_text FROM command_logs WHERE session_id = ?`, "sess-tab",
+	).Scan(&line)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if line != "ls /usr/bin/" {
+		t.Fatalf("expected completed line, got %q", line)
+	}
+}
+
 func TestCommandLogRecorder_RecordInputLines(t *testing.T) {
 	app := newTestApp(t)
 	store := newCommandLogStore(app.DB)

@@ -9,7 +9,7 @@ import (
 )
 
 // handleAuditLogs returns recent in-memory audit entries (admin only).
-// GET /api/audit?limit=200&event=login_&user_id=alice
+// GET /api/audit?limit=200&event=login_&user_id=alice&from=&to=
 func (a *App) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
@@ -19,6 +19,13 @@ func (a *App) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	eventQ := strings.TrimSpace(q.Get("event"))
 	userQ := strings.TrimSpace(q.Get("user_id"))
+	excludeEvents := parseExcludeEvents(q.Get("exclude_event"))
+
+	from, to, err := parseTimeRange(q.Get("from"), q.Get("to"), time.Now().UTC())
+	if err != nil {
+		writeTimeRangeError(w, err)
+		return
+	}
 
 	// Prefer DB-backed persistent logs when available.
 	if a != nil && a.DB != nil {
@@ -26,21 +33,9 @@ func (a *App) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
 		if limit <= 0 || limit > 1000 {
 			limit = 200
 		}
-		// Avoid dynamic SQL concatenation (gosec G202): select from a small set of fixed queries.
-		query := `SELECT time,event,fields_json FROM audit_logs ORDER BY time DESC LIMIT ?`
-		args := []interface{}{limit}
-		if eventQ != "" && userQ != "" {
-			query = `SELECT time,event,fields_json FROM audit_logs WHERE event LIKE ? AND user_id = ? ORDER BY time DESC LIMIT ?`
-			args = []interface{}{"%" + eventQ + "%", userQ, limit}
-		} else if eventQ != "" {
-			query = `SELECT time,event,fields_json FROM audit_logs WHERE event LIKE ? ORDER BY time DESC LIMIT ?`
-			args = []interface{}{"%" + eventQ + "%", limit}
-		} else if userQ != "" {
-			query = `SELECT time,event,fields_json FROM audit_logs WHERE user_id = ? ORDER BY time DESC LIMIT ?`
-			args = []interface{}{userQ, limit}
-		}
+		sqlStr, args := buildAuditLogQuery(eventQ, userQ, excludeEvents, from, to, limit)
 
-		rows, err := a.DB.Query(query, args...)
+		rows, err := a.DB.Query(sqlStr, args...)
 		if err == nil {
 			defer rows.Close()
 			items := make([]AuditEntry, 0, limit)
@@ -66,6 +61,12 @@ func (a *App) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
 
 	// Fallback: in-memory recent events.
 	items := auditBuffer.listNewestFirst(limit, func(e AuditEntry) bool {
+		if e.Time.Before(from) || !e.Time.Before(to) {
+			return false
+		}
+		if auditEventExcluded(e.Event, excludeEvents) {
+			return false
+		}
 		if eventQ != "" && !strings.Contains(e.Event, eventQ) {
 			return false
 		}
@@ -80,4 +81,53 @@ func (a *App) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
 		return true
 	})
 	writeJSON(w, map[string]interface{}{"items": items})
+}
+
+func parseExcludeEvents(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if ev := strings.TrimSpace(part); ev != "" {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func auditEventExcluded(event string, excluded []string) bool {
+	for _, ex := range excluded {
+		if event == ex {
+			return true
+		}
+	}
+	return false
+}
+
+func buildAuditLogQuery(eventQ, userQ string, excludeEvents []string, from, to time.Time, limit int) (string, []interface{}) {
+	base := `SELECT time,event,fields_json FROM audit_logs`
+	var conds []string
+	var args []interface{}
+
+	conds = append(conds, "time >= ?", "time < ?")
+	args = append(args, from.UTC(), to.UTC())
+
+	if eventQ != "" {
+		conds = append(conds, "event LIKE ?")
+		args = append(args, "%"+eventQ+"%")
+	}
+	if userQ != "" {
+		conds = append(conds, "user_id = ?")
+		args = append(args, userQ)
+	}
+	for _, ex := range excludeEvents {
+		conds = append(conds, "event <> ?")
+		args = append(args, ex)
+	}
+
+	sqlStr := base + ` WHERE ` + strings.Join(conds, " AND ") + ` ORDER BY time DESC LIMIT ?`
+	args = append(args, limit)
+	return sqlStr, args
 }

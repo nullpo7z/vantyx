@@ -257,11 +257,14 @@ const API = {
   },
 
   /** 監査ログ（管理者のみ） */
-  async auditLogs({ limit = 200, event = '', user_id = '' } = {}) {
+  async auditLogs({ limit = 200, event = '', user_id = '', from = '', to = '', exclude_event = '' } = {}) {
     const q = new URLSearchParams()
     if (limit) q.set('limit', String(limit))
     if (event) q.set('event', event)
     if (user_id) q.set('user_id', user_id)
+    if (from) q.set('from', from)
+    if (to) q.set('to', to)
+    if (exclude_event) q.set('exclude_event', exclude_event)
     const url = '/api/audit' + (q.toString() ? `?${q.toString()}` : '')
     const res = await fetch(url, { credentials: 'include' })
     if (!res.ok) {
@@ -297,11 +300,13 @@ const API = {
   },
 
   /** コマンドログ検索（管理者のみ） */
-  async commandLogs({ query = '', user_id = '', target_id = '', limit = 200 } = {}) {
+  async commandLogs({ query = '', user_id = '', target_id = '', from = '', to = '', limit = 200 } = {}) {
     const q = new URLSearchParams()
     if (query) q.set('query', query)
     if (user_id) q.set('user_id', user_id)
     if (target_id) q.set('target_id', target_id)
+    if (from) q.set('from', from)
+    if (to) q.set('to', to)
     if (limit) q.set('limit', String(limit))
     const res = await fetch('/api/commands' + (q.toString() ? `?${q.toString()}` : ''), { credentials: 'include' })
     if (!res.ok) {
@@ -432,6 +437,11 @@ const API = {
   async recordings(params = {}) {
     const q = new URLSearchParams()
     if (params.target_id) q.set('target_id', params.target_id)
+    if (params.from) q.set('from', params.from)
+    if (params.to) q.set('to', params.to)
+    if (params.channel_type) q.set('channel_type', params.channel_type)
+    if (params.session_id) q.set('session_id', params.session_id)
+    if (params.user_id) q.set('user_id', params.user_id)
     const res = await fetch(`/api/recordings?${q}`, { credentials: 'include' })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))

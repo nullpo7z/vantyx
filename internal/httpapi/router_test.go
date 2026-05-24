@@ -3598,6 +3598,27 @@ func TestTFTPServer_UploadDownloadDelete(t *testing.T) {
 	}
 }
 
+func TestIsLoopbackHost(t *testing.T) {
+	cases := []struct {
+		host string
+		want bool
+	}{
+		{"127.0.0.1", true},
+		{"127.0.0.1:8443", true},
+		{"localhost", true},
+		{"localhost:443", true},
+		{"[::1]", true},
+		{"[::1]:8443", true},
+		{"10.0.0.1", false},
+		{"vantyx.example.com", false},
+	}
+	for _, tc := range cases {
+		if got := isLoopbackHost(tc.host); got != tc.want {
+			t.Fatalf("isLoopbackHost(%q)=%v want %v", tc.host, got, tc.want)
+		}
+	}
+}
+
 // --- convertCastToVideo ---
 
 func TestConvertCastToVideo_NoAggInPath(t *testing.T) {

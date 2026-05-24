@@ -581,6 +581,7 @@ func isLoopbackHost(host string) bool {
 	if err != nil {
 		hostname = host
 	}
+	hostname = strings.TrimPrefix(strings.TrimSuffix(hostname, "]"), "[")
 	return hostname == "127.0.0.1" || hostname == "localhost" || hostname == "::1"
 }
 

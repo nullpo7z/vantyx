@@ -3,10 +3,13 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -110,4 +113,327 @@ func TestFileTransferBackgroundUpload(t *testing.T) {
 	if snap.State != string(filetransfer.StateCompleted) {
 		t.Fatalf("state=%s err=%s", snap.State, snap.Error)
 	}
+}
+
+func TestFileTransfersList(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	mock.AddFile("/list.txt", []byte("x"))
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+
+	startBody := []byte(`{"backend":"remote","target_id":"` + targetID + `","path":"/list.txt"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/file-transfers/download", bytes.NewReader(startBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusAccepted {
+		t.Fatalf("start: %d", w.Result().StatusCode)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/file-transfers", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("list: %d %s", w.Result().StatusCode, w.Body.String())
+	}
+	var out struct {
+		Items []filetransfer.JobSnapshot `json:"items"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Items) == 0 {
+		t.Fatal("expected at least one transfer in list")
+	}
+}
+
+func TestFileTransferDelete(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	mock.AddFile("/big.txt", bytes.Repeat([]byte("a"), 1024*1024))
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+
+	startBody := []byte(`{"backend":"remote","target_id":"` + targetID + `","path":"/big.txt"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/file-transfers/download", bytes.NewReader(startBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var snap filetransfer.JobSnapshot
+	_ = json.NewDecoder(w.Body).Decode(&snap)
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/file-transfers/"+snap.ID, nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestFileTransfers_Unauthorized(t *testing.T) {
+	app, _, _ := setupAppWithTargetAndSFTPMock(t)
+	router := app.NewRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/file-transfers", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("got %d", w.Result().StatusCode)
+	}
+}
+
+func TestFileTransferTFTPServerBackgroundUploadDownload(t *testing.T) {
+	root := withTFTPRoot(t)
+	app, targetID := setupAppWithTFTPServerTarget(t, root)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	// Upload via background job
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("backend", "tftp_server")
+	_ = mw.WriteField("target_id", targetID)
+	_ = mw.WriteField("path", "/bg-upload.txt")
+	fw, _ := mw.CreateFormFile("file", "bg-upload.txt")
+	_, _ = fw.Write([]byte("tftp-server-bg"))
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/file-transfers/upload", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusAccepted {
+		t.Fatalf("upload: %d %s", w.Result().StatusCode, w.Body.String())
+	}
+	var upSnap filetransfer.JobSnapshot
+	_ = json.NewDecoder(w.Body).Decode(&upSnap)
+	waitTransferDone(t, router, cookie, &upSnap)
+
+	full := filepath.Join(root, targetID, "bg-upload.txt")
+	if data, err := os.ReadFile(full); err != nil || string(data) != "tftp-server-bg" {
+		t.Fatalf("file on disk: err=%v data=%q", err, data)
+	}
+
+	// Download via background job
+	startBody := []byte(`{"backend":"tftp_server","target_id":"` + targetID + `","path":"/bg-upload.txt"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/file-transfers/download", bytes.NewReader(startBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusAccepted {
+		t.Fatalf("download start: %d", w.Result().StatusCode)
+	}
+	var dlSnap filetransfer.JobSnapshot
+	_ = json.NewDecoder(w.Body).Decode(&dlSnap)
+	waitTransferDone(t, router, cookie, &dlSnap)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/file-transfers/"+dlSnap.ID+"/content", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("content: %d", w.Result().StatusCode)
+	}
+	body, _ := io.ReadAll(w.Body)
+	if string(body) != "tftp-server-bg" {
+		t.Fatalf("body=%q", body)
+	}
+}
+
+func TestFileTransferDelete_NotFound(t *testing.T) {
+	app, _, _ := setupAppWithTargetAndSFTPMock(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodDelete, "/api/file-transfers/not-a-real-id", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNotFound {
+		t.Fatalf("got %d", w.Result().StatusCode)
+	}
+}
+
+func TestFileTransferStartDownload_InvalidBackend(t *testing.T) {
+	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"backend":"invalid","target_id":"` + targetID + `","path":"/x"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/file-transfers/download", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("got %d %s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestFileTransferGet_NotFound(t *testing.T) {
+	app, _, _ := setupAppWithTargetAndSFTPMock(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/file-transfers/does-not-exist", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNotFound {
+		t.Fatalf("got %d", w.Result().StatusCode)
+	}
+}
+
+func TestFileTransferContent_NotDownload(t *testing.T) {
+	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("backend", "remote")
+	_ = mw.WriteField("target_id", targetID)
+	_ = mw.WriteField("path", "/up.txt")
+	fw, _ := mw.CreateFormFile("file", "up.txt")
+	_, _ = fw.Write([]byte("x"))
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/file-transfers/upload", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var snap filetransfer.JobSnapshot
+	_ = json.NewDecoder(w.Body).Decode(&snap)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/file-transfers/"+snap.ID+"/content", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for upload job content, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestFileTransferBackgroundDownload_OpenFails(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	mock.OpenErr = errors.New("mock open failed")
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	startBody := []byte(`{"backend":"remote","target_id":"` + targetID + `","path":"/missing.txt"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/file-transfers/download", bytes.NewReader(startBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var snap filetransfer.JobSnapshot
+	_ = json.NewDecoder(w.Body).Decode(&snap)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		req = httptest.NewRequest(http.MethodGet, "/api/file-transfers/"+snap.ID, nil)
+		req.AddCookie(cookie)
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		_ = json.NewDecoder(w.Body).Decode(&snap)
+		if snap.State == string(filetransfer.StateFailed) {
+			if snap.Error == "" {
+				t.Fatal("expected error message")
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("state=%s", snap.State)
+}
+
+func TestFileTransferBackgroundUpload_CreateFails(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	mock.CreateErr = errors.New("mock create failed")
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("backend", "remote")
+	_ = mw.WriteField("target_id", targetID)
+	_ = mw.WriteField("path", "/fail.txt")
+	fw, _ := mw.CreateFormFile("file", "fail.txt")
+	_, _ = fw.Write([]byte("payload"))
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/file-transfers/upload", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusAccepted {
+		t.Fatalf("upload start: %d", w.Result().StatusCode)
+	}
+	var snap filetransfer.JobSnapshot
+	_ = json.NewDecoder(w.Body).Decode(&snap)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		req = httptest.NewRequest(http.MethodGet, "/api/file-transfers/"+snap.ID, nil)
+		req.AddCookie(cookie)
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		_ = json.NewDecoder(w.Body).Decode(&snap)
+		if snap.State == string(filetransfer.StateFailed) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("expected failed state, got %s err=%s", snap.State, snap.Error)
+}
+
+func TestFileTransferUpload_InvalidBackend(t *testing.T) {
+	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("backend", "nope")
+	_ = mw.WriteField("target_id", targetID)
+	_ = mw.WriteField("path", "/bad.txt")
+	fw, _ := mw.CreateFormFile("file", "bad.txt")
+	_, _ = fw.Write([]byte("x"))
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/file-transfers/upload", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("got %d", w.Result().StatusCode)
+	}
+}
+
+func waitTransferDone(t *testing.T, router http.Handler, cookie *http.Cookie, snap *filetransfer.JobSnapshot) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		req := httptest.NewRequest(http.MethodGet, "/api/file-transfers/"+snap.ID, nil)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		_ = json.NewDecoder(w.Body).Decode(snap)
+		if snap.State == string(filetransfer.StateCompleted) {
+			return
+		}
+		if snap.State == string(filetransfer.StateFailed) {
+			t.Fatalf("transfer failed: %s", snap.Error)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("timeout state=%s err=%s", snap.State, snap.Error)
 }

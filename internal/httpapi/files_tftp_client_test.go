@@ -67,7 +67,11 @@ func startTestTFTPServer(t *testing.T) (host string, port uint16, cleanup func()
 	}()
 	time.Sleep(50 * time.Millisecond)
 
-	return "127.0.0.1", uint16(udpAddr.Port), func() {
+	udpPort := udpAddr.Port
+	if udpPort < 0 || udpPort > 65535 {
+		t.Fatalf("unexpected UDP port: %d", udpPort)
+	}
+	return "127.0.0.1", uint16(udpPort), func() { // #nosec G115 -- udpPort range checked above
 		srv.Shutdown()
 		<-done
 	}

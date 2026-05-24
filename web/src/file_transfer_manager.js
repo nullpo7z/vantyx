@@ -118,7 +118,7 @@ async function maybeDeliverDownload(job) {
 
 function ensurePolling() {
   if (pollTimer) return
-  pollTimer = setInterval(pollOnce, POLL_MS)
+  pollTimer = window.setInterval(pollOnce, POLL_MS)
   pollOnce()
 }
 

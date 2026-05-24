@@ -110,6 +110,23 @@ func TestSQLiteTargetStore_ListByProtocol(t *testing.T) {
 	}
 }
 
+func TestSQLiteTargetStore_ListByProtocol_LoadsProtocolFlags(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, _ = targets.CreateWithPath(ctx, "ssh1", "SSH", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "u", "", "", "", true, false, true)
+	list, err := targets.ListByProtocol(ctx, ProtocolSSH)
+	if err != nil {
+		t.Fatalf("ListByProtocol: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("len=%d", len(list))
+	}
+	if !list[0].SFTPEnabled || list[0].FTPEnabled || !list[0].TFTPEnabled {
+		t.Fatalf("flags: sftp=%v ftp=%v tftp=%v", list[0].SFTPEnabled, list[0].FTPEnabled, list[0].TFTPEnabled)
+	}
+}
+
 func TestSQLiteTargetStore_Get_NotFoundAndPortBounds(t *testing.T) {
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)

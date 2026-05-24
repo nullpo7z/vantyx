@@ -51,6 +51,10 @@ components:
       type: object
       description: 監査ログ 1 件（サーバー内部イベント + HTTP API 操作ログ）。fields はイベントごとに異なる任意フィールド。
       properties:
+        id:
+          type: integer
+          format: int64
+          description: audit_logs 行 ID（ページングの after_id に使用）
         time:
           type: string
           format: date-time
@@ -70,6 +74,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AuditEntry'
+        next_cursor:
+          type: string
+          description: 次ページ取得用カーソル（最終行の id）。省略時はこれ以上なし
       required:
         - items
     AuditForwarderConfig:
@@ -1709,6 +1716,12 @@ paths:
           schema:
             type: string
           description: 除外する event（カンマ区切り可。例: http_request）
+        - name: after_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 前ページ最終行の audit_logs.id（より古い行を取得）
         - name: from
           in: query
           required: false
@@ -1723,7 +1736,7 @@ paths:
           description: 期間終了（排他的。RFC3339 または YYYY-MM-DD）
       responses:
         '200':
-          description: 監査ログ一覧
+          description: 監査ログ一覧（next_cursor があれば続きあり）
           content:
             application/json:
               schema:

@@ -176,8 +176,17 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
             <input id="audit-filter-to" type="date" value="${escapeHtml(dates.to)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
           <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">種別</label>
+            <select id="audit-filter-event-preset" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="">すべて</option>
+              <option value="login_">ログイン</option>
+              <option value="terminal_">ターミナル</option>
+              <option value="files_">ファイル</option>
+            </select>
+          </div>
+          <div>
             <label class="block text-xs font-medium text-slate-600 mb-1">event</label>
-            <input id="audit-filter-event" class="w-40 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: login_" />
+            <input id="audit-filter-event" class="w-36 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: login_" />
           </div>
           <label class="flex items-center gap-2 text-sm text-slate-700 pb-2 cursor-pointer select-none">
             <input id="audit-filter-http" type="checkbox" class="rounded border-slate-300" />
@@ -208,6 +217,10 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
               <tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">読み込み中…</td></tr>
             </tbody>
           </table>
+        </div>
+        <div id="audit-footer" class="px-4 py-3 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
+          <span id="audit-count" class="text-xs text-slate-500"></span>
+          <button type="button" id="audit-load-more" class="hidden rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">さらに読み込む</button>
         </div>
       </div>
 
@@ -292,54 +305,105 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
   const userEl = mainContent.querySelector('#audit-filter-user')
   const limitEl = mainContent.querySelector('#audit-filter-limit')
   const includeHttpEl = mainContent.querySelector('#audit-filter-http')
+  const eventPresetEl = mainContent.querySelector('#audit-filter-event-preset')
+  const countEl = mainContent.querySelector('#audit-count')
+  const loadMoreEl = mainContent.querySelector('#audit-load-more')
 
-  async function load() {
-    errEl.classList.add('hidden')
-    rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">読み込み中…</td></tr>`
-    const limit = Number(limitEl.value || 200) || 200
-    const event = String(eventEl.value || '').trim()
-    const user_id = String(userEl.value || '').trim()
-    const from = String(auditFromEl.value || '').trim()
-    const to = String(auditToEl.value || '').trim()
-    const exclude_event = includeHttpEl && includeHttpEl.checked ? '' : 'http_request'
-    try {
-      const res = await API.auditLogs({ limit, event, user_id, from, to, exclude_event })
-      const items = (res && res.items) || []
-      if (!items.length) {
-        rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">ログがありません</td></tr>`
-        return
-      }
-      rowsEl.innerHTML = items
-        .map((it) => {
-          const time = fmtTime(it.time)
-          const ev = it.event || (it.fields && it.fields.event) || ''
-          const label = auditEventLabel(ev)
-          const uid = auditUserId(it)
-          const summary = formatAuditSummary(it)
-          const status = it.fields && it.fields.status
-          const statusBadge =
-            ev === 'http_request' && status != null
-              ? `<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${httpStatusClass(status)}">${escapeHtml(String(status))}</span> `
-              : ''
-          return `<tr class="border-b border-slate-200 hover:bg-slate-50">
-            <td class="px-4 py-2 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(time)}</td>
-            <td class="px-4 py-2 text-xs text-slate-800 whitespace-nowrap" title="${escapeHtml(ev)}">${escapeHtml(label)}</td>
-            <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap font-mono">${escapeHtml(uid || '—')}</td>
-            <td class="px-4 py-2 text-xs text-slate-800">${statusBadge}<span class="font-mono text-[11px] break-all">${escapeHtml(summary)}</span></td>
-          </tr>`
-        })
-        .join('')
-    } catch (e) {
-      errEl.textContent = e.message || '取得に失敗しました'
-      errEl.classList.remove('hidden')
-      rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+  let auditNextCursor = ''
+  let auditRowCount = 0
+
+  function auditQueryParams() {
+    return {
+      limit: Number(limitEl.value || 200) || 200,
+      event: String(eventEl.value || '').trim(),
+      user_id: String(userEl.value || '').trim(),
+      from: String(auditFromEl.value || '').trim(),
+      to: String(auditToEl.value || '').trim(),
+      exclude_event: includeHttpEl && includeHttpEl.checked ? '' : 'http_request',
     }
   }
 
-  mainContent.querySelector('#audit-refresh').addEventListener('click', load)
-  mainContent.querySelector('#audit-apply').addEventListener('click', load)
+  function renderAuditRow(it) {
+    const time = fmtTime(it.time)
+    const ev = it.event || (it.fields && it.fields.event) || ''
+    const label = auditEventLabel(ev)
+    const uid = auditUserId(it)
+    const summary = formatAuditSummary(it)
+    const status = it.fields && it.fields.status
+    const statusBadge =
+      ev === 'http_request' && status != null
+        ? `<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${httpStatusClass(status)}">${escapeHtml(String(status))}</span> `
+        : ''
+    return `<tr class="border-b border-slate-200 hover:bg-slate-50">
+      <td class="px-4 py-2 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(time)}</td>
+      <td class="px-4 py-2 text-xs text-slate-800 whitespace-nowrap" title="${escapeHtml(ev)}">${escapeHtml(label)}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap font-mono">${escapeHtml(uid || '—')}</td>
+      <td class="px-4 py-2 text-xs text-slate-800">${statusBadge}<span class="font-mono text-[11px] break-all">${escapeHtml(summary)}</span></td>
+    </tr>`
+  }
 
-  await load()
+  function updateAuditFooter() {
+    const hasMore = Boolean(auditNextCursor)
+    countEl.textContent = hasMore
+      ? `表示中 ${auditRowCount} 件（続きがあります）`
+      : `表示中 ${auditRowCount} 件`
+    loadMoreEl.classList.toggle('hidden', !hasMore)
+  }
+
+  async function loadAudit(append) {
+    errEl.classList.add('hidden')
+    if (!append) {
+      auditNextCursor = ''
+      auditRowCount = 0
+      rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">読み込み中…</td></tr>`
+      loadMoreEl.classList.add('hidden')
+    } else {
+      loadMoreEl.disabled = true
+      loadMoreEl.textContent = '読み込み中…'
+    }
+    const params = auditQueryParams()
+    try {
+      const res = await API.auditLogs({ ...params, after_id: append ? auditNextCursor : '' })
+      const items = (res && res.items) || []
+      auditNextCursor = (res && res.next_cursor) || ''
+      if (!append && !items.length) {
+        rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">ログがありません</td></tr>`
+        countEl.textContent = ''
+        loadMoreEl.classList.add('hidden')
+        return
+      }
+      const html = items.map(renderAuditRow).join('')
+      if (append) {
+        rowsEl.insertAdjacentHTML('beforeend', html)
+      } else {
+        rowsEl.innerHTML = html
+      }
+      auditRowCount += items.length
+      updateAuditFooter()
+    } catch (e) {
+      errEl.textContent = e.message || '取得に失敗しました'
+      errEl.classList.remove('hidden')
+      if (!append) {
+        rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+        countEl.textContent = ''
+      }
+      loadMoreEl.classList.add('hidden')
+    } finally {
+      loadMoreEl.disabled = false
+      loadMoreEl.textContent = 'さらに読み込む'
+    }
+  }
+
+  eventPresetEl?.addEventListener('change', () => {
+    const v = eventPresetEl.value || ''
+    eventEl.value = v
+  })
+
+  mainContent.querySelector('#audit-refresh').addEventListener('click', () => loadAudit(false))
+  mainContent.querySelector('#audit-apply').addEventListener('click', () => loadAudit(false))
+  loadMoreEl.addEventListener('click', () => loadAudit(true))
+
+  await loadAudit(false)
 
   const cmdErrEl = mainContent.querySelector('#cmd-error')
   const cmdRowsEl = mainContent.querySelector('#cmd-rows')

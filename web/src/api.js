@@ -257,7 +257,7 @@ const API = {
   },
 
   /** 監査ログ（管理者のみ） */
-  async auditLogs({ limit = 200, event = '', user_id = '', from = '', to = '', exclude_event = '' } = {}) {
+  async auditLogs({ limit = 200, event = '', user_id = '', from = '', to = '', exclude_event = '', after_id = '' } = {}) {
     const q = new URLSearchParams()
     if (limit) q.set('limit', String(limit))
     if (event) q.set('event', event)
@@ -265,6 +265,7 @@ const API = {
     if (from) q.set('from', from)
     if (to) q.set('to', to)
     if (exclude_event) q.set('exclude_event', exclude_event)
+    if (after_id) q.set('after_id', after_id)
     const url = '/api/audit' + (q.toString() ? `?${q.toString()}` : '')
     const res = await fetch(url, { credentials: 'include' })
     if (!res.ok) {

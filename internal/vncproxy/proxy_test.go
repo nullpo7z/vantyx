@@ -46,7 +46,7 @@ func TestBridge_ProxiesBytesBothWays(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		_ = Bridge(conn, echoAddr)
+		_ = Bridge(conn, echoAddr, nil)
 	})
 
 	srv := httptest.NewServer(mux)
@@ -83,7 +83,7 @@ func TestBridge_DialFailureReturnsError(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		done <- Bridge(conn, "127.0.0.1:0") // no listener => dial fails
+		done <- Bridge(conn, "127.0.0.1:0", nil) // no listener => dial fails
 	})
 
 	srv := httptest.NewServer(mux)

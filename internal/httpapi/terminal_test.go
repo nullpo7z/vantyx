@@ -1489,6 +1489,75 @@ func TestHandleRDPSessions_WithActiveSession(t *testing.T) {
 	}
 }
 
+func TestHandleRDPSessions_IdleAndLastSeen(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	mgr := rdpvnc.NewManager()
+	mgr.SetIdleWarnAfter(5 * time.Minute)
+	now := time.Now()
+	mgr.SetNowForTest(func() time.Time { return now })
+	app.RDPVNCManager = mgr
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
+
+	placeholder := &rdpvnc.Bridge{}
+	mgr.RegisterSession("admin:rdp1", "s1", "admin", "rdp1", "RDP1", 1920, 1080, placeholder)
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/rdp/sessions", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		Items []struct {
+			LastSeen string `json:"last_seen"`
+			Idle     bool   `json:"idle"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(resp.Items))
+	}
+	if resp.Items[0].Idle {
+		t.Fatal("expected not idle immediately after start")
+	}
+	if resp.Items[0].LastSeen == "" {
+		t.Fatal("expected last_seen in response")
+	}
+
+	mgr.SetNowForTest(func() time.Time { return now.Add(6 * time.Minute) })
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w2.Code)
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !resp.Items[0].Idle {
+		t.Fatal("expected idle after threshold")
+	}
+
+	mgr.Touch("s1")
+	w3 := httptest.NewRecorder()
+	router.ServeHTTP(w3, req)
+	if err := json.Unmarshal(w3.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Items[0].Idle {
+		t.Fatal("expected not idle after Touch")
+	}
+}
+
 func TestHandleRDPSessionDelete_Success(t *testing.T) {
 	app := newTestAppForTerminal(t)
 	if app.RDPVNCManager == nil {

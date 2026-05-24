@@ -89,20 +89,17 @@ type RDPSessionItem struct {
 	IdleSeconds int       `json:"idle_seconds,omitempty"`
 }
 
-func rdpSessionItemFrom(s rdpvnc.Session, idleAfter time.Duration) RDPSessionItem {
+func rdpSessionItemFrom(s rdpvnc.Session, mgr *rdpvnc.Manager) RDPSessionItem {
 	item := RDPSessionItem{
 		SessionID:  s.ID,
 		TargetID:   s.TargetID,
 		TargetName: s.TargetName,
 		CreatedAt:  s.CreatedAt,
-		LastSeen:   s.CreatedAt,
+		LastSeen:   s.LastSeen(),
 	}
-	if idleAfter > 0 {
-		d := time.Since(s.CreatedAt)
-		if d >= idleAfter {
-			item.Idle = true
-			item.IdleSeconds = int(d.Seconds())
-		}
+	if mgr != nil && mgr.IsIdle(&s) {
+		item.Idle = true
+		item.IdleSeconds = int(mgr.IdleDuration(&s).Seconds())
 	}
 	return item
 }
@@ -129,7 +126,6 @@ func (a *App) handleRDPSessions(w http.ResponseWriter, r *http.Request) {
 		allowedSet[id] = struct{}{}
 	}
 	active := a.RDPVNCManager.ActiveSessionsForUser(userID)
-	idleAfter := a.terminalIdleWarnAfter()
 	items := make([]RDPSessionItem, 0, len(active))
 	for _, s := range active {
 		targetID := s.TargetID
@@ -143,7 +139,7 @@ func (a *App) handleRDPSessions(w http.ResponseWriter, r *http.Request) {
 		if target.Protocol != access.ProtocolRDP {
 			continue
 		}
-		item := rdpSessionItemFrom(s, idleAfter)
+		item := rdpSessionItemFrom(s, a.RDPVNCManager)
 		item.TargetName = target.Name
 		item.TargetPath = target.Path
 		items = append(items, item)
@@ -219,10 +215,12 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 	bridgeKey := fmt.Sprintf("%s:%s", userID, targetID)
 	var bridge *rdpvnc.Bridge
 	var targetAddr string
+	var sessionID string
 	if a.RDPVNCManager != nil {
 		if existingSess, ok := a.RDPVNCManager.GetSessionByKey(bridgeKey); ok && existingSess.Bridge != nil {
 			ew, eh := existingSess.Bridge.Size()
 			if ew == width && eh == height {
+				sessionID = existingSess.ID
 				targetAddr = fmt.Sprintf("127.0.0.1:%d", existingSess.Bridge.VNCPort())
 				audit("rdp_browser_reconnect", auditFields{
 					"user_id":    userID,
@@ -265,7 +263,8 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 				writeJSONError(w, "failed to start RDP session", http.StatusInternalServerError)
 				return
 			}
-			a.RDPVNCManager.RegisterSession(bridgeKey, sid, userID, targetID, target.Name, width, height, bridge)
+			sess := a.RDPVNCManager.RegisterSession(bridgeKey, sid, userID, targetID, target.Name, width, height, bridge)
+			sessionID = sess.ID
 			if a.SessionEventBroker != nil {
 				a.SessionEventBroker.Broadcast()
 			}
@@ -292,10 +291,21 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 	}
 	defer wsConn.Close()
 
+	if sessionID == "" && a.RDPVNCManager != nil {
+		if existingSess, ok := a.RDPVNCManager.GetSessionByKey(bridgeKey); ok {
+			sessionID = existingSess.ID
+		}
+	}
+	var touch func()
+	if a.RDPVNCManager != nil && sessionID != "" {
+		sid := sessionID
+		touch = func() { a.RDPVNCManager.Touch(sid) }
+	}
+
 	proxyDone := make(chan struct{})
 	go func() {
 		defer close(proxyDone)
-		_ = vncproxy.Bridge(wsConn, targetAddr)
+		_ = vncproxy.Bridge(wsConn, targetAddr, touch)
 	}()
 
 	if bridge != nil {

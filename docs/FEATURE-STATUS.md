@@ -31,7 +31,7 @@
 - セッション永続化・レジューム（再接続で同一セッションにアタッチ）。Web タブを閉じた場合はバックグラウンド継続（デタッチ）し、一覧の「終了」または `DELETE /api/terminal/sessions/{id}` で明示終了
 - CLI セッション操作: Ctrl+] でメニューへ detach（Web タブ閉じ相当・セッション継続）、`connect` 中の Ctrl+D でセッション終了
 - **継続中セッション一覧**（ナビ「セッション」）: ログインユーザーがアクセス権を持つターゲット上の自分のセッションのみ表示（サーバー側フィルタ）。SSH/Telnet/RDP の再接続・終了、SSE による一覧更新
-- **無活動（idle）警告**: `VANTYX_TERMINAL_SESSION_IDLE_WARN_AFTER`（デフォルト 30 分、`0` で無効）。`last_seen` はクライアント操作に加え、リモートからのターミナル出力（スクリプト実行中のログ等）でも更新。API の `last_seen` / `idle`、Web 一覧・ホームバナー・CLI 一覧での表示。**自動終了はしない**
+- **無活動（idle）警告**: `VANTYX_TERMINAL_SESSION_IDLE_WARN_AFTER`（デフォルト 30 分、`0` で無効）。ターミナルはクライアント操作とリモート出力、RDP（ブラウザ）は VNC 入出力（操作・画面更新）で `last_seen` を更新。デタッチ後もバックグラウンドの VNC 監視で更新。API の `last_seen` / `idle`、Web 一覧・ホームバナー・CLI 一覧での表示。**自動終了はしない**
 - ターミナルセッション一覧・削除 API（ターゲット権限チェック付き）
 - **CLI アクセス**: Vantyx が SSH サーバーとして待ち受け（`internal/sshd`）、Tera Term 等から `ssh user@vantyx` でログインし、ターゲットへプロキシ接続
 - SSH 公開鍵登録（`/api/me/ssh-keys`）による Vantyx SSH ログイン

@@ -12,7 +12,8 @@ import (
 
 // Bridge connects a noVNC WebSocket client to a VNC server at targetAddr.
 // It proxies raw bytes both ways until either side closes. RFB protocol is unchanged.
-func Bridge(wsConn *websocket.Conn, targetAddr string) error {
+// If touch is non-nil, it is called on client and server I/O (e.g. for session last_seen).
+func Bridge(wsConn *websocket.Conn, targetAddr string, touch func()) error {
 	tcpConn, err := net.DialTimeout("tcp", targetAddr, 15*time.Second)
 	if err != nil {
 		return err
@@ -43,6 +44,9 @@ func Bridge(wsConn *websocket.Conn, targetAddr string) error {
 			if mt != websocket.BinaryMessage && mt != websocket.TextMessage {
 				continue
 			}
+			if touch != nil {
+				touch()
+			}
 			if _, err := tcpConn.Write(data); err != nil {
 				log.Printf("vncproxy: tcp write err: %v", err)
 				return
@@ -55,6 +59,9 @@ func Bridge(wsConn *websocket.Conn, targetAddr string) error {
 	for {
 		n, err := tcpConn.Read(buf)
 		if n > 0 {
+			if touch != nil {
+				touch()
+			}
 			if err := wsConn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
 				log.Printf("vncproxy: ws write err: %v", err)
 				break

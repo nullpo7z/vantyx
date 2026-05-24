@@ -375,11 +375,64 @@ components:
         created_at:
           type: string
           format: date-time
+        last_seen:
+          type: string
+          format: date-time
+          description: 最終活動時刻（クライアント操作およびリモート出力で更新）。
+        idle:
+          type: boolean
+          description: 無活動警告閾値を超えている場合 true（自動終了はしない）。
+        idle_seconds:
+          type: integer
+          description: 最終活動からの経過秒数（idle が true のとき）。
+        protocol:
+          type: string
+          description: ターゲットのプロトコル（ssh / telnet 等）。
       required:
         - session_id
         - target_id
         - target_name
         - created_at
+        - last_seen
+    RDPSessionItem:
+      type: object
+      description: アクティブな RDP（ブラウザ noVNC）セッション 1 件。
+      properties:
+        session_id:
+          type: string
+        target_id:
+          type: string
+        target_name:
+          type: string
+        target_path:
+          type: string
+          description: "ターゲットの階層パス（例: prod/network）。未設定の場合は省略。"
+        created_at:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+          description: 最終活動時刻（VNC 入出力・画面更新で更新。デタッチ後も監視継続）。
+        idle:
+          type: boolean
+          description: 無活動警告閾値を超えている場合 true（自動終了はしない）。
+        idle_seconds:
+          type: integer
+          description: 最終活動からの経過秒数（idle が true のとき）。
+      required:
+        - session_id
+        - target_id
+        - target_name
+        - created_at
+        - last_seen
+    RDPSessionListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RDPSessionItem'
     TerminalSessionListResponse:
       type: object
       properties:
@@ -1914,6 +1967,62 @@ paths:
                 $ref: '#/components/schemas/TerminalSessionListResponse'
         '401':
           description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/rdp/sessions:
+    get:
+      summary: アクティブな RDP セッション一覧
+      description: |
+        ログイン中のユーザーに属するアクティブな RDP（ブラウザ）セッション一覧を返します。
+        last_seen は VNC 経由の操作・画面更新で更新されます。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: セッション一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RDPSessionListResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/rdp/sessions/{session_id}:
+    delete:
+      summary: RDP セッションの終了
+      description: 指定した session_id の RDP セッションを終了します。自分のセッションのみ削除可能です。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 終了完了
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 権限なし
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: セッションが見つからない
           content:
             application/json:
               schema:

@@ -75,6 +75,29 @@ func TestCommandLogStore_AppendLineSkipsEmpty(t *testing.T) {
 	}
 }
 
+func TestCommandLogStdoutWriter_Write(t *testing.T) {
+	app := newTestApp(t)
+	store := newCommandLogStore(app.DB)
+	rec := newCommandLogRecorder(store, "sess-w", "admin", "t1")
+	w := commandLogStdoutWriter{rec: rec}
+	payload := []byte("echo test")
+	n, err := w.Write(payload)
+	if err != nil || n != len(payload) {
+		t.Fatalf("Write: n=%d err=%v", n, err)
+	}
+	if rec.echo.currentLine() != "echo test" {
+		t.Fatalf("echo line: %q", rec.echo.currentLine())
+	}
+	rec.RecordInput([]byte("\n"))
+	var line string
+	_ = app.DB.QueryRowContext(context.Background(),
+		`SELECT line_text FROM command_logs WHERE session_id = ?`, "sess-w",
+	).Scan(&line)
+	if line != "echo test" {
+		t.Fatalf("got %q", line)
+	}
+}
+
 func TestNewCommandLogRecorder_NilStore(t *testing.T) {
 	if got := newCommandLogRecorder(nil, "s", "u", "t"); got != nil {
 		t.Fatal("expected nil recorder")

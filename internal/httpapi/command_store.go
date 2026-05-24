@@ -39,8 +39,8 @@ type commandLogRecorder struct {
 	userID    string
 	targetID  string
 
-	buf   []byte
-	echo  commandLineTracker
+	buf  []byte
+	echo commandLineTracker
 }
 
 type commandLogStdoutWriter struct {

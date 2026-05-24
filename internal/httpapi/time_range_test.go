@@ -47,3 +47,31 @@ func TestParseTimeRange_FromAfterTo(t *testing.T) {
 		t.Fatal("expected error when from after to")
 	}
 }
+
+func TestParseQueryTime_RFC3339(t *testing.T) {
+	tm, err := parseQueryTime("2026-05-01T15:04:05Z", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tm.UTC().Format(time.RFC3339) != "2026-05-01T15:04:05Z" {
+		t.Fatalf("got %v", tm)
+	}
+}
+
+func TestParseTimeRange_OnlyToSet(t *testing.T) {
+	now := time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC)
+	from, to, err := parseTimeRange("", "2026-05-24", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !to.After(from) {
+		t.Fatalf("from=%v to=%v", from, to)
+	}
+}
+
+func TestFormatRecordingTime(t *testing.T) {
+	tm := time.Date(2026, 5, 1, 12, 30, 0, 0, time.UTC)
+	if got := formatRecordingTime(tm); got != "2026-05-01 12:30:00" {
+		t.Fatalf("got %q", got)
+	}
+}

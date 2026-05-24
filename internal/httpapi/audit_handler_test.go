@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,6 +44,38 @@ func TestAuditLogs_Admin_DBQueryFilters(t *testing.T) {
 	}
 	if out.Items[0].Event != "http_request" {
 		t.Fatalf("unexpected event: %q", out.Items[0].Event)
+	}
+}
+
+func TestParseExcludeEvents(t *testing.T) {
+	if got := parseExcludeEvents(""); got != nil {
+		t.Fatalf("empty: %v", got)
+	}
+	got := parseExcludeEvents("http_request, login_failed ,,")
+	if len(got) != 2 || got[0] != "http_request" || got[1] != "login_failed" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestAuditEventExcluded(t *testing.T) {
+	ex := []string{"http_request", "login_failed"}
+	if !auditEventExcluded("http_request", ex) {
+		t.Fatal("expected excluded")
+	}
+	if auditEventExcluded("login_success", ex) {
+		t.Fatal("expected not excluded")
+	}
+}
+
+func TestBuildAuditLogQuery_ExcludeEvents(t *testing.T) {
+	now := time.Now().UTC()
+	from := now.Add(-24 * time.Hour)
+	sqlStr, args := buildAuditLogQuery("", "", []string{"http_request", "noise"}, from, now, 50)
+	if !strings.Contains(sqlStr, "event <> ?") {
+		t.Fatalf("sql: %s", sqlStr)
+	}
+	if len(args) < 4 {
+		t.Fatalf("args: %v", args)
 	}
 }
 

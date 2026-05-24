@@ -74,3 +74,53 @@ func TestCommandLineTracker_OverwriteFromCR(t *testing.T) {
 		t.Fatalf("got %q want short", tr.currentLine())
 	}
 }
+
+func TestStripShellPrompt(t *testing.T) {
+	got := stripShellPrompt("user@host:~$ ls -la")
+	if got != "ls -la" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestCommandLineTracker_CSICursorAndErase(t *testing.T) {
+	var tr commandLineTracker
+	tr.feed([]byte("hello"))
+	tr.feed([]byte("\x1b[1D")) // back one
+	tr.feed([]byte("\x1b[0K")) // clear to end from cursor
+	if tr.currentLine() != "hell" {
+		t.Fatalf("got %q", tr.currentLine())
+	}
+	tr.feed([]byte("\x1b[2K")) // clear line
+	if tr.currentLine() != "" {
+		t.Fatalf("after EL2: %q", tr.currentLine())
+	}
+}
+
+func TestCommandLineTracker_CSIInsertAndDelete(t *testing.T) {
+	var tr commandLineTracker
+	tr.feed([]byte("ab"))
+	tr.feed([]byte("\x1b[@")) // insert 1 blank at col end
+	tr.feed([]byte("c"))
+	if tr.currentLine() != "abc" {
+		t.Fatalf("got %q", tr.currentLine())
+	}
+}
+
+func TestMergeCommandLine_EchoOnly(t *testing.T) {
+	got := mergeCommandLine("", "root@host# whoami")
+	if got != "whoami" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestConsumeEscape_Incomplete(t *testing.T) {
+	var tr commandLineTracker
+	tr.feed([]byte("\x1b"))
+	if len(tr.escBuf) != 1 {
+		t.Fatalf("escBuf: %v", tr.escBuf)
+	}
+	tr.feed([]byte("[Kx"))
+	if tr.currentLine() != "x" {
+		t.Fatalf("got %q", tr.currentLine())
+	}
+}

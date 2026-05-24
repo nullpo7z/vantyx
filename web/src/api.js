@@ -301,7 +301,7 @@ const API = {
   },
 
   /** コマンドログ検索（管理者のみ） */
-  async commandLogs({ query = '', user_id = '', target_id = '', from = '', to = '', limit = 200 } = {}) {
+  async commandLogs({ query = '', user_id = '', target_id = '', from = '', to = '', limit = 200, after_id = '' } = {}) {
     const q = new URLSearchParams()
     if (query) q.set('query', query)
     if (user_id) q.set('user_id', user_id)
@@ -309,6 +309,7 @@ const API = {
     if (from) q.set('from', from)
     if (to) q.set('to', to)
     if (limit) q.set('limit', String(limit))
+    if (after_id) q.set('after_id', after_id)
     const res = await fetch('/api/commands' + (q.toString() ? `?${q.toString()}` : ''), { credentials: 'include' })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))

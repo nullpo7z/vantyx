@@ -273,6 +273,10 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
             </tbody>
           </table>
         </div>
+        <div id="cmd-footer" class="px-4 py-3 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
+          <span id="cmd-count" class="text-xs text-slate-500"></span>
+          <button type="button" id="cmd-load-more" class="hidden rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">さらに読み込む</button>
+        </div>
       </div>
 
       <p class="text-xs text-slate-500 mt-3">注意: コマンドログは Enter 時に PTY の表示行（Tab 補完を含む）を優先して記録します。シェルや端末設定によっては完全一致しない場合があります。</p>
@@ -413,42 +417,90 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
   const cmdFromEl = mainContent.querySelector('#cmd-filter-from')
   const cmdToEl = mainContent.querySelector('#cmd-filter-to')
   const cmdLimitEl = mainContent.querySelector('#cmd-filter-limit')
+  const cmdCountEl = mainContent.querySelector('#cmd-count')
+  const cmdLoadMoreEl = mainContent.querySelector('#cmd-load-more')
 
-  async function loadCmd() {
-    cmdErrEl.classList.add('hidden')
-    const q = String(cmdQueryEl.value || '').trim()
-    const user_id = String(cmdUserEl.value || '').trim()
-    const target_id = String(cmdTargetEl.value || '').trim()
-    const from = String(cmdFromEl.value || '').trim()
-    const to = String(cmdToEl.value || '').trim()
-    const limit = Number(cmdLimitEl.value || 200) || 200
-    cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">検索中…</td></tr>`
-    try {
-      const res = await API.commandLogs({ query: q, user_id, target_id, from, to, limit })
-      const items = (res && res.items) || []
-      if (!items.length) {
-        cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">該当するコマンドはありません。</td></tr>`
-        return
-      }
-      cmdRowsEl.innerHTML = items
-        .map((it) => {
-          const time = fmtTime(it.time)
-          return `<tr class="border-b border-slate-200 hover:bg-slate-50">
-            <td class="px-4 py-2 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(time)}</td>
-            <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap">${escapeHtml(it.user_id || '')}</td>
-            <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap font-mono">${escapeHtml(it.target_id || '')}</td>
-            <td class="px-4 py-2 text-xs text-slate-500 whitespace-nowrap font-mono max-w-[8rem] truncate" title="${escapeHtml(it.session_id || '')}">${escapeHtml(it.session_id || '')}</td>
-            <td class="px-4 py-2 text-xs text-slate-800 font-mono text-[11px] break-all">${escapeHtml(it.line_text || '')}</td>
-          </tr>`
-        })
-        .join('')
-    } catch (e) {
-      cmdErrEl.textContent = e.message || '取得に失敗しました'
-      cmdErrEl.classList.remove('hidden')
-      cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+  let cmdNextCursor = ''
+  let cmdRowCount = 0
+
+  function cmdQueryParams() {
+    return {
+      query: String(cmdQueryEl.value || '').trim(),
+      user_id: String(cmdUserEl.value || '').trim(),
+      target_id: String(cmdTargetEl.value || '').trim(),
+      from: String(cmdFromEl.value || '').trim(),
+      to: String(cmdToEl.value || '').trim(),
+      limit: Number(cmdLimitEl.value || 200) || 200,
     }
   }
 
-  mainContent.querySelector('#cmd-refresh').addEventListener('click', loadCmd)
-  mainContent.querySelector('#cmd-apply').addEventListener('click', loadCmd)
+  function renderCmdRow(it) {
+    const time = fmtTime(it.time)
+    return `<tr class="border-b border-slate-200 hover:bg-slate-50">
+      <td class="px-4 py-2 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(time)}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap">${escapeHtml(it.user_id || '')}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap font-mono">${escapeHtml(it.target_id || '')}</td>
+      <td class="px-4 py-2 text-xs text-slate-500 whitespace-nowrap font-mono max-w-[8rem] truncate" title="${escapeHtml(it.session_id || '')}">${escapeHtml(it.session_id || '')}</td>
+      <td class="px-4 py-2 text-xs text-slate-800 font-mono text-[11px] break-all">${escapeHtml(it.line_text || '')}</td>
+    </tr>`
+  }
+
+  function updateCmdFooter() {
+    const hasMore = Boolean(cmdNextCursor)
+    cmdCountEl.textContent = hasMore
+      ? `表示中 ${cmdRowCount} 件（続きがあります）`
+      : cmdRowCount > 0
+        ? `表示中 ${cmdRowCount} 件`
+        : ''
+    cmdLoadMoreEl.classList.toggle('hidden', !hasMore)
+  }
+
+  async function loadCmd(append) {
+    cmdErrEl.classList.add('hidden')
+    if (!append) {
+      cmdNextCursor = ''
+      cmdRowCount = 0
+      cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">検索中…</td></tr>`
+      cmdLoadMoreEl.classList.add('hidden')
+      cmdCountEl.textContent = ''
+    } else {
+      cmdLoadMoreEl.disabled = true
+      cmdLoadMoreEl.textContent = '読み込み中…'
+    }
+    const params = cmdQueryParams()
+    try {
+      const res = await API.commandLogs({ ...params, after_id: append ? cmdNextCursor : '' })
+      const items = (res && res.items) || []
+      cmdNextCursor = (res && res.next_cursor) || ''
+      if (!append && !items.length) {
+        cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">該当するコマンドはありません。</td></tr>`
+        cmdCountEl.textContent = ''
+        cmdLoadMoreEl.classList.add('hidden')
+        return
+      }
+      const html = items.map(renderCmdRow).join('')
+      if (append) {
+        cmdRowsEl.insertAdjacentHTML('beforeend', html)
+      } else {
+        cmdRowsEl.innerHTML = html
+      }
+      cmdRowCount += items.length
+      updateCmdFooter()
+    } catch (e) {
+      cmdErrEl.textContent = e.message || '取得に失敗しました'
+      cmdErrEl.classList.remove('hidden')
+      if (!append) {
+        cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+        cmdCountEl.textContent = ''
+      }
+      cmdLoadMoreEl.classList.add('hidden')
+    } finally {
+      cmdLoadMoreEl.disabled = false
+      cmdLoadMoreEl.textContent = 'さらに読み込む'
+    }
+  }
+
+  mainContent.querySelector('#cmd-refresh').addEventListener('click', () => loadCmd(false))
+  mainContent.querySelector('#cmd-apply').addEventListener('click', () => loadCmd(false))
+  cmdLoadMoreEl.addEventListener('click', () => loadCmd(true))
 }

@@ -175,5 +175,6 @@ func Migrate(db *sql.DB) error {
 	_, _ = db.ExecContext(ctx, `UPDATE targets SET sftp_enabled = 0 WHERE id IN (SELECT target_id FROM target_tags WHERE tag = 'no-sftp')`)
 	_, _ = db.ExecContext(ctx, `UPDATE targets SET tftp_enabled = 1 WHERE id IN (SELECT target_id FROM target_tags WHERE tag = 'tftp_enabled')`)
 	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_audit_logs_time_id ON audit_logs(time DESC, id DESC)`)
+	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_command_logs_time_id ON command_logs(time DESC, id DESC)`)
 	return nil
 }

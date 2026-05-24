@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -126,5 +127,72 @@ func TestHandleCommandLogs_DefaultLimit(t *testing.T) {
 	items := getCommandLogs(t, router, sess.ID, "?limit=0")
 	if len(items) < 1 {
 		t.Fatalf("expected at least one item")
+	}
+}
+
+func TestHandleCommandLogs_Pagination(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+
+	now := time.Now().UTC()
+	for i := 0; i < 5; i++ {
+		_, err := app.DB.ExecContext(context.Background(),
+			`INSERT INTO command_logs (session_id,user_id,target_id,time,line_text) VALUES (?,?,?,?,?)`,
+			"s1", "admin", "t1", now.Add(-time.Duration(4-i)*time.Second), "cmd-"+strconv.Itoa(i),
+		)
+		if err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/commands?limit=2", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("page1: %d", w.Result().StatusCode)
+	}
+	var page1 struct {
+		Items      []commandLogItem `json:"items"`
+		NextCursor string           `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&page1); err != nil {
+		t.Fatal(err)
+	}
+	if len(page1.Items) != 2 || page1.NextCursor == "" {
+		t.Fatalf("page1: items=%d cursor=%q", len(page1.Items), page1.NextCursor)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/commands?limit=2&after_id="+page1.NextCursor, nil)
+	req2.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	var page2 struct {
+		Items      []commandLogItem `json:"items"`
+		NextCursor string           `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(w2.Body).Decode(&page2); err != nil {
+		t.Fatal(err)
+	}
+	if len(page2.Items) != 2 {
+		t.Fatalf("page2: got %d items", len(page2.Items))
+	}
+	if page2.Items[0].ID >= page1.Items[1].ID {
+		t.Fatalf("expected older ids on page2: %d >= %d", page2.Items[0].ID, page1.Items[1].ID)
+	}
+}
+
+func TestHandleCommandLogs_InvalidAfterID(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/commands?after_id=abc", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
 	}
 }

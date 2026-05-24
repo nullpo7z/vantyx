@@ -215,13 +215,13 @@ func (a *App) handleFileTransferStartDownload(w http.ResponseWriter, r *http.Req
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	job, err := a.FileTransferManager.Create(filetransfer.CreateOpts{
-		UserID:      userID,
-		TargetID:    targetID,
-		TargetName:  target.Name,
-		Backend:     backend,
-		Direction:   filetransfer.DirectionDownload,
-		RemotePath:  pathParam,
-		FileName:    fileName,
+		UserID:       userID,
+		TargetID:     targetID,
+		TargetName:   target.Name,
+		Backend:      backend,
+		Direction:    filetransfer.DirectionDownload,
+		RemotePath:   pathParam,
+		FileName:     fileName,
 		InitialState: filetransfer.StateRunning,
 	}, cancel)
 	if err != nil {
@@ -650,7 +650,7 @@ type responseRecorder struct {
 	status int
 }
 
-func (r *responseRecorder) Header() http.Header { return r.header }
+func (r *responseRecorder) Header() http.Header  { return r.header }
 func (r *responseRecorder) WriteHeader(code int) { r.status = code }
 func (r *responseRecorder) Write(b []byte) (int, error) {
 	_, _ = r.body.Write(b)

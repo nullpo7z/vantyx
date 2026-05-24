@@ -21,9 +21,9 @@ import (
 
 	api "github.com/nullpo7z/vantyx/docs/api"
 	"github.com/nullpo7z/vantyx/internal/access"
-	"github.com/nullpo7z/vantyx/internal/filetransfer"
 	"github.com/nullpo7z/vantyx/internal/auth"
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
+	"github.com/nullpo7z/vantyx/internal/filetransfer"
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"

@@ -37,21 +37,21 @@ const (
 
 // Job is a background file transfer tracked server-side.
 type Job struct {
-	ID          string
-	UserID      string
-	TargetID    string
-	TargetName  string
-	Backend     Backend
-	Direction   Direction
-	RemotePath  string
-	FileName    string
-	State       State
-	Progress    int64 // bytes transferred in running phase (or received in receiving)
-	Total       int64 // 0 if unknown
-	Error       string
-	TempPath    string // staging file path; set when staging is ready
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID         string
+	UserID     string
+	TargetID   string
+	TargetName string
+	Backend    Backend
+	Direction  Direction
+	RemotePath string
+	FileName   string
+	State      State
+	Progress   int64 // bytes transferred in running phase (or received in receiving)
+	Total      int64 // 0 if unknown
+	Error      string
+	TempPath   string // staging file path; set when staging is ready
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 
 	cancel func()
 	mu     sync.Mutex
@@ -59,9 +59,9 @@ type Job struct {
 
 // Manager tracks in-memory transfer jobs per process.
 type Manager struct {
-	mu    sync.RWMutex
-	jobs  map[string]*Job
-	now   func() time.Time
+	mu      sync.RWMutex
+	jobs    map[string]*Job
+	now     func() time.Time
 	tempDir string
 }
 
@@ -80,10 +80,10 @@ func (m *Manager) TempDir() string {
 }
 
 var (
-	ErrNotFound     = errors.New("file transfer job not found")
-	ErrForbidden    = errors.New("file transfer job forbidden")
-	ErrNotReady     = errors.New("file transfer not ready")
-	ErrJobExists    = errors.New("file transfer job already exists")
+	ErrNotFound  = errors.New("file transfer job not found")
+	ErrForbidden = errors.New("file transfer job forbidden")
+	ErrNotReady  = errors.New("file transfer not ready")
+	ErrJobExists = errors.New("file transfer job already exists")
 )
 
 // Create registers a new job. cancel is invoked when the job is cancelled.
@@ -119,15 +119,15 @@ func (m *Manager) Create(opts CreateOpts, cancel func()) (*Job, error) {
 
 // CreateOpts holds metadata for a new job.
 type CreateOpts struct {
-	UserID      string
-	TargetID    string
-	TargetName  string
-	Backend     Backend
-	Direction   Direction
-	RemotePath  string
-	FileName    string
+	UserID       string
+	TargetID     string
+	TargetName   string
+	Backend      Backend
+	Direction    Direction
+	RemotePath   string
+	FileName     string
 	InitialState State
-	Total       int64
+	Total        int64
 }
 
 // Get returns a job by ID.
@@ -235,19 +235,19 @@ func (j *Job) Snapshot() JobSnapshot {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return JobSnapshot{
-		ID:          j.ID,
-		TargetID:    j.TargetID,
-		TargetName:  j.TargetName,
-		Backend:     string(j.Backend),
-		Direction:   string(j.Direction),
-		RemotePath:  j.RemotePath,
-		FileName:    j.FileName,
-		State:       string(j.State),
-		Progress:    j.Progress,
-		Total:       j.Total,
-		Error:       j.Error,
-		CreatedAt:   j.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:   j.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:         j.ID,
+		TargetID:   j.TargetID,
+		TargetName: j.TargetName,
+		Backend:    string(j.Backend),
+		Direction:  string(j.Direction),
+		RemotePath: j.RemotePath,
+		FileName:   j.FileName,
+		State:      string(j.State),
+		Progress:   j.Progress,
+		Total:      j.Total,
+		Error:      j.Error,
+		CreatedAt:  j.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:  j.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 

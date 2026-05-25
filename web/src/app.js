@@ -1199,6 +1199,12 @@ export function renderApp(container) {
   const TREE_MAIN_CLASS = 'flex-1 overflow-auto p-6 flex flex-col items-center min-h-0'
 
   async function showTreeView(mode = 'manage', useCache = false) {
+    const isAdminRole = meData?.role === 'admin'
+    // 非管理者は manage モードに入れない（サーバー管理はサーバー管理者専用）。
+    // URL や履歴から到達した場合もホームに降格する。
+    if (mode === 'manage' && !isAdminRole) {
+      mode = 'home'
+    }
     const isManageMode = mode === 'manage'
     const pageTitle = isManageMode ? 'サーバー管理' : 'ホーム'
     setActiveNav(isManageMode ? 'groups' : 'targets')

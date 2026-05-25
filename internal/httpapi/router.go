@@ -1189,7 +1189,11 @@ type createGroupRequest struct {
 }
 
 // handleCreateGroup creates a new access group and adds the current user to it.
+// アクセスグループの作成はサーバー管理操作なので admin 限定にする。
 func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -1678,9 +1682,13 @@ type createTargetRequest struct {
 }
 
 // handleCreateTarget creates a new target and adds it to the specified access group.
+// ターゲット作成はサーバー管理操作なので admin 限定にする。
 func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !a.requireAdmin(w, r) {
 		return
 	}
 	c, err := r.Cookie("vantyx_session")
@@ -1805,10 +1813,13 @@ type updateTargetRequest struct {
 	TFTPEnabled             *bool   `json:"tftp_enabled,omitempty"`
 }
 
-// handleUpdateTarget updates an existing target. Caller must have access to the target.
+// handleUpdateTarget updates an existing target. admin 限定（サーバー管理操作）。
 func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !a.requireAdmin(w, r) {
 		return
 	}
 	targetID := chi.URLParam(r, "target_id")
@@ -1883,10 +1894,13 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(targetToResponse(t, tags))
 }
 
-// handleDeleteTarget deletes a target. Caller must have access to the target.
+// handleDeleteTarget deletes a target. admin 限定（サーバー管理操作）。
 func (a *App) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !a.requireAdmin(w, r) {
 		return
 	}
 	targetID := chi.URLParam(r, "target_id")
@@ -1962,8 +1976,11 @@ func (a *App) handleTargetTags(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(tagsResponse{Tags: tags})
 }
 
-// handleSetTargetTags sets tags for the target. Caller must have access to the target.
+// handleSetTargetTags sets tags for the target. admin 限定（サーバー管理操作）。
 func (a *App) handleSetTargetTags(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	targetID := chi.URLParam(r, "target_id")
 	targetID = strings.TrimSpace(targetID)
 	if targetID == "" {

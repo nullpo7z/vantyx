@@ -16,8 +16,14 @@ function navLinks() {
 }
 
 function isAdminOnlyNav(el) {
-  const { navGroups, navUsers, navAudit, navSettings } = state
-  return el === navGroups || el === navUsers || el === navAudit || el === navSettings
+  const { navGroups, navUsers, navAudit, navSettings, navApiRef } = state
+  return (
+    el === navGroups ||
+    el === navUsers ||
+    el === navAudit ||
+    el === navSettings ||
+    el === navApiRef
+  )
 }
 
 function setNavLinkVisible(el, visible) {
@@ -73,6 +79,8 @@ export function initNav({
 
   navGroups.addEventListener('click', (e) => {
     e.preventDefault()
+    const me = state.getMe && state.getMe()
+    if (!me || me.role !== 'admin') return
     if (typeof onGroups === 'function') onGroups()
   })
 

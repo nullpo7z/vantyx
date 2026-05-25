@@ -1917,7 +1917,7 @@ paths:
           required: false
           schema:
             type: string
-          description: 除外する event（カンマ区切り可。例: http_request）
+          description: '除外する event（カンマ区切り可。例: http_request）'
         - name: after_id
           in: query
           required: false

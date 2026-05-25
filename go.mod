@@ -11,6 +11,7 @@ require (
 	github.com/pin/tftp/v3 v3.2.0
 	github.com/pkg/sftp v1.13.10
 	golang.org/x/crypto v0.48.0
+	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.46.1
 )
 

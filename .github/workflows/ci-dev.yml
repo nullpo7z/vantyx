@@ -1,10 +1,10 @@
-name: CI (dev branch)
+name: CI
 
 on:
   push:
-    branches: ["dev"]
+    branches: ["dev", "main"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "dev"]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -47,11 +47,33 @@ jobs:
         run: |
           cd web
           npm run lint -- --max-warnings=0
+      - name: Prettier check
+        if: hashFiles('web/.prettierrc*') != ''
+        run: |
+          cd web
+          npx --yes prettier --check 'src/**/*.{js,ts,jsx,tsx,css,html}'
       - name: Typecheck frontend
         if: hashFiles('web/tsconfig.json') != ''
         run: |
           cd web
           npx tsc --noEmit
+
+  link-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # Only fail on broken links inside the repository's Markdown
+          # tree; external links are reported but not fatal so a flaky
+          # third-party site cannot block CI.
+          args: >-
+            --no-progress
+            --offline
+            --include-fragments
+            './**/*.md'
+          fail: true
 
   test-go:
     runs-on: ubuntu-latest
@@ -99,4 +121,3 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Docker image
         run: docker build -t vantyx:ci .
-

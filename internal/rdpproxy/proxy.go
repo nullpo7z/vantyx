@@ -2,16 +2,20 @@ package rdpproxy
 
 import (
 	"io"
-	"log"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/nullpo7z/vantyx/internal/logging"
 )
 
-// Bridge connects a WebSocket client to an RDP server at targetAddr (typically port 3389).
-// It proxies raw bytes both ways until either side closes.
+var logger = logging.WithComponent("rdpproxy")
+
+// Bridge connects a WebSocket client to an RDP server at targetAddr
+// (typically port 3389). It proxies raw bytes in both directions until
+// either side closes the connection.
 func Bridge(wsConn *websocket.Conn, targetAddr string) error {
 	tcpConn, err := net.DialTimeout("tcp", targetAddr, 15*time.Second)
 	if err != nil {
@@ -29,14 +33,14 @@ func Bridge(wsConn *websocket.Conn, targetAddr string) error {
 		})
 	}
 
-	// WebSocket -> TCP: read WS messages, write to RDP server
+	// WebSocket -> TCP: read WS messages and forward them to the RDP server.
 	go func() {
 		defer closeBoth()
 		for {
 			mt, data, err := wsConn.ReadMessage()
 			if err != nil {
 				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-					log.Printf("rdpproxy: ws read err: %v", err)
+					logger.Warn("ws read failed", "error", err)
 				}
 				return
 			}
@@ -44,25 +48,25 @@ func Bridge(wsConn *websocket.Conn, targetAddr string) error {
 				continue
 			}
 			if _, err := tcpConn.Write(data); err != nil {
-				log.Printf("rdpproxy: tcp write err: %v", err)
+				logger.Warn("tcp write failed", "error", err)
 				return
 			}
 		}
 	}()
 
-	// TCP -> WebSocket: read from RDP server, write as binary WS frames
+	// TCP -> WebSocket: read from the RDP server and emit binary WS frames.
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := tcpConn.Read(buf)
 		if n > 0 {
 			if err := wsConn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
-				log.Printf("rdpproxy: ws write err: %v", err)
+				logger.Warn("ws write failed", "error", err)
 				break
 			}
 		}
 		if err != nil {
 			if err != io.EOF {
-				log.Printf("rdpproxy: tcp read err: %v", err)
+				logger.Warn("tcp read failed", "error", err)
 			}
 			break
 		}

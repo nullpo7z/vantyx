@@ -1,6 +1,16 @@
+/**
+ * @file Login screen and the forced-password-change screen shown to
+ * users who still have the default admin password.
+ */
+
 import API from './api.js'
 import { renderApp } from './app.js'
 
+/**
+ * Render the "you must change your password" screen.
+ *
+ * @param {HTMLElement} container - SPA root element.
+ */
 export function renderChangePassword(container) {
   container.innerHTML = `
     <div class="flex-1 flex items-center justify-center p-4">
@@ -66,6 +76,13 @@ export function renderChangePassword(container) {
   })
 }
 
+/**
+ * Render the login form. On successful login this switches the SPA to
+ * the main app shell (or the "change password" screen when the server
+ * indicates the default password is still in use).
+ *
+ * @param {HTMLElement} container - SPA root element.
+ */
 export function renderLogin(container) {
   container.innerHTML = `
     <div class="flex-1 flex items-center justify-center p-4">

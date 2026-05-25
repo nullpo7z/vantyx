@@ -262,7 +262,7 @@ export function renderTFTPConsolePage(container) {
         const file = uploadInput.files && uploadInput.files[0]
         if (!file || !tftpTargetId) return
         setError('')
-        let remotePath = currentPath === '/' ? '/' + file.name : currentPath + '/' + file.name
+        const remotePath = currentPath === '/' ? '/' + file.name : currentPath + '/' + file.name
         uploadInput.value = ''
         try {
           await startBackgroundUpload({

@@ -1,17 +1,25 @@
-// テーマ管理（ライト / ダーク）。
-//
-// 仕様:
-// - 設定は localStorage['vantyx_theme'] に 'dark' | 'light' で保存。
-// - 未設定の場合は OS の prefers-color-scheme: dark に追従。
-// - <html class="dark"> の有無で CSS 側のダークモードを切り替える。
-//
-// FOUC 対策として web/index.html のインラインスクリプトでも同じロジックを
-// 適用しているが、SPA 内のページ切替・full page reload・ビルド済み index.html
-// のキャッシュ事故などで取りこぼしが起こり得るため、JS モジュール側にも
-// 明示的な初期化エントリポイントを用意する。
+/**
+ * @file Theme management (light / dark).
+ *
+ * Behaviour:
+ * - Preference is persisted to `localStorage['vantyx_theme']` as
+ *   `'dark'` or `'light'`.
+ * - When no preference is stored we follow the OS via
+ *   `prefers-color-scheme: dark`.
+ * - The active mode is reflected by the `dark` class on `<html>`,
+ *   which Tailwind picks up.
+ *
+ * To avoid FOUC the same logic also runs in an inline script in
+ * `web/index.html`. We re-apply it from JS on every navigation so a
+ * cached `index.html` cannot leave the SPA in the wrong mode.
+ */
 
 const STORAGE_KEY = 'vantyx_theme'
 
+/**
+ * @returns {'dark' | 'light' | null} The saved preference, or `null`
+ *   when none is stored (or localStorage is unavailable).
+ */
 function readSavedTheme() {
   try {
     const v = localStorage.getItem(STORAGE_KEY)
@@ -21,6 +29,9 @@ function readSavedTheme() {
   }
 }
 
+/**
+ * @returns {boolean} Whether the OS has requested a dark colour scheme.
+ */
 function prefersDarkColorScheme() {
   try {
     return Boolean(
@@ -33,7 +44,12 @@ function prefersDarkColorScheme() {
   }
 }
 
-/** 現在保存されているテーマ。未保存なら OS の設定にフォールバック。 */
+/**
+ * Return the currently saved theme, falling back to the OS preference
+ * when nothing has been stored.
+ *
+ * @returns {'dark' | 'light'}
+ */
 export function getStoredTheme() {
   const saved = readSavedTheme()
   if (saved) return saved
@@ -41,8 +57,9 @@ export function getStoredTheme() {
 }
 
 /**
- * localStorage / prefers-color-scheme から導出したテーマを <html> に反映する。
- * ページ遷移後でも繰り返し呼び出して安全（冪等）。
+ * Apply the derived theme (from localStorage or `prefers-color-scheme`)
+ * to `<html>`. Safe to call repeatedly after navigation; the function
+ * is idempotent.
  */
 export function applyStoredTheme() {
   if (typeof document === 'undefined') return
@@ -57,8 +74,9 @@ export function applyStoredTheme() {
 }
 
 /**
- * テーマをトグルし、localStorage に保存する。
- * 戻り値は反映後のテーマ ('dark' | 'light')。
+ * Toggle the active theme and persist the choice.
+ *
+ * @returns {'dark' | 'light'} The theme after toggling.
  */
 export function toggleStoredTheme() {
   if (typeof document === 'undefined') return 'light'
@@ -73,6 +91,6 @@ export function toggleStoredTheme() {
   return next
 }
 
-// モジュール読み込み時にも一度だけ適用しておく。
-// （index.html のインラインスクリプトが何らかの理由で動かなかった場合の保険）
+// Apply once on module load as a safety net for the rare case where
+// the inline script in index.html did not run (cached SPA, etc.).
 applyStoredTheme()

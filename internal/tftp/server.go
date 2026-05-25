@@ -129,7 +129,10 @@ func (s *Server) authorize(clientIP net.IP, filename string) (*access.Target, st
 
 	ctx := context.Background()
 
-	// ファイル名が "target_id/相対パス" でない場合: 接続元 IP と一致する TFTP ターゲットが1件だけならその target にマップする
+	// When the requested filename does not start with "target_id/...":
+	// fall back to a single TFTP target whose stored host matches the
+	// client's IP. This lets simple TFTP clients (network gear) Get / Put
+	// without knowing the internal target identifier.
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		list, err := s.targetStore.ListByProtocol(ctx, access.ProtocolTFTP)
 		if err != nil {

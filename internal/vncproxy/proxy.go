@@ -2,17 +2,23 @@ package vncproxy
 
 import (
 	"io"
-	"log"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/nullpo7z/vantyx/internal/logging"
 )
 
+var logger = logging.WithComponent("vncproxy")
+
 // Bridge connects a noVNC WebSocket client to a VNC server at targetAddr.
-// It proxies raw bytes both ways until either side closes. RFB protocol is unchanged.
-// If touch is non-nil, it is called on client and server I/O (e.g. for session last_seen).
+//
+// It proxies raw bytes in both directions until either side closes; the
+// RFB protocol payload is unchanged. When touch is non-nil it is invoked
+// on every successful I/O step so the caller can update session
+// last-seen timestamps for idle warnings.
 func Bridge(wsConn *websocket.Conn, targetAddr string, touch func()) error {
 	tcpConn, err := net.DialTimeout("tcp", targetAddr, 15*time.Second)
 	if err != nil {
@@ -30,14 +36,14 @@ func Bridge(wsConn *websocket.Conn, targetAddr string, touch func()) error {
 		})
 	}
 
-	// WebSocket -> TCP: read WS messages, write to VNC server
+	// WebSocket -> TCP: read WS messages, write to the VNC server.
 	go func() {
 		defer closeBoth()
 		for {
 			mt, data, err := wsConn.ReadMessage()
 			if err != nil {
 				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-					log.Printf("vncproxy: ws read err: %v", err)
+					logger.Warn("ws read failed", "error", err)
 				}
 				return
 			}
@@ -48,13 +54,14 @@ func Bridge(wsConn *websocket.Conn, targetAddr string, touch func()) error {
 				touch()
 			}
 			if _, err := tcpConn.Write(data); err != nil {
-				log.Printf("vncproxy: tcp write err: %v", err)
+				logger.Warn("tcp write failed", "error", err)
 				return
 			}
 		}
 	}()
 
-	// TCP -> WebSocket: read from VNC server, write as binary WS frames
+	// TCP -> WebSocket: read from the VNC server and forward as binary
+	// frames so noVNC interprets them as raw RFB bytes.
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := tcpConn.Read(buf)
@@ -63,13 +70,13 @@ func Bridge(wsConn *websocket.Conn, targetAddr string, touch func()) error {
 				touch()
 			}
 			if err := wsConn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
-				log.Printf("vncproxy: ws write err: %v", err)
+				logger.Warn("ws write failed", "error", err)
 				break
 			}
 		}
 		if err != nil {
 			if err != io.EOF {
-				log.Printf("vncproxy: tcp read err: %v", err)
+				logger.Warn("tcp read failed", "error", err)
 			}
 			break
 		}

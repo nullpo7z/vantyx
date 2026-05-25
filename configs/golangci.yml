@@ -1,5 +1,5 @@
 run:
-  timeout: 5m
+  timeout: 10m
   issues-exit-code: 1
 
 issues:
@@ -7,6 +7,19 @@ issues:
   max-same-issues: 0
   exclude-dirs:
     - web/node_modules
+    - patched_deps
+  exclude-rules:
+    # Tests can use long functions, less strict gosec, etc.
+    - path: _test\.go$
+      linters:
+        - gocyclo
+        - gosec
+        - revive
+        - errcheck
+    # The tools build tag wraps blank imports only.
+    - path: internal/tools/
+      linters:
+        - revive
 
 linters:
   enable:
@@ -18,8 +31,50 @@ linters:
     - ineffassign
     - gosec
     - gocyclo
+    - revive
+    - misspell
+    - unparam
+    - nilerr
+    - bodyclose
 
 linters-settings:
   gocyclo:
     min-complexity: 50
 
+  revive:
+    enable-all-rules: false
+    rules:
+      - name: exported
+        arguments:
+          - "checkPrivateReceivers"
+          - "disableStutteringCheck"
+      - name: package-comments
+      - name: var-naming
+      - name: unused-parameter
+        disabled: true
+      - name: error-naming
+      - name: error-return
+      - name: unexported-return
+      - name: receiver-naming
+      - name: context-as-argument
+
+  misspell:
+    locale: US
+    ignore-words:
+      - vantyx
+      - asciinema
+      - noVNC
+      - cancelled
+      - cancelling
+
+  errcheck:
+    check-type-assertions: false
+    check-blank: false
+    exclude-functions:
+      - (io.Closer).Close
+      - (*os.File).Close
+      - (net.Conn).Close
+      - (*net/http.Request.Body).Close
+
+  unparam:
+    check-exported: false

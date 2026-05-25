@@ -28,17 +28,23 @@ func (a *App) currentUserIDWithError(r *http.Request) (string, error) {
 	return sess.UserID, nil
 }
 
-// currentUserID returns the authenticated user ID from the session cookie, or empty string if unauthenticated.
-// 認証状態の判定はこの関数経由に集約し、ハンドラ側では userID が空かどうかのみを見るようにする。
-// ストレージエラー時も空を返すため、admin/グループ認可では currentUserIDWithError を使い 500 を出し分ける。
+// currentUserID returns the authenticated user ID from the session
+// cookie, or an empty string when the caller is unauthenticated.
+//
+// Handlers should funnel authentication checks through this helper and
+// only inspect whether the result is empty. Storage errors are
+// swallowed (empty string), so any code that needs to distinguish
+// "unauthenticated" from "storage failure" must use
+// [App.currentUserIDWithError] and return 500 on err != nil.
 func (a *App) currentUserID(r *http.Request) string {
 	userID, _ := a.currentUserIDWithError(r)
 	return userID
 }
 
-// requireAdmin writes JSON error and returns false if the current user is not an admin.
-// Admin 権限が必要なエンドポイントは、この関数を最初に呼び出して早期 return するだけにする。
-// セッション取得時の DB エラー（例: database is locked）の場合は 500 を返す。
+// requireAdmin writes a JSON error and returns false if the current
+// user is not an admin. Admin-only handlers should call this first and
+// return early. Storage errors (for example "database is locked") map
+// to HTTP 500.
 func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	userID, err := a.currentUserIDWithError(r)
 	if err != nil {
@@ -61,9 +67,9 @@ func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// requireGroupMemberOrAdmin enforces that the current user is either admin or a member of the given group.
-// グループ単位の権限チェックを行う場所で再利用するためのヘルパー。
-// セッション取得時の DB エラー（例: database is locked）の場合は 500 を返す。
+// requireGroupMemberOrAdmin enforces that the current user is either an
+// admin or a member of the given group. Storage errors (for example
+// "database is locked") map to HTTP 500.
 func (a *App) requireGroupMemberOrAdmin(w http.ResponseWriter, r *http.Request, groupID access.GroupID) (userID string, ok bool) {
 	var err error
 	userID, err = a.currentUserIDWithError(r)
@@ -99,8 +105,8 @@ func (a *App) requireGroupMemberOrAdmin(w http.ResponseWriter, r *http.Request, 
 	return "", false
 }
 
-// requireTargetAccess enforces that the current user can access the given target (via groups / tags).
-// ターゲット単位の権限チェックを行う場所で再利用するためのヘルパー。
+// requireTargetAccess enforces that the current user can access the
+// given target (via group or tag membership).
 func (a *App) requireTargetAccess(w http.ResponseWriter, r *http.Request, targetID access.TargetID) (userID string, ok bool) {
 	userID = strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
@@ -122,9 +128,14 @@ func (a *App) requireTargetAccess(w http.ResponseWriter, r *http.Request, target
 	return "", false
 }
 
-// getSessionAndTargetWithAccess validates session, loads the target, and enforces target access.
-// Returns (userID, target, true) on success; on failure writes the response and returns (_, nil, false).
-// 存在しない target_id の場合は 404、権限がない場合は 403 を返すため、先にターゲット取得してから認可チェックする。
+// getSessionAndTargetWithAccess validates the session, loads the target,
+// and enforces target access in that order. On success it returns
+// (userID, target, true); on failure it writes the appropriate HTTP
+// response and returns (_, nil, false).
+//
+// The target is fetched before authorisation so the response can
+// distinguish 404 (no such target) from 403 (target exists but the
+// user cannot reach it).
 func (a *App) getSessionAndTargetWithAccess(w http.ResponseWriter, r *http.Request, targetID string) (userID string, target *access.Target, ok bool) {
 	targetID = strings.TrimSpace(targetID)
 	if targetID == "" {

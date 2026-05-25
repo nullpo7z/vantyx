@@ -35,7 +35,8 @@ func negotiateReply(cmd, opt byte) []byte {
 	case do:
 		switch opt {
 		case optEcho:
-			// リモートの出力をそのまま表示するため、ローカルエコーは行わない。
+			// Decline local echo so the client only sees what the
+			// remote server explicitly transmits.
 			return []byte{iac, wont, optEcho}
 		case optSuppressGoAhead:
 			return []byte{iac, will, opt}

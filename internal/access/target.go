@@ -33,7 +33,7 @@ type Target struct {
 	// SSH public key auth: PEM-encoded private key and optional passphrase. Encrypted at rest like SSHPassword.
 	SSHPrivateKey           string
 	SSHPrivateKeyPassphrase string
-	// File transfer protocol toggles (for SSH/telnet: SFTP/FTP/TFTP の「ファイル転送で使用するプロトコル」の有効・無効). Stored in DB.
+	// File transfer protocol toggles (for SSH / Telnet targets: enable / disable SFTP / FTP / TFTP for the file transfer UI). Persisted to the DB.
 	SFTPEnabled bool
 	FTPEnabled  bool
 	TFTPEnabled bool
@@ -49,7 +49,7 @@ type TargetStore interface {
 	ListByIDs(ctx context.Context, ids []TargetID, opts *ListOpts) ([]*Target, error)
 	// ListByProtocol returns targets for the given protocol (e.g. TFTP). Credentials are not populated.
 	ListByProtocol(ctx context.Context, protocol Protocol) ([]*Target, error)
-	// Tags: ターゲットに付与されたタグ。ユーザーが同じタグを持つとアクセス可能。
+	// Tags applied to the target. Users that share any of these tags gain access.
 	TagsForTarget(ctx context.Context, targetID TargetID) ([]string, error)
 	SetTargetTags(ctx context.Context, targetID TargetID, tags []string) error
 }

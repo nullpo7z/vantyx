@@ -353,7 +353,7 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_ViaTag(t *testing.T) {
 	}
 }
 
-// GroupIDsForUser: ユーザーがグループのメンバーでなくても、ユーザータグとグループタグが一致すればそのグループが見える。
+// A non-member user sees a group if their tags match any of the group tags.
 func TestSQLiteAccessGroupStore_GroupIDsForUser_ViaGroupTagOnly(t *testing.T) {
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)
@@ -365,7 +365,7 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_ViaGroupTagOnly(t *testing.T) {
 	_ = groups.SetGroupTags(ctx, GroupID("g3"), []string{"alpha"})
 	_, _ = targets.CreateWithPath(ctx, "t3", "T3", "h3", 22, ProtocolSSH, GroupID("g3"), "g3", "", "", "", "", true, false, false)
 	_ = groups.AddTargetToGroup(ctx, "g3", "t3")
-	// u3 は g3 のメンバーではない。ユーザータグとグループタグのみ一致
+	// u3 is not a member of g3; only the user tag matches the group tag.
 	_, _ = db.ExecContext(ctx, `INSERT INTO user_tags (user_id, tag) VALUES ('u3', 'alpha')`)
 	gids, err := groups.GroupIDsForUser(ctx, "u3", nil)
 	if err != nil {
@@ -376,7 +376,7 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_ViaGroupTagOnly(t *testing.T) {
 	}
 }
 
-// TargetIDsForUser: メンバーでないユーザーが、グループタグ一致のみでターゲットにアクセスできる。
+// A non-member user reaches a target if only the group tag matches.
 func TestSQLiteAccessGroupStore_TargetIDsForUser_ViaGroupTagOnly(t *testing.T) {
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)
@@ -398,7 +398,7 @@ func TestSQLiteAccessGroupStore_TargetIDsForUser_ViaGroupTagOnly(t *testing.T) {
 	}
 }
 
-// ユーザータグがどのグループ・ターゲットとも一致しない場合は何も見えない。
+// When no user tag matches any group or target, the user sees nothing.
 func TestSQLiteAccessGroupStore_TagBasedAccess_NoMatch(t *testing.T) {
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)
@@ -409,7 +409,7 @@ func TestSQLiteAccessGroupStore_TagBasedAccess_NoMatch(t *testing.T) {
 	_, _ = groups.Create(ctx, "g5", "G5")
 	_, _ = targets.CreateWithPath(ctx, "t5", "T5", "h5", 22, ProtocolSSH, GroupID("g5"), "g5", "", "", "", "", true, false, false)
 	_ = groups.AddTargetToGroup(ctx, "g5", "t5")
-	// u5 は g5 のメンバーではなく、タグも一致しない
+	// u5 is not a member of g5 and has no matching tag.
 	_, _ = db.ExecContext(ctx, `INSERT INTO user_tags (user_id, tag) VALUES ('u5', 'other')`)
 	gids, err := groups.GroupIDsForUser(ctx, "u5", nil)
 	if err != nil {

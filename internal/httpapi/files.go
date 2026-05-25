@@ -74,7 +74,7 @@ func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, use
 			return nil, false
 		}
 		if target.SSHPrivateKey != "" && strings.HasPrefix(target.SSHPrivateKey, secret.CiphertextVersionPrefix) {
-			writeJSONError(w, "保存された認証情報の復号に失敗しています。VANTYX_ENCRYPTION_KEY を確認してください", http.StatusInternalServerError)
+			writeJSONError(w, "保存された認証情報の復号に失敗しています。VANTYX_SSH_PASSWORD_ENCRYPTION_KEY を確認してください", http.StatusInternalServerError)
 			return nil, false
 		}
 		if a.SFTPClientFactory != nil {

@@ -1,6 +1,8 @@
 # Vantyx 機能一覧（実装済み・未実装）
 
-計画（`docs/plan/vantyx-implementation_f61a7d8e.plan.md`）およびコードベースに基づく一覧です。
+[English](roadmap.md)
+
+コードベースに基づく現状の機能一覧およびロードマップです。
 
 ---
 

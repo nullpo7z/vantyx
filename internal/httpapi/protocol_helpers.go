@@ -11,7 +11,9 @@ import (
 const protocolValidationError = "protocol must be ssh, telnet, vnc, tftp, ftp, or rdp"
 
 // parseProtocolField converts a protocol name from JSON (e.g. "ssh", "rdp") into access.Protocol.
-// 空文字または "ssh" の場合は SSH をデフォルトとし、それ以外の未対応文字列は共通メッセージで 400 を返すためのエラーを返す。
+// Empty input and "ssh" both map to [access.ProtocolSSH]. Unsupported
+// strings return an error so the caller can respond with 400 using the
+// same error message as the rest of the API.
 func parseProtocolField(raw string) (access.Protocol, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "ssh":

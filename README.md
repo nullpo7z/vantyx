@@ -1,62 +1,136 @@
 # Vantyx
 
-アクセス管理ゲートウェイ（SSH ターミナル・認証・ターゲット管理）。1 コンテナの Docker で完結し、リバースプロキシは不要です。
+[日本語](README.ja.md)
 
-## Docker で起動
+[![CI](https://github.com/nullpo7z/vantyx/actions/workflows/ci-dev.yml/badge.svg)](https://github.com/nullpo7z/vantyx/actions/workflows/ci-dev.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Go Reference](https://pkg.go.dev/badge/github.com/nullpo7z/vantyx.svg)](https://pkg.go.dev/github.com/nullpo7z/vantyx)
+
+Vantyx is a self-hosted access gateway that bridges browsers and CLI clients
+to the SSH, Telnet, RDP, VNC, SFTP, FTP, and TFTP servers behind it. It ships
+as a single container, terminates TLS itself, persists state in SQLite, and
+exposes a unified REST + WebSocket API for the bundled single-page UI.
+
+## Highlights
+
+- **Browser terminal** for SSH and Telnet (xterm.js + WebSocket), with
+  session resume, NAWS, and persistent shells.
+- **Browser remote desktop** for VNC via noVNC (RDP bridge is on the roadmap).
+- **File transfer** UI for SFTP, FTP, remote TFTP, and a built-in TFTP server
+  for network-equipment provisioning.
+- **CLI gateway**: log into Vantyx via `ssh user@vantyx` and proxy out to
+  any target you have access to.
+- **Session recording**: every interactive shell can be recorded in
+  asciinema format and replayed in the UI.
+- **Audit pipeline**: every API call and session event is captured and can
+  be forwarded to an external syslog / SIEM endpoint.
+- **OWASP ASVS Level 2** baseline for sensitive-data storage and transport.
+
+## Quickstart (Docker)
 
 ```bash
 docker compose up --build
 ```
 
-- **HTTP (80)**: 常に **HTTPS へ 301 リダイレクト**（無効化不可）
-- **HTTPS (443)**: アプリ本体（API + SPA）。コンテナ内では 8080/8443 で待ち受け、ホストの 80/443 にマッピングしています。
-- **TLS**: 初回起動時に `/app/certs` に証明書が無い場合は **自己署名証明書** を自動生成します。ボリューム `vantyx_certs` で永続化されるため、2 回目以降は同じ証明書を使います。本番では `./certs` をマウントして自身の証明書を配置しても構いません（`VANTYX_TLS_CERT_FILE`, `VANTYX_TLS_KEY_FILE` でパス変更可）。
-- ブラウザでは **https://localhost** または **https://<サーバーIP>** でアクセスできます。自己署名の場合は警告を許可してください。
-- **サーバーIPでの TLS**: 自己署名証明書に IP アドレスを含めるには `VANTYX_TLS_SANS` を指定します（例: `VANTYX_TLS_SANS=192.168.1.10`）。証明書は初回生成後に固定されるため、設定を変えた場合は `vantyx_certs` ボリュームを削除して再生成してください。
-- 初期ユーザー: `admin` / `Admin123!`（本番では必ず変更すること）
-- **データ永続化**: SQLite は環境変数 `VANTYX_SQLITE_PATH` でファイルパスを指定できます。未設定時は `data/vantyx.db` を使い、起動ディレクトリに `data/` を作成して永続化します。Docker ではボリュームでこのパスをマウントするとデータが残ります。
+| Port    | Purpose                                                                                        |
+|---------|------------------------------------------------------------------------------------------------|
+| `80`    | Always 301-redirects to HTTPS (cannot be disabled).                                            |
+| `443`   | The application (REST API + SPA). Inside the container the listeners bind to `8080` / `8443`. |
+| `69/udp`| Forwarded to the embedded TFTP server (`6969/udp` inside the container).                       |
 
-## TFTP（組み込みサーバー）
+- **TLS**: on first start, if `/app/certs/tls.crt` and `tls.key` are absent, a
+  self-signed certificate is generated and persisted in the `vantyx_certs`
+  volume. Replace it by mounting your own certificate and setting
+  `VANTYX_TLS_CERT_FILE` / `VANTYX_TLS_KEY_FILE`.
+- **Default admin**: `admin` / `Admin123!` — change it immediately after
+  first login.
+- **Data persistence**: SQLite lives at `data/vantyx.db` by default. Override
+  with `VANTYX_SQLITE_PATH` and mount the directory in your container.
 
-Vantyx は **2 種類の TFTP** を提供します。
+For server-IP TLS coverage, add SANs through `VANTYX_TLS_SANS`
+(comma-separated DNS names or IPs). When the value changes, delete the
+`vantyx_certs` volume so the certificate is regenerated.
 
-1. **リモート TFTP**: **サーバー管理**でプロトコル TFTP のターゲットを登録（転送プロトコルの追加チェックは SSH 等のみ）。**ホーム**で「ファイル」→ `/files?protocol=tftp`。
-2. **組み込み TFTP サーバー**: SSH/Telnet で TFTP を有効化し、**ホーム**でトグル ON。SSH 行の「ファイル」→ TFTP + コンソール（`/tftp-console`）。自動作成される `tftp` 行は一覧に表示しません。
+## Architecture
 
-環境変数:
+```mermaid
+graph LR
+    Browser["Web SPA<br/>(web/src)"] -->|HTTPS / WSS| HTTPAPI["HTTP API<br/>internal/httpapi"]
+    CLI["CLI client<br/>(ssh user@vantyx)"] -->|SSH| SSHD["CLI gateway<br/>internal/sshd"]
+    HTTPAPI --> Auth["Auth / Access<br/>internal/auth, internal/access"]
+    HTTPAPI --> Bridges["Protocol bridges<br/>internal/sshproxy, telnetproxy,<br/>vncproxy, rdpvnc, sftp, ftp, tftp"]
+    HTTPAPI --> Sessions["Session managers<br/>internal/session, internal/rdpvnc"]
+    HTTPAPI --> DB[("SQLite<br/>internal/db/sqlite")]
+    SSHD --> Bridges
+    SSHD --> Sessions
+    SSHD --> DB
+    Bridges --> Targets[(("Remote SSH /<br/>Telnet / VNC /<br/>SFTP / FTP / TFTP"))]
+```
 
-| 変数 | 説明 |
-|------|------|
-| `VANTYX_TFTP_ROOT` | 組み込みサーバーのファイルルート（未設定時 `/app/data/tftp`）。ターゲット ID ごとにサブディレクトリ |
-| `VANTYX_TFTP_LISTEN` | UDP 待ち受けアドレス（未設定時 `0.0.0.0:6969`）。コンテナは nonroot のため 69 番を直接バインドできない |
+A deeper dive lives in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The
+public REST + WebSocket surface is documented in
+[docs/api/openapi.yaml](docs/api/openapi.yaml) and served from `/docs`
+(Swagger UI) for administrators.
 
-Docker Compose ではホスト **69** をコンテナ **6969/udp** にマップしています（`69:6969/udp`）。スイッチやクライアントはホストの 69 番へ送る想定です。
+## Configuration
 
-**起動時の挙動**: プロセス起動時に、ホームの TFTP トグルで自動作成された **組み込み同行**（同一ホストの SSH/Telnet で TFTP 有効化に伴う `protocol=tftp` 行）のみ DB から削除され、トグルは OFF 表示になります。**サーバー管理**で登録した外部 TFTP ターゲットは保持されます。残存する TFTP ターゲットがある場合は組み込みサーバーが自動で再開します。組み込み TFTP を再度使う場合はホームでトグルを ON にしてください。
+All runtime knobs live under the `VANTYX_*` namespace. See
+[docs/configuration.md](docs/configuration.md) for the full reference.
 
-## セキュリティ（OWASP ASVS L2）
+The minimum you need to set in production:
 
-本アプリは機密データの保存において [OWASP ASVS](https://owasp.org/www-project-application-security-verification-standard/) Level 2 に準拠するよう設計しています。
-
-- **保存時暗号化 (V7.12)**: サーバー登録時に保存する SSH パスワードは、AES-256-GCM で暗号化してから DB に格納します。
-- **鍵の配置 (V7.14)**: 暗号化鍵はコードに含めず、インストール時に環境変数で注入します。**サーバー登録で SSH パスワードを保存する場合は必須**です。
-- **鍵のゼロ化 (V7.13)**: 平文パスワードおよび復号後のバッファは利用後にゼロクリアします。
-
-### SSH パスワード暗号化鍵の設定
-
-サーバー登録フォームで「SSH パスワード」を保存する場合、環境変数 **`VANTYX_SSH_PASSWORD_ENCRYPTION_KEY`** に 32 バイトの鍵を Base64 で設定してください。未設定のままパスワードを保存しようとすると `503 Service Unavailable` になります。
-
-**鍵の生成例（32 バイトを Base64）:**
+- `VANTYX_EXTERNAL_HOST` or `VANTYX_ALLOWED_HOSTS` — required for safe
+  HTTP→HTTPS redirects.
+- `VANTYX_SSH_PASSWORD_ENCRYPTION_KEY` — required when operators may store
+  SSH passwords on target records (AES-256-GCM at rest, OWASP ASVS V7.12).
 
 ```bash
+# Generate a 32-byte key, Base64-encoded
 openssl rand -base64 32
 ```
 
-Docker Compose で渡す例: `docker compose run -e VANTYX_SSH_PASSWORD_ENCRYPTION_KEY="$(openssl rand -base64 32)" ...` または `env` ファイルに記載し `env_file` で読み込ませてください。**鍵をローテーションすると、既存の暗号化パスワードは復号できなくなります。** 鍵は安全に保管し、本番ではシークレット管理（Kubernetes Secret 等）の利用を推奨します。
+Rotating this key makes previously-encrypted passwords undecryptable. Store
+the key in your secret manager (Kubernetes Secret, AWS Secrets Manager, …).
 
-## 開発（ローカル）
+## Local development
 
-- バックエンド: `VANTYX_TLS_CERT_FILE=./certs/tls.crt VANTYX_TLS_KEY_FILE=./certs/tls.key go run ./cmd/vantyx-server`（初回は `./certs` に自己署名を自動生成。HTTP :8080 → HTTPS へリダイレクト、HTTPS :8443）。DB は未設定時 `data/vantyx.db` に永続化されます。
-- フロントエンド: `cd web && npm run dev`（:5173、/api と /ws はバックエンドにプロキシ）
+See [docs/development.md](docs/development.md) for the full guide.
 
-詳細は [web/README.md](web/README.md) を参照してください。
+```bash
+# Backend
+VANTYX_EXTERNAL_HOST=localhost \
+  VANTYX_TLS_CERT_FILE=./certs/tls.crt \
+  VANTYX_TLS_KEY_FILE=./certs/tls.key \
+  go run ./cmd/vantyx-server
+
+# Frontend
+cd web && npm install && npm run dev
+```
+
+Lint, test, and coverage:
+
+```bash
+make fmt    # gofmt + goimports + eslint --fix
+make lint   # golangci-lint + eslint
+make test   # go test ./... + go vet ./...
+make e2e    # Playwright E2E (requires Docker)
+```
+
+## Security
+
+Vantyx targets [OWASP ASVS Level 2](docs/SECURITY-ASVS-L2.md) for sensitive
+data at rest and in transit. See [SECURITY.md](SECURITY.md) before reporting
+vulnerabilities — please use the GitHub private security advisory form
+rather than opening a public issue.
+
+## Contributing
+
+We welcome bug reports, feature requests, code, docs, and translations.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) and abide by our
+[Code of Conduct](CODE_OF_CONDUCT.md). Changes are tracked in
+[CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+Vantyx is released under the [Apache License 2.0](LICENSE). Third-party
+attribution lives in [NOTICE](NOTICE).

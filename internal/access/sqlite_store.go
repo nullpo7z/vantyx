@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log"
 	"net"
 	"regexp"
 	"sort"
@@ -12,8 +11,11 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/nullpo7z/vantyx/internal/logging"
 	"github.com/nullpo7z/vantyx/internal/secret"
 )
+
+var logger = logging.WithComponent("access")
 
 // StoreConfig holds store behavior parameters (timeout, list limit).
 // If nil is passed to constructors, defaults are used (5s timeout, defaultListLimit).
@@ -907,12 +909,12 @@ func decryptOrPlain(encKey []byte, stored string) string {
 		return stored
 	}
 	if len(encKey) != secret.KeySize {
-		log.Printf("access: encrypted credential present but encryption key is not configured correctly")
+		logger.Warn("encrypted credential present but encryption key is not configured correctly")
 		return ""
 	}
 	dec, err := secret.Decrypt(encKey, stored)
 	if err != nil {
-		log.Printf("access: failed to decrypt stored credential: %v", err)
+		logger.Warn("failed to decrypt stored credential", "error", err)
 		return ""
 	}
 	return dec

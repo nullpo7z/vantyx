@@ -1,53 +1,37 @@
 package httpapi
 
 import (
-	"fmt"
-	"log"
-	"sort"
-	"strings"
+	"context"
 	"time"
+
+	"github.com/nullpo7z/vantyx/internal/logging"
 )
 
-// auditFields は監査・操作ログ用のキー/値ペアです。
-// 値は log.Printf にそのまま渡せる型（string, int など）を想定します。
+// auditFields is the loose-typed payload accepted by [audit].
+//
+// Values may be any type that [fmt.Sprint] can handle. Prefer the
+// canonical keys defined in [internal/logging] so log queries stay
+// consistent across the codebase.
 type auditFields map[string]interface{}
 
-// formatFields は auditFields を "key=value" の並びに整形します。
-// 例: action="terminal session start" user_id=alice target_id=web-1
-func formatFields(fields auditFields) string {
-	if len(fields) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(fields))
-	keys := make([]string, 0, len(fields))
-	for k := range fields {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		v := fields[k]
-		switch vv := v.(type) {
-		case string:
-			// 値にスペースが入る場合に備え、簡易的にダブルクオートで囲む。
-			if strings.ContainsAny(vv, " \t") {
-				parts = append(parts, k+`="`+vv+`"`)
-			} else {
-				parts = append(parts, k+"="+vv)
-			}
-		default:
-			parts = append(parts, k+"="+fmt.Sprint(v))
-		}
-	}
-	return strings.Join(parts, " ")
-}
-
-// audit は httpapi レイヤの共通監査ログ出力です。
-// event は "terminal_session_start" のようなイベント名を想定します。
+// audit records a structured audit event.
+//
+// The event is:
+//
+//   - Appended to the in-memory ring buffer that powers the audit UI.
+//   - Forwarded to the registered [logging.AuditSink] (which, in this
+//     package, fans out to the DB + log file + optional syslog forwarder).
+//   - Emitted as a structured slog record so it is visible in normal
+//     log output even when no sink is configured.
+//
+// Both the buffer and the sink receive the same [AuditEntry] with the
+// event name copied into the fields map.
 func audit(event string, fields auditFields) {
 	if fields == nil {
 		fields = auditFields{}
 	}
-	// Keep a best-effort structured buffer for UI/debugging.
+
+	// Append to the in-memory ring used by the audit UI.
 	if auditBuffer != nil {
 		copied := auditFields{}
 		for k, v := range fields {
@@ -60,22 +44,11 @@ func audit(event string, fields auditFields) {
 			Fields: copied,
 		})
 	}
-	// Persist (DB + log file) if configured.
-	if sink := getGlobalAuditSink(); sink != nil {
-		copied := auditFields{}
-		for k, v := range fields {
-			copied[k] = v
-		}
-		copied["event"] = event
-		sink.write(AuditEntry{
-			Time:   time.Now().UTC(),
-			Event:  event,
-			Fields: copied,
-		})
-	}
-	fields["event"] = event
-	log.Printf("audit %s", formatFields(fields))
+
+	// Fan out to slog and the registered persistent sink (if any).
+	logging.Audit(context.Background(), event, map[string]any(fields))
 }
 
-// auditBuffer stores recent audit events for the audit log UI (in-memory, bounded).
+// auditBuffer stores recent audit events for the audit log UI. It is
+// best-effort, in-memory, and bounded.
 var auditBuffer = newAuditStore(2000)

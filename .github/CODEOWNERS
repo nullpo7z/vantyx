@@ -1,0 +1,24 @@
+# Default owners for everything in the repo.
+# Add yourself or a team after the path to receive review requests automatically.
+
+*                                  @nullpo7z
+
+# Backend hot spots
+/cmd/                              @nullpo7z
+/internal/httpapi/                 @nullpo7z
+/internal/sshd/                    @nullpo7z
+/internal/secret/                  @nullpo7z
+
+# Frontend
+/web/                              @nullpo7z
+
+# CI / build
+/.github/                          @nullpo7z
+/Dockerfile                        @nullpo7z
+/Makefile                          @nullpo7z
+/configs/                          @nullpo7z
+
+# Docs
+/docs/                             @nullpo7z
+/README.md                         @nullpo7z
+/CONTRIBUTING.md                   @nullpo7z

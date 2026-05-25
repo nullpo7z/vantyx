@@ -1,78 +1,99 @@
-## Vantyx アーキテクチャ概要
+# Vantyx architecture
 
-このドキュメントは、現在のバックエンド構成と主要コンポーネントの関係を簡潔に示します。
+[日本語](ARCHITECTURE.ja.md)
 
-### 全体構成（フロントエンド〜バックエンド〜DB）
+This document gives a high-level tour of the Vantyx backend, the SPA, and
+how they cooperate. It is aimed at new contributors who need to find their
+way around the source tree before making a change.
+
+## End-to-end stack
 
 ```mermaid
 graph TD
-    Browser["Web Frontend<br/>web/src/app.js"] -->|HTTP/WS| HTTPAPI["HTTP API / WebSocket<br/>internal/httpapi"]
+    Browser["Web frontend<br/>web/src"] -->|HTTPS / WSS| HTTPAPI["HTTP API + WebSocket<br/>internal/httpapi"]
+    CLI["CLI client<br/>ssh user@vantyx"] -->|SSH| SSHD["CLI gateway<br/>internal/sshd"]
 
-    subgraph Backend["Go Backend"]
-        HTTPAPI --> Access["Access Layer<br/>internal/access"]
-        HTTPAPI --> Auth["Auth Layer<br/>internal/auth"]
-        HTTPAPI --> Protocols["Protocol Capabilities<br/>internal/protocols"]
-        HTTPAPI --> DBStore["DB Store (SQLite 他)<br/>internal/db/sqlite + internal/access/sqlite_store"]
+    subgraph Backend["Go backend"]
+        HTTPAPI --> Access["Access layer<br/>internal/access"]
+        HTTPAPI --> Auth["Auth layer<br/>internal/auth"]
+        HTTPAPI --> Protocols["Protocol capabilities<br/>internal/protocols"]
+        HTTPAPI --> Logging["Structured logging + audit<br/>internal/logging"]
+        HTTPAPI --> DBStore["DB store<br/>internal/db/sqlite"]
 
-        %% プロトコル別クライアント
-        HTTPAPI --> SFTP["SFTP Client<br/>internal/sftp"]
-        HTTPAPI --> FTP["FTP Client<br/>internal/ftp"]
-        HTTPAPI --> TFTP["TFTP Client / Server<br/>internal/tftp"]
-        HTTPAPI --> RDPVNC["RDP/VNC Bridge<br/>internal/rdpvnc"]
+        HTTPAPI --> SFTP["SFTP client<br/>internal/sftp"]
+        HTTPAPI --> FTP["FTP client<br/>internal/ftp"]
+        HTTPAPI --> TFTP["TFTP client + server<br/>internal/tftp"]
+        HTTPAPI --> RDPVNC["RDP/VNC bridge<br/>internal/rdpvnc"]
 
-        %% セッション管理
-        HTTPAPI --> TermSess["Terminal Sessions<br/>internal/session (SSH)"]
-        HTTPAPI --> RDPSess["RDP/VNC Sessions<br/>internal/rdpvnc.Manager"]
+        HTTPAPI --> TermSess["Terminal sessions<br/>internal/session"]
+        HTTPAPI --> RDPSess["RDP/VNC sessions<br/>internal/rdpvnc.Manager"]
+
+        SSHD --> Access
+        SSHD --> Auth
+        SSHD --> TermSess
     end
 
-    DBStore --> SQLite["SQLite DB<br/>file: vantyx.db"]
+    DBStore --> SQLite[("SQLite<br/>vantyx.db")]
 ```
 
-### HTTP API 層の構成（認証・認可と機能モジュール）
+## Entry points
+
+| Binary | Source | Purpose |
+|--------|--------|---------|
+| `vantyx-server` | [`cmd/vantyx-server`](../cmd/vantyx-server) | Boots HTTP/HTTPS listeners, optional CLI SSH gateway, embedded TFTP server, and TLS bootstrap. |
+
+The server constructs the HTTP application via `httpapi.NewApp()`,
+optionally creates a `sshd.Server`, then starts both listeners and waits
+for SIGINT / SIGTERM.
+
+## HTTP layer
 
 ```mermaid
 graph TD
     subgraph HTTPAPI["internal/httpapi"]
-        Router["router.go<br/>HTTPルーティング"] --> Handlers
+        Routes["routes.go<br/>chi routing table"] --> Handlers
+        Handlers["Handler groups<br/>auth / groups / targets / files / tftp / terminal / rdp / vnc / recordings / audit"]
 
-        Handlers["Handlers<br/>groups / targets / files / tftp_server / terminal / rdp / vnc / recordings ..."]
-
-        AuthHelpers["auth_helpers.go<br/>currentUserID / requireAdmin / requireTargetAccess / getSessionAndTargetWithAccess"]
+        AuthHelpers["auth_helpers.go<br/>currentUserID / requireAdmin / requireTargetAccess"]
         ProtocolCaps["protocols.Supports*<br/>CapabilityTerminal / FileTransfer / TFTPServer"]
+        Middleware["middleware.go<br/>requestLog / CSRF / MaxBytes / sessionMiddleware"]
+        Audit["logging package<br/>structured slog + DB audit sink"]
 
+        Routes --> Middleware
         Handlers --> AuthHelpers
         Handlers --> ProtocolCaps
+        Handlers --> Audit
 
-        %% ファイル転送
-        Handlers --> Files["files.go<br/>SFTP/FTP/TFTP クライアント統合"]
-        Handlers --> TFTPFiles["tftp_server_files.go<br/>組み込みTFTPサーバーのファイル操作"]
+        Handlers --> Files["files.go<br/>SFTP/FTP/TFTP client adapter"]
+        Handlers --> TFTPFiles["tftp_server_files.go<br/>embedded TFTP server file ops"]
         Files --> SFTPClient["internal/sftp.Client"]
         Files --> FTPClient["internal/ftp.Client"]
         Files --> TFTPClient["internal/tftp.Client"]
 
-        %% ターミナル / RDP / VNC
-        Handlers --> TermWS["terminal.go<br/>/ws/ssh + TerminalSessionManager"]
+        Handlers --> TermWS["terminal handlers<br/>/ws/ssh + TerminalSessionManager"]
         Handlers --> RDPWS["rdp.go<br/>/ws/rdp + /api/rdp/sessions"]
         Handlers --> VNCWS["vnc.go<br/>/ws/vnc + /api/vnc/sessions"]
 
         TermWS --> TermSessMan["TerminalSessionManager<br/>internal/session"]
         RDPWS --> RDPVNCMan["RDPVNCManager<br/>internal/rdpvnc"]
         VNCWS --> RDPVNCMan
-
-        %% ストア
-        Handlers --> TargetStore["TargetStore<br/>internal/access.TargetStore"]
-        Handlers --> GroupStore["AccessGroupStore<br/>internal/access.AccessGroupStore"]
-        Handlers --> UserStore["UserStore<br/>internal/auth.UserStore"]
-        Handlers --> SessionStore["SessionStore<br/>internal/auth.SessionStore"]
     end
-
-    TargetStore --> AccessSQLite["sqlite_store.go"]
-    GroupStore  --> AccessSQLite
-    UserStore   --> AuthSQLite["auth用のDB実装"]
-    SessionStore --> AuthSQLite
 ```
 
-### プロトコルと機能対応（`internal/protocols`）
+Cross-cutting concerns live in shared files:
+
+- [`middleware.go`](../internal/httpapi/middleware.go) — request logging,
+  CSRF origin check, max body bytes, session cookie verification, panic
+  recovery.
+- [`auth_helpers.go`](../internal/httpapi/auth_helpers.go) — current user
+  resolution, role checks, and the central `getSessionAndTargetWithAccess`
+  helper used by every target-scoped handler.
+- [`protocol_helpers.go`](../internal/httpapi/protocol_helpers.go) — maps
+  string protocol identifiers (`ssh`, `telnet`, `rdp`, `vnc`, `sftp`,
+  `ftp`, `tftp`) to `access.Protocol` constants used throughout the
+  backend.
+
+## Protocols and capabilities
 
 ```mermaid
 graph TD
@@ -91,133 +112,137 @@ graph TD
         TFTPP --> TFTPServ["CapabilityTFTPServer"]
     end
 
-    HTTPHandlers["HTTP Handlers"] -->|Supports(p, cap)| Protocols
+    HTTPHandlers["HTTP handlers"] -->|Supports(p, cap)| Protocols
 ```
 
-### ファイル転送レイヤ（SFTP / FTP / TFTP）
+New protocols should add a `ProtocolXxx` constant in `internal/access` and
+extend `internal/protocols/capabilities.go::Supports`. Handlers should
+branch on capability, not protocol literals, so adding a new bridge does
+not require touching every handler.
 
-- **抽象インターフェース**
-  - `internal/httpapi/sftp_iface.go`
-    - `FileTransferFile`:
-      - `Read` / `Close` / `Stat()` を持つ最小限のファイルインターフェース。
-    - `FileTransferClient`:
-      - `ReadDir(path)` / `Open(path)` / `Create(path)` / `RemoveAll(path)` を持つ「プロトコル非依存のファイル転送クライアント」。
-    - `SFTPClientFactoryFunc`:
-      - テストなどで SFTP クライアント生成処理を差し替えるためのファクトリ。
-- **各プロトコルのアダプタ**
-  - `internal/httpapi/files.go`
-    - `sftpClientAdapter`（`*sftp.Client` → `FileTransferClient`）
-    - `ftpClientAdapter`（`*ftp.Client` → `FileTransferClient`）
-  - `internal/httpapi/files_tftp.go`
-    - `tftpClientAdapter`（`*tftp.Client` → `FileTransferClient`）
-    - TFTP の制約（ディレクトリ一覧なし・削除不可など）を内部で吸収。
-- **HTTP ハンドラとの関係**
-  - `internal/httpapi/files.go` の `getTargetAndFileClient`:
-    - 認証・認可 → `getSessionAndTargetWithAccess`（`auth_helpers.go`）
-    - プロトコル能力チェック → `protocols.SupportsFileTransfer`
-    - プロトコルごとに適切なクライアントを生成し、`FileTransferClient` として返却。
-  - ファイル転送系ハンドラ（list/download/upload/delete）は、`FileTransferClient` のみを相手に実装されており、SFTP/FTP/TFTP の差異はアダプタ層に閉じ込められている。
-- **バックグラウンド転送（画面離脱後も継続）**
-  - `internal/filetransfer`: プロセス内で転送ジョブ（`receiving` → `running` → `completed` 等）を管理。再起動でジョブは消失。
-  - `internal/httpapi/file_transfers.go`: `POST /api/file-transfers/upload|download`、`GET/DELETE /api/file-transfers/{id}`、`GET .../content`（完了 DL の取得）。
-  - `web/src/file_transfer_manager.js`: グローバル下部バーとポーリング。`web/src/sessions_page.js` の「セッション」一覧でも進捗・中止を表示。
+## File transfer layer
 
-### フロントエンド UI 構成（ナビゲーションとページ切り替え）
+- **Abstract interfaces** (`internal/httpapi/sftp_iface.go`):
+  - `FileTransferFile` — minimal file abstraction (`Read`, `Close`,
+    `Stat`).
+  - `FileTransferClient` — protocol-agnostic operations (`ReadDir`,
+    `Open`, `Create`, `RemoveAll`).
+  - `SFTPClientFactoryFunc` — injection seam used by tests to swap real
+    SSH dials for mocks.
+- **Adapters**:
+  - `files.go` — `sftpClientAdapter` and `ftpClientAdapter`.
+  - `files_tftp.go` — `tftpClientAdapter` (handles TFTP's lack of
+    listing / delete by returning sentinel errors).
+- **Handler entry point**: `getTargetAndFileClient` authenticates,
+  authorises (via `auth_helpers.go`), checks
+  `protocols.SupportsFileTransfer`, then returns a ready-to-use
+  `FileTransferClient`. The list / download / upload / delete handlers
+  only know about the interface.
+- **Background transfers**: `internal/filetransfer` runs upload /
+  download jobs that survive the page leaving the file UI. Phases:
+  `receiving → running → completed | failed`. Jobs are stored in memory
+  and lost on restart. The SPA polls and renders progress via
+  `web/src/file_transfer_manager.js`.
 
-- **エントリポイント**
-  - `web/src/app.js`
-    - `renderApp(container)` がヘッダーナビゲーション・メインコンテンツ領域・各種モーダル用の空コンテナを描画し、その後のイベントバインドと画面切り替えを担当。
-- **ナビゲーションの状態管理**
-  - ナビゲーション要素: `navTargets`（ホーム） / `navRecordings`（録画） / `navGroups`（サーバー管理） / `navUsers`（ユーザー管理）。
-  - 共通クラス定数:
-    - `NAV_BASE`: 非アクティブ時のベースクラス。
-    - `NAV_ACTIVE`: アクティブタブのクラス（太字＋下線）。
-  - `setActiveNav(tab)`:
-    - `meData.role` を見て admin のときだけ「サーバー管理 / ユーザー管理」を表示。
-    - 引数 `tab` に `targets / groups / users / recordings` を渡すことで、どのタブをアクティブ表示にするかを統一的に制御。
-- **ページレンダリング関数との連携**
-  - 例:
-    - `showUserInfo()` → `setActiveNav('recordings')`（ユーザー情報は録画タブと同じコンテキストで扱う）。
-    - `showUsersPage()` → `setActiveNav('users')`。
-  - 今後新しいタブやページを追加する場合は、`setActiveNav` の呼び出しのみでナビの見た目と role ベースの表示制御を揃えられる。
+## Frontend (SPA)
 
-### ログと監査（バックエンド）
+- Entry point: [`web/src/app.js`](../web/src/app.js) calls `renderApp`,
+  which wires the header, nav, and main content container, then
+  delegates each route to a `pages/` module.
+- Pages live in dedicated files under `web/src`: targets, sessions,
+  recordings, audit, settings, users, terminal, RDP, VNC, files,
+  TFTP console, account.
+- Shared helpers: [`api.js`](../web/src/api.js) (typed wrappers around
+  REST endpoints), [`nav.js`](../web/src/nav.js) (active tab state +
+  role-based visibility), [`theme.js`](../web/src/theme.js) (dark / light
+  toggle), [`file_transfer_manager.js`](../web/src/file_transfer_manager.js)
+  (global bottom progress bar + polling).
 
-- **HTTP 共通アクセスログ**
-  - `internal/httpapi/router.go` のラッパミドルウェアが、すべての HTTP リクエストについて
-    - `method` / `path` / `status` / `remote` / `duration`
-    を `log.Printf("http method=%s path=%s status=%d remote=%s duration=%s", ...)` 形式で出力。
-- **ドメイン別イベントログ**
-  - ターミナル / RDP / VNC / ファイル転送 / 録画など、ユーザー操作に紐づくイベントは
-    - `user_id` / `target_id` / `session_id` / `protocol` / `err` などのキーを用いた構造化に近いログ形式で出力。
-  - 例:
-    - 端末セッション開始: `terminal session start session_id=%s user_id=%s target_id=%s host=%s port=%d`
-    - RDP ブラウザ接続: `rdp browser start user_id=%s target_id=%s vnc_port=%d`
-    - 録画変換失敗: `recording convert failed id=%s format=%s err=%v`
-- **認可失敗・対象未存在のログ**
-  - `auth_helpers.go` でターゲットの取得・アクセスチェックに失敗した場合:
-    - ターゲット未存在: `target not_found user_id=%s target_id=%s`
-    - アクセス拒否: `target access forbidden user_id=%s target_id=%s`
-  - これにより、監査上重要な「誰がどのターゲットにアクセスしようとして拒否されたか」を一貫した形式で追跡できる。
+## Logging and auditing
 
-### 認証・認可フロー（抜粋）
+- [`internal/logging`](../internal/logging) wraps `log/slog` and provides
+  `Default()`, `WithComponent(name)`, and `Audit(ctx, event, attrs...)`.
+- HTTP access logs and domain events use the same handler, so log
+  destinations stay in one place.
+- Audit events are written to a bounded in-memory ring for the audit UI,
+  and persisted by `internal/httpapi/audit_sink.go` to the DB + an
+  optional file. From there, the optional forwarder
+  (`internal/httpapi/audit_forwarder.go`) can ship them to a syslog or
+  HTTP SIEM endpoint.
+
+Key naming convention (documented in
+[development.md](development.md#logging-keys)) keeps queries grep-friendly:
+`user_id`, `target_id`, `session_id`, `protocol`, `error`, `duration_ms`,
+`remote`, `method`, `path`, `status`, `event`.
+
+## Auth and access flow
 
 ```mermaid
 sequenceDiagram
-    participant FE as Frontend (ブラウザ)
-    participant HTTP as HTTP Handler<br/>internal/httpapi
-    participant AuthH as AuthHelpers<br/>auth_helpers.go
+    participant FE as Frontend (browser)
+    participant HTTP as HTTP handler<br/>internal/httpapi
+    participant AuthH as auth_helpers.go
     participant AGS as AccessGroupStore
     participant TS as TargetStore
 
-    FE->>HTTP: /api/targets/{id}/files など
+    FE->>HTTP: /api/targets/{id}/files etc.
     HTTP->>AuthH: currentUserID(r)
     AuthH-->>HTTP: userID or ""
 
-    alt 未認証
+    alt unauthenticated
         HTTP-->>FE: 401 unauthorized
-    else 認証済み
-        HTTP->>AuthH: getSessionAndTargetWithAccess(w,r,targetID)
+    else authenticated
+        HTTP->>AuthH: getSessionAndTargetWithAccess(w, r, targetID)
         AuthH->>TS: Get(targetID)
         TS-->>AuthH: Target or error
 
-        alt ターゲットなし
+        alt target not found
             AuthH-->>FE: 404 target not found
-        else ターゲットあり
+        else target exists
             AuthH->>AGS: TargetIDsForUser(userID)
             AGS-->>AuthH: []TargetID
 
-            alt 権限なし
+            alt no access
                 AuthH-->>FE: 403 forbidden
-            else 権限あり
-                AuthH-->>HTTP: (userID, target, true)
-                HTTP->>外部クライアント: SFTP/FTP/TFTP/RDP/VNC などを利用
+            else access granted
+                AuthH-->>HTTP: userID, target, true
+                HTTP->>External: SFTP / FTP / TFTP / RDP / VNC client
                 HTTP-->>FE: 200 + JSON/WS
             end
         end
     end
 ```
 
-### 拡張の指針（プロトコル・機能追加）
+## Extending Vantyx
 
-- **新しいプロトコルを追加するとき**
-  - `internal/access` に `ProtocolXXX` を追加する。
-  - `internal/protocols/capabilities.go` の `Supports` に、そのプロトコルがサポートする機能（ターミナル / ファイル転送 / TFTP サーバーなど）を追記する。
-  - `internal/httpapi/router.go` の `parseProtocolField` に文字列表現（例: `"myproto"`）と `access.ProtocolXXX` のマッピングを追加する。
-  - 必要に応じて、`internal/sftp` / `internal/ftp` / `internal/tftp` / `internal/rdpvnc` と同様のクライアント・ブリッジを新設し、`internal/httpapi` 側のハンドラから呼び出す。
+### Add a new bridge protocol
 
-- **新しい HTTP 機能（エンドポイント）を追加するとき**
-  - 認証・認可は **必ず `auth_helpers.go`** 経由で行う。
-    - 管理者専用   → `requireAdmin`
-    - グループ単位 → `requireGroupMemberOrAdmin`
-    - ターゲット単位 → `getSessionAndTargetWithAccess` / `requireTargetAccess`
-  - プロトコル能力による制御が必要な場合は `internal/protocols` の `Supports` / `SupportsFileTransfer` を利用し、`if target.Protocol == ...` の分岐を分散させない。
+1. Define a `ProtocolXxx` constant in `internal/access`.
+2. Declare the capabilities it provides in
+   `internal/protocols/capabilities.go::Supports`.
+3. Register the string form in `internal/httpapi/protocol_helpers.go`
+   (`parseProtocolField`).
+4. Add the proxy / client package next to its siblings (for example
+   `internal/sshproxy`, `internal/telnetproxy`, `internal/rdpvnc`).
+5. Wire the new handler(s) in `internal/httpapi/routes.go` and reuse
+   `auth_helpers.go` for authentication and authorisation.
 
-- **フロントエンドからの利用**
-  - サーバー管理やファイル転送 UI では、バックエンドの API スキーマ（`docs/api/openapi.yaml`）と、このアーキテクチャ図を見ながら、
-    - どのエンドポイントで
-    - どのプロトコルが
-    - どの機能（ターミナル / ファイル転送 / TFTP サーバーなど）を提供しているか
-    を対応づけて画面を実装する。
+### Add a new HTTP endpoint
 
+- Always go through `auth_helpers.go`:
+  - admin only — `requireAdmin`
+  - group-scoped — `requireGroupMemberOrAdmin`
+  - target-scoped — `getSessionAndTargetWithAccess` / `requireTargetAccess`
+- Branch on `protocols.Supports*` rather than hard-coding `if target.Protocol == ...`.
+- Emit `audit("event_name", auditFields{...})` so the operation appears
+  in the audit log UI and gets persisted.
 
+### Frontend additions
+
+- Reference the API contract in
+  [`docs/api/openapi.yaml`](api/openapi.yaml).
+- Share constants with the backend via `web/src/constants.js` to avoid
+  drift (for example the `tftp_enabled` capability tag).
+- Add the new view as a dedicated file under `web/src`, register a
+  route in `web/src/router.js`, and call `setActiveNav(...)` to keep
+  navigation state in sync with role-based visibility.

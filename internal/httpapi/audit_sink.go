@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/nullpo7z/vantyx/internal/logging"
 )
 
 type auditSink struct {
@@ -126,15 +130,16 @@ func getGlobalAuditSink() *auditSink {
 }
 
 func initAuditSink(db *sql.DB) {
-	// Persist to a file when configured. In production, set VANTYX_AUDIT_LOG_FILE (e.g. /app/data/audit.log).
-	// For tests, do not create a default file to avoid tempdir cleanup issues.
+	// Persist to a file when configured. In production set
+	// VANTYX_AUDIT_LOG_FILE (for example /app/data/audit.log). Tests do
+	// not get a default file path so tempdir cleanup stays clean.
 	path := os.Getenv("VANTYX_AUDIT_LOG_FILE")
 	if path == "" {
 		if !strings.HasSuffix(os.Args[0], ".test") {
 			path = "data/audit.log"
 		}
 	}
-	// Prefer admin-configured settings; fallback to env.
+	// Prefer admin-configured settings; fall back to env.
 	cfg, hasCfg := loadAuditForwarderConfigFromDB(db)
 	var fwd *auditForwarder
 	if hasCfg {
@@ -145,10 +150,29 @@ func initAuditSink(db *sql.DB) {
 
 	s, err := newAuditSink(db, path, fwd)
 	if err != nil {
-		// If file open fails, still keep DB sink.
+		// If file open fails, still keep the DB sink.
 		s = &auditSink{db: db}
 	}
 	setGlobalAuditSink(s)
+	logging.RegisterAuditSink(loggingAuditAdapter{})
+}
+
+// loggingAuditAdapter bridges [logging.AuditSink] into the legacy
+// auditSink type so that any caller that uses [logging.Audit] ends up in
+// the DB / file / forwarder pipeline owned by the HTTP API.
+type loggingAuditAdapter struct{}
+
+// Write implements [logging.AuditSink].
+func (loggingAuditAdapter) Write(_ context.Context, evt logging.AuditEvent) {
+	sink := getGlobalAuditSink()
+	if sink == nil {
+		return
+	}
+	sink.write(AuditEntry{
+		Time:   time.Now().UTC(),
+		Event:  evt.Event,
+		Fields: auditFields(evt.Fields),
+	})
 }
 
 func setAuditForwarder(cfg auditForwarderConfig) {

@@ -1,3 +1,12 @@
+/**
+ * @file Entry point for the Vantyx SPA.
+ *
+ * Inspects `?view=` / pathname to decide whether to render the main
+ * application shell, the login screen, or a dedicated full-window
+ * page (terminal, files, VNC, RDP, TFTP console). All HTML mounting
+ * happens inside `#app`.
+ */
+
 import { applyStoredTheme } from './theme.js'
 import API from './api.js'
 import { initFileTransferManager } from './file_transfer_manager.js'

@@ -389,7 +389,6 @@ func (a *App) runDownloadJob(ctx context.Context, job *filetransfer.Job, target 
 	select {
 	case <-ctx.Done():
 		job.SetState(filetransfer.StateCancelled, "")
-		a.FileTransferManager.Remove(job.ID)
 		return
 	default:
 	}
@@ -446,7 +445,6 @@ func (a *App) runRemoteDownload(ctx context.Context, job *filetransfer.Job, targ
 	case <-ctx.Done():
 		job.SetState(filetransfer.StateCancelled, "")
 		_ = os.Remove(tempName)
-		a.FileTransferManager.Remove(job.ID)
 		return
 	default:
 	}
@@ -493,7 +491,6 @@ func (a *App) runTFTPServerDownload(ctx context.Context, job *filetransfer.Job, 
 	case <-ctx.Done():
 		job.SetState(filetransfer.StateCancelled, "")
 		_ = os.Remove(tempName)
-		a.FileTransferManager.Remove(job.ID)
 		return
 	default:
 	}
@@ -506,7 +503,6 @@ func (a *App) runUploadJob(ctx context.Context, job *filetransfer.Job, target *a
 	select {
 	case <-ctx.Done():
 		job.SetState(filetransfer.StateCancelled, "")
-		a.FileTransferManager.Remove(job.ID)
 		return
 	default:
 	}
@@ -551,7 +547,6 @@ func (a *App) runRemoteUpload(ctx context.Context, job *filetransfer.Job, target
 	select {
 	case <-ctx.Done():
 		job.SetState(filetransfer.StateCancelled, "")
-		a.FileTransferManager.Remove(job.ID)
 		return
 	default:
 	}
@@ -603,7 +598,6 @@ func (a *App) runTFTPServerUpload(ctx context.Context, job *filetransfer.Job, ta
 	case <-ctx.Done():
 		job.SetState(filetransfer.StateCancelled, "")
 		_ = os.Remove(full)
-		a.FileTransferManager.Remove(job.ID)
 		return
 	default:
 	}

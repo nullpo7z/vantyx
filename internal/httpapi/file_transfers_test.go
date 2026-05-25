@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -477,6 +478,87 @@ func TestFileTransferUpload_InvalidBackend(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d", w.Result().StatusCode)
+	}
+}
+
+func TestFileTransferReapOrphansOnRestart(t *testing.T) {
+	app, _, _ := setupAppWithTargetAndSFTPMock(t)
+
+	// Seed an in-flight job directly into the DB to simulate a previous process
+	// that exited mid-transfer.
+	now := time.Now().UTC()
+	if _, err := app.DB.Exec(`
+		INSERT INTO file_transfer_jobs
+			(id, user_id, target_id, target_name, backend, direction, remote_path, file_name,
+			 state, progress, total, error, temp_path, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	`, "stuck-1", "admin", "t1", "T1", "remote", "download", "/x", "x.bin",
+		"running", 5, 100, "", "", now.Add(-time.Hour), now.Add(-time.Hour),
+	); err != nil {
+		t.Fatalf("seed stuck job: %v", err)
+	}
+
+	// Reap orphans (simulates what NewApp does on startup).
+	if _, err := app.FileTransferManager.ReapOrphans(context.Background(), "サーバー再起動により中断"); err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/file-transfers/stuck-1", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("get after reap: %d %s", w.Result().StatusCode, w.Body.String())
+	}
+	var snap filetransfer.JobSnapshot
+	if err := json.NewDecoder(w.Body).Decode(&snap); err != nil {
+		t.Fatal(err)
+	}
+	if snap.State != string(filetransfer.StateFailed) {
+		t.Fatalf("expected failed, got %s", snap.State)
+	}
+	if snap.Error == "" {
+		t.Fatal("expected non-empty error after reap")
+	}
+}
+
+func TestFileTransferHistoryPersistsAfterCompletion(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	mock.AddFile("/persist.txt", []byte("hello"))
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	startBody := []byte(`{"backend":"remote","target_id":"` + targetID + `","path":"/persist.txt"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/file-transfers/download", bytes.NewReader(startBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var snap filetransfer.JobSnapshot
+	_ = json.NewDecoder(w.Body).Decode(&snap)
+
+	waitTransferDone(t, router, cookie, &snap)
+
+	// After completion the entry must still be visible in the list endpoint.
+	req = httptest.NewRequest(http.MethodGet, "/api/file-transfers", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var out struct {
+		Items []filetransfer.JobSnapshot `json:"items"`
+	}
+	_ = json.NewDecoder(w.Body).Decode(&out)
+	found := false
+	for _, it := range out.Items {
+		if it.ID == snap.ID && it.State == string(filetransfer.StateCompleted) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("completed job missing from history: %+v", out.Items)
 	}
 }
 

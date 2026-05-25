@@ -119,6 +119,25 @@ func Migrate(db *sql.DB) error {
 			time TIMESTAMP NOT NULL,
 			line_text TEXT NOT NULL
 		);`,
+		// Background file transfer jobs (persisted across restarts).
+		`CREATE TABLE IF NOT EXISTS file_transfer_jobs (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			target_id TEXT NOT NULL,
+			target_name TEXT NOT NULL DEFAULT '',
+			backend TEXT NOT NULL,
+			direction TEXT NOT NULL,
+			remote_path TEXT NOT NULL DEFAULT '',
+			file_name TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL,
+			progress INTEGER NOT NULL DEFAULT 0,
+			total INTEGER NOT NULL DEFAULT 0,
+			error TEXT NOT NULL DEFAULT '',
+			temp_path TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
 	}
 
 	for _, stmt := range stmts {
@@ -176,5 +195,6 @@ func Migrate(db *sql.DB) error {
 	_, _ = db.ExecContext(ctx, `UPDATE targets SET tftp_enabled = 1 WHERE id IN (SELECT target_id FROM target_tags WHERE tag = 'tftp_enabled')`)
 	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_audit_logs_time_id ON audit_logs(time DESC, id DESC)`)
 	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_command_logs_time_id ON command_logs(time DESC, id DESC)`)
+	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_file_transfer_jobs_user_updated ON file_transfer_jobs(user_id, updated_at DESC, id DESC)`)
 	return nil
 }

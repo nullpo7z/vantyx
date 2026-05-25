@@ -327,9 +327,15 @@ func NewApp() *App {
 		panic(err)
 	}
 
-	ftManager := filetransfer.NewManager(transferDir)
+	ftStore := filetransfer.NewStore(db)
+	ftManager := filetransfer.NewManager(transferDir, ftStore)
 	ftBroker := NewFileTransferEventBroker()
 	ftManager.SetNotifier(ftBroker.Publish)
+	reapCtx, reapCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if _, err := ftManager.ReapOrphans(reapCtx, "サーバー再起動により中断"); err != nil {
+		log.Printf("filetransfer reaper: %v", err)
+	}
+	reapCancel()
 	return &App{
 		UserStore:               userStore,
 		SessionStore:            sessionStore,

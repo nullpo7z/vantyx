@@ -117,6 +117,10 @@ graph TD
     - プロトコル能力チェック → `protocols.SupportsFileTransfer`
     - プロトコルごとに適切なクライアントを生成し、`FileTransferClient` として返却。
   - ファイル転送系ハンドラ（list/download/upload/delete）は、`FileTransferClient` のみを相手に実装されており、SFTP/FTP/TFTP の差異はアダプタ層に閉じ込められている。
+- **バックグラウンド転送（画面離脱後も継続）**
+  - `internal/filetransfer`: プロセス内で転送ジョブ（`receiving` → `running` → `completed` 等）を管理。再起動でジョブは消失。
+  - `internal/httpapi/file_transfers.go`: `POST /api/file-transfers/upload|download`、`GET/DELETE /api/file-transfers/{id}`、`GET .../content`（完了 DL の取得）。
+  - `web/src/file_transfer_manager.js`: グローバル下部バーとポーリング。`web/src/sessions_page.js` の「セッション」一覧でも進捗・中止を表示。
 
 ### フロントエンド UI 構成（ナビゲーションとページ切り替え）
 

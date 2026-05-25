@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/auth"
 	"github.com/nullpo7z/vantyx/internal/mock"
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
 	"github.com/nullpo7z/vantyx/internal/session"
@@ -701,6 +702,12 @@ func TestHandleTerminalSessions_ListWithSession(t *testing.T) {
 	if out.Items[0].SessionID != string(sid) || out.Items[0].TargetID != "demo" || out.Items[0].Name != "s1" {
 		t.Fatalf("unexpected item: %+v", out.Items[0])
 	}
+	if out.Items[0].Protocol != string(access.ProtocolSSH) {
+		t.Fatalf("expected protocol ssh, got %q", out.Items[0].Protocol)
+	}
+	if out.Items[0].TargetPath != "g1" {
+		t.Fatalf("expected target_path g1, got %q", out.Items[0].TargetPath)
+	}
 	if out.Items[0].CreatedAt.IsZero() {
 		t.Fatalf("expected CreatedAt set")
 	}
@@ -781,10 +788,106 @@ func TestHandleTerminalSessionDelete_NotFound(t *testing.T) {
 	}
 }
 
+// TestHandleTerminalSessions_FiltersByTargetAccess ensures sessions on inaccessible targets are omitted.
+func TestHandleTerminalSessions_FiltersByTargetAccess(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("allowed"), "Allowed", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("allowed"))
+
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("secret"), "Secret", "127.0.0.2", 22, access.ProtocolSSH, access.GroupID("g2"), "g2", "", "", "", "", true, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g2"), access.TargetID("secret"))
+
+	httpSess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	mgr, ok := app.TerminalSessionManager.(*session.Manager)
+	if !ok {
+		t.Fatalf("TerminalSessionManager is not *session.Manager")
+	}
+	_, err = mgr.Start("sess-allowed", session.StartOptions{UserID: "admin", TargetID: "allowed", TargetName: "Allowed"}, func(ctx context.Context, _ *session.Session) { <-ctx.Done() })
+	if err != nil {
+		t.Fatalf("Start allowed: %v", err)
+	}
+	defer mgr.Stop("sess-allowed")
+	_, err = mgr.Start("sess-secret", session.StartOptions{UserID: "admin", TargetID: "secret", TargetName: "Secret"}, func(ctx context.Context, _ *session.Session) { <-ctx.Done() })
+	if err != nil {
+		t.Fatalf("Start secret: %v", err)
+	}
+	defer mgr.Stop("sess-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/terminal/sessions", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Items []TerminalSessionItem `json:"items"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Items) != 1 {
+		t.Fatalf("expected 1 item (allowed only), got %d: %+v", len(out.Items), out.Items)
+	}
+	if out.Items[0].TargetID != "allowed" {
+		t.Fatalf("expected allowed target, got %q", out.Items[0].TargetID)
+	}
+}
+
+// TestHandleTerminalSessionDelete_ForbiddenWithoutTargetAccess returns 403 when target access was revoked.
+func TestHandleTerminalSessionDelete_ForbiddenWithoutTargetAccess(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	mgr, ok := app.TerminalSessionManager.(*session.Manager)
+	if !ok {
+		t.Fatalf("TerminalSessionManager is not *session.Manager")
+	}
+	sid := session.ID("no-access-delete")
+	_, err := mgr.Start(sid, session.StartOptions{UserID: "admin", TargetID: "t1", TargetName: "T1"}, func(ctx context.Context, _ *session.Session) { <-ctx.Done() })
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer mgr.Stop(sid)
+
+	_ = app.AccessGroupStore.RemoveUserFromGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/terminal/sessions/no-access-delete", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
 // TestHandleTerminalSessionDelete_Success covers 204 and Stop.
 func TestHandleTerminalSessionDelete_Success(t *testing.T) {
 	app := newTestAppForTerminal(t)
 	router := app.NewRouter()
+	ctx := context.Background()
+
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	httpSess, err := app.SessionStore.Create("admin")
 	if err != nil {
@@ -911,6 +1014,74 @@ func TestHandleListRecordings_WithTargetFilter(t *testing.T) {
 	items, _ := result["items"].([]interface{})
 	if len(items) == 0 {
 		t.Fatal("expected at least 1 recording")
+	}
+}
+
+func TestHandleListRecordings_AdminUserFilter(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, _ = app.UserStore.CreateUser("bob", "bob", "User123!", auth.RoleUser)
+	if err := app.InsertRecording(ctx, "rec-bob-1", "bob", "t1", "s1", "browser", "/tmp/b.cast", time.Now().UTC().Format(time.RFC3339), "", ""); err != nil {
+		t.Fatalf("InsertRecording: %v", err)
+	}
+
+	adminSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings?user_id=bob", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: adminSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var result map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&result)
+	items, _ := result["items"].([]interface{})
+	if len(items) != 1 {
+		t.Fatalf("expected 1 recording for bob, got %d", len(items))
+	}
+}
+
+func TestHandleListRecordings_NonAdminUserFilterForbidden(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	_, _ = app.UserStore.CreateUser("u1", "user1", "User123!", auth.RoleUser)
+	userSess, _ := app.SessionStore.Create("u1")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings?user_id=admin", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: userSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleListRecordings_ChannelFilter(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	started := time.Now().UTC().Format(time.RFC3339)
+	if err := app.InsertRecording(ctx, "rec-cli-1", "admin", "t1", "s1", "cli", "/tmp/c.cast", started, "", ""); err != nil {
+		t.Fatalf("InsertRecording cli: %v", err)
+	}
+	if err := app.InsertRecording(ctx, "rec-br-1", "admin", "t1", "s2", "browser", "/tmp/b.cast", started, "", ""); err != nil {
+		t.Fatalf("InsertRecording browser: %v", err)
+	}
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings?channel_type=cli", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&result)
+	items, _ := result["items"].([]interface{})
+	if len(items) != 1 {
+		t.Fatalf("expected 1 cli recording, got %d", len(items))
 	}
 }
 
@@ -1384,6 +1555,75 @@ func TestHandleRDPSessions_WithActiveSession(t *testing.T) {
 	}
 	if resp.Items[0].TargetName != "RDP1" {
 		t.Fatalf("expected target_name RDP1, got %s", resp.Items[0].TargetName)
+	}
+}
+
+func TestHandleRDPSessions_IdleAndLastSeen(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	mgr := rdpvnc.NewManager()
+	mgr.SetIdleWarnAfter(5 * time.Minute)
+	now := time.Now()
+	mgr.SetNowForTest(func() time.Time { return now })
+	app.RDPVNCManager = mgr
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("rdp1"), "RDP1", "192.168.1.1", 3389, access.ProtocolRDP, access.GroupID("g1"), "g1", "", "", "", "", false, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("rdp1"))
+
+	placeholder := &rdpvnc.Bridge{}
+	mgr.RegisterSession("admin:rdp1", "s1", "admin", "rdp1", "RDP1", 1920, 1080, placeholder)
+
+	httpSess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/rdp/sessions", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		Items []struct {
+			LastSeen string `json:"last_seen"`
+			Idle     bool   `json:"idle"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(resp.Items))
+	}
+	if resp.Items[0].Idle {
+		t.Fatal("expected not idle immediately after start")
+	}
+	if resp.Items[0].LastSeen == "" {
+		t.Fatal("expected last_seen in response")
+	}
+
+	mgr.SetNowForTest(func() time.Time { return now.Add(6 * time.Minute) })
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w2.Code)
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !resp.Items[0].Idle {
+		t.Fatal("expected idle after threshold")
+	}
+
+	mgr.Touch("s1")
+	w3 := httptest.NewRecorder()
+	router.ServeHTTP(w3, req)
+	if err := json.Unmarshal(w3.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Items[0].Idle {
+		t.Fatal("expected not idle after Touch")
 	}
 }
 

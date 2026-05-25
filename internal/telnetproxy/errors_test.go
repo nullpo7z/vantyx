@@ -24,7 +24,7 @@ func TestWrapDialError_Refused(t *testing.T) {
 	if !errors.As(err, &ufe) {
 		t.Fatal("expected UserFacingError")
 	}
-	if !strings.Contains(ufe.Message, "拒否") {
+	if !strings.Contains(ufe.Message, "refused") {
 		t.Fatalf("expected refused hint, got %q", ufe.Message)
 	}
 }

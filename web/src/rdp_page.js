@@ -35,17 +35,19 @@ export function renderRdpPage(container) {
 
   container.innerHTML = `
     <div class="h-screen w-screen flex flex-col bg-slate-100 font-sans text-slate-900 overflow-hidden">
-      <header class="bg-sky-800 text-white px-6 py-3 flex items-center justify-between shadow z-10 shrink-0">
-        <div class="flex items-center gap-8 min-w-0">
-          <h1 class="text-xl font-semibold tracking-wide">Vantyx</h1>
-          <div class="min-w-0 text-[11px] leading-tight">
-            <div class="opacity-70">RDP（ブラウザ）</div>
-            <div class="text-xs sm:text-[13px] font-semibold truncate">${escapeHtml(targetName)}</div>
+      <header class="shrink-0 shadow z-10 text-white">
+        <div class="vantyx-header-inner">
+          <div class="vantyx-header-start">
+            <h1 class="vantyx-brand">Vantyx</h1>
+            <div class="vantyx-page-context">
+              <span class="vantyx-page-context-label">RDP（ブラウザ）</span>
+              <span class="vantyx-page-context-target">${escapeHtml(targetName)}</span>
+            </div>
           </div>
-        </div>
-        <div class="flex items-center gap-2">
-          <button id="rdp-back" type="button" class="rounded border border-white/30 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 shadow-sm">戻る</button>
-          <button id="rdp-disconnect" type="button" class="rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 hover:border-red-300 shadow-sm hidden">切断</button>
+          <div class="vantyx-header-end">
+            <button id="rdp-back" type="button" class="vantyx-page-btn">戻る</button>
+            <button id="rdp-disconnect" type="button" class="vantyx-page-btn vantyx-page-btn-danger hidden">切断</button>
+          </div>
         </div>
       </header>
       <!-- Connecting spinner -->

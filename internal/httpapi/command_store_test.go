@@ -11,6 +11,28 @@ func TestNewCommandLogStore_NilDB(t *testing.T) {
 	}
 }
 
+func TestCommandLogRecorder_TabCompletionEcho(t *testing.T) {
+	app := newTestApp(t)
+	store := newCommandLogStore(app.DB)
+	rec := newCommandLogRecorder(store, "sess-tab", "admin", "t1")
+
+	rec.RecordInput([]byte("ls /u"))
+	rec.recordStdout([]byte("\r\x1b"))
+	rec.recordStdout([]byte("[Kls /usr/bin/"))
+	rec.RecordInput([]byte("\n"))
+
+	var line string
+	err := app.DB.QueryRowContext(context.Background(),
+		`SELECT line_text FROM command_logs WHERE session_id = ?`, "sess-tab",
+	).Scan(&line)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if line != "ls /usr/bin/" {
+		t.Fatalf("expected completed line, got %q", line)
+	}
+}
+
 func TestCommandLogRecorder_RecordInputLines(t *testing.T) {
 	app := newTestApp(t)
 	store := newCommandLogStore(app.DB)
@@ -50,6 +72,29 @@ func TestCommandLogStore_AppendLineSkipsEmpty(t *testing.T) {
 	).Scan(&count)
 	if count != 1 {
 		t.Fatalf("expected 1 non-empty line, got %d", count)
+	}
+}
+
+func TestCommandLogStdoutWriter_Write(t *testing.T) {
+	app := newTestApp(t)
+	store := newCommandLogStore(app.DB)
+	rec := newCommandLogRecorder(store, "sess-w", "admin", "t1")
+	w := commandLogStdoutWriter{rec: rec}
+	payload := []byte("echo test")
+	n, err := w.Write(payload)
+	if err != nil || n != len(payload) {
+		t.Fatalf("Write: n=%d err=%v", n, err)
+	}
+	if rec.echo.currentLine() != "echo test" {
+		t.Fatalf("echo line: %q", rec.echo.currentLine())
+	}
+	rec.RecordInput([]byte("\n"))
+	var line string
+	_ = app.DB.QueryRowContext(context.Background(),
+		`SELECT line_text FROM command_logs WHERE session_id = ?`, "sess-w",
+	).Scan(&line)
+	if line != "echo test" {
+		t.Fatalf("got %q", line)
 	}
 }
 

@@ -256,12 +256,44 @@ const API = {
     }
   },
 
+  /**
+   * バックグラウンドファイル転送の状態変化を SSE で購読する。
+   * イベントは個別のジョブ snapshot を返す。
+   * @param {function(object): void} onSnapshot - スナップショット受信時
+   * @param {function(): void} [onError] - 切断時
+   */
+  subscribeFileTransferEvents(onSnapshot, onError) {
+    const url = new URL('/api/events/file-transfers', window.location.origin).toString()
+    const es = new window.EventSource(url)
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data || '{}')
+        if (data && typeof onSnapshot === 'function') onSnapshot(data)
+      } catch {
+        /* ignore */
+      }
+    }
+    es.onerror = () => {
+      es.close()
+      if (typeof onError === 'function') onError()
+    }
+    return {
+      close() {
+        es.close()
+      },
+    }
+  },
+
   /** 監査ログ（管理者のみ） */
-  async auditLogs({ limit = 200, event = '', user_id = '' } = {}) {
+  async auditLogs({ limit = 200, event = '', user_id = '', from = '', to = '', exclude_event = '', after_id = '' } = {}) {
     const q = new URLSearchParams()
     if (limit) q.set('limit', String(limit))
     if (event) q.set('event', event)
     if (user_id) q.set('user_id', user_id)
+    if (from) q.set('from', from)
+    if (to) q.set('to', to)
+    if (exclude_event) q.set('exclude_event', exclude_event)
+    if (after_id) q.set('after_id', after_id)
     const url = '/api/audit' + (q.toString() ? `?${q.toString()}` : '')
     const res = await fetch(url, { credentials: 'include' })
     if (!res.ok) {
@@ -297,18 +329,80 @@ const API = {
   },
 
   /** コマンドログ検索（管理者のみ） */
-  async commandLogs({ query = '', user_id = '', target_id = '', limit = 200 } = {}) {
+  async commandLogs({ query = '', user_id = '', target_id = '', from = '', to = '', limit = 200, after_id = '' } = {}) {
     const q = new URLSearchParams()
     if (query) q.set('query', query)
     if (user_id) q.set('user_id', user_id)
     if (target_id) q.set('target_id', target_id)
+    if (from) q.set('from', from)
+    if (to) q.set('to', to)
     if (limit) q.set('limit', String(limit))
+    if (after_id) q.set('after_id', after_id)
     const res = await fetch('/api/commands' + (q.toString() ? `?${q.toString()}` : ''), { credentials: 'include' })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
       throw new Error(err.message || 'Failed to load command logs')
     }
     return res.json()
+  },
+
+  /** 組み込み TFTP サーバー — ディレクトリ一覧 */
+  async tftpServerFilesList(targetId, path = '/') {
+    const q = new URLSearchParams()
+    if (path) q.set('path', path)
+    const res = await fetch(
+      `/api/tftp/targets/${encodeURIComponent(targetId)}/files` + (q.toString() ? `?${q.toString()}` : ''),
+      { credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to list TFTP files')
+    }
+    return res.json()
+  },
+
+  /** 組み込み TFTP サーバー — ファイルアップロード */
+  async tftpServerUpload(targetId, path, file) {
+    const form = new FormData()
+    form.append('path', path)
+    form.append('file', file)
+    const res = await fetch(`/api/tftp/targets/${encodeURIComponent(targetId)}/files/upload`, {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to upload TFTP file')
+    }
+    return res.json().catch(() => ({}))
+  },
+
+  /** 組み込み TFTP サーバー — ファイルダウンロード（Blob） */
+  async tftpServerDownload(targetId, path) {
+    const q = new URLSearchParams({ path })
+    const res = await fetch(
+      `/api/tftp/targets/${encodeURIComponent(targetId)}/files/download?${q.toString()}`,
+      { credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to download TFTP file')
+    }
+    return res.blob()
+  },
+
+  /** 組み込み TFTP サーバー — ファイル削除 */
+  async tftpServerDelete(targetId, path) {
+    const q = new URLSearchParams({ path })
+    const res = await fetch(`/api/tftp/targets/${encodeURIComponent(targetId)}/files?${q.toString()}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete TFTP file')
+    }
   },
 
   /** アクティブな RDP（ブラウザ）セッション一覧（再接続用） */
@@ -432,6 +526,11 @@ const API = {
   async recordings(params = {}) {
     const q = new URLSearchParams()
     if (params.target_id) q.set('target_id', params.target_id)
+    if (params.from) q.set('from', params.from)
+    if (params.to) q.set('to', params.to)
+    if (params.channel_type) q.set('channel_type', params.channel_type)
+    if (params.session_id) q.set('session_id', params.session_id)
+    if (params.user_id) q.set('user_id', params.user_id)
     const res = await fetch(`/api/recordings?${q}`, { credentials: 'include' })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
@@ -523,6 +622,79 @@ const API = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
       throw new Error(err.message || 'Upload failed')
+    }
+    return res.json()
+  },
+
+  /** バックグラウンド転送一覧 */
+  async fileTransfers(options = {}) {
+    const params = new URLSearchParams()
+    const opts = options || {}
+    if (opts.limit != null) params.set('limit', String(opts.limit))
+    if (opts.query) params.set('query', opts.query)
+    if (opts.targetId) params.set('target_id', opts.targetId)
+    if (opts.direction) params.set('direction', opts.direction)
+    if (opts.backend) params.set('backend', opts.backend)
+    if (opts.userId) params.set('user_id', opts.userId)
+    if (opts.from) params.set('from', opts.from)
+    if (opts.to) params.set('to', opts.to)
+    if (opts.afterCursor) params.set('after_cursor', opts.afterCursor)
+    if (Array.isArray(opts.states)) {
+      for (const s of opts.states) params.append('state', s)
+    } else if (typeof opts.state === 'string' && opts.state) {
+      params.set('state', opts.state)
+    }
+    const qs = params.toString()
+    const url = qs ? `/api/file-transfers?${qs}` : '/api/file-transfers'
+    const res = await fetch(url, { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load file transfers')
+    }
+    return res.json()
+  },
+
+  async fileTransferGet(transferId) {
+    const res = await fetch(`/api/file-transfers/${encodeURIComponent(transferId)}`, { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load transfer')
+    }
+    return res.json()
+  },
+
+  async fileTransferCancel(transferId) {
+    const res = await fetch(`/api/file-transfers/${encodeURIComponent(transferId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to cancel transfer')
+    }
+  },
+
+  async fileTransferContent(transferId) {
+    const res = await fetch(`/api/file-transfers/${encodeURIComponent(transferId)}/content`, {
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Download failed')
+    }
+    return res.blob()
+  },
+
+  async fileTransferStartDownload({ backend, target_id, path }) {
+    const res = await fetch('/api/file-transfers/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ backend, target_id, path }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to start download')
     }
     return res.json()
   },

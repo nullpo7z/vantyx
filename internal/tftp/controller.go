@@ -26,17 +26,61 @@ type controller struct {
 
 var defaultController controller
 
-// DisableAtStartup removes all TFTP targets on process startup so that the home
-// screen shows the TFTP toggle OFF and the TFTP server does not run until the user enables it.
+// isEmbeddedCompanionTarget reports whether t is the auto-created TFTP row for an SSH/Telnet
+// host TFTP toggle (same host as a row with TFTPEnabled). Standalone protocol=tftp servers
+// registered in server management are not companions and must persist across restarts.
+func isEmbeddedCompanionTarget(t *access.Target, sshTelnet []*access.Target) bool {
+	if t == nil || t.Protocol != access.ProtocolTFTP || strings.TrimSpace(t.Host) == "" {
+		return false
+	}
+	for _, x := range sshTelnet {
+		if x == nil {
+			continue
+		}
+		if x.Host != t.Host {
+			continue
+		}
+		if (x.Protocol == access.ProtocolSSH || x.Protocol == access.ProtocolTelnet) && x.TFTPEnabled {
+			return true
+		}
+	}
+	return false
+}
+
+func listSSHTelnetTargets(ctx context.Context, store access.TargetStore) []*access.Target {
+	var out []*access.Target
+	for _, p := range []access.Protocol{access.ProtocolSSH, access.ProtocolTelnet} {
+		list, err := store.ListByProtocol(ctx, p)
+		if err != nil {
+			continue
+		}
+		out = append(out, list...)
+	}
+	return out
+}
+
+// DisableAtStartup removes embedded TFTP companion targets created by the home TFTP toggle
+// so the toggle shows OFF after restart. Manually registered protocol=tftp targets are kept.
 func DisableAtStartup(ctx context.Context, store access.TargetStore) {
-	list, err := store.ListByProtocol(ctx, access.ProtocolTFTP)
-	if err != nil || len(list) == 0 {
+	tftpList, err := store.ListByProtocol(ctx, access.ProtocolTFTP)
+	if err != nil || len(tftpList) == 0 {
 		return
 	}
-	for _, t := range list {
-		_ = store.Delete(ctx, t.ID)
+	sshTelnet := listSSHTelnetTargets(ctx, store)
+	var removed int
+	for _, t := range tftpList {
+		if !isEmbeddedCompanionTarget(t, sshTelnet) {
+			continue
+		}
+		if err := store.Delete(ctx, t.ID); err != nil {
+			slog.Warn("failed to remove TFTP companion at startup", "target_id", t.ID, "error", err)
+			continue
+		}
+		removed++
 	}
-	slog.Info("TFTP disabled at startup", "removed_targets", len(list))
+	if removed > 0 {
+		slog.Info("TFTP companion targets removed at startup", "removed_targets", removed)
+	}
 }
 
 // NotifyTargetCreated should be called after a TFTP target has been created

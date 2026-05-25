@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/session"
@@ -11,18 +12,16 @@ import (
 
 const cliClearScreen = "\033[2J\033[H"
 
-func cliSessionDisconnectLines() []string {
-	return []string{
-		"Detach (keep session): close SSH to Vantyx, return to menu, then use \"resume\" to reattach",
-		"End session: run \"exit\" on the remote host, or press Ctrl+D at the shell prompt",
-	}
-}
+const cliSessionDetachHint = "Press Ctrl+\\ or Ctrl+] to return to the menu (session continues)."
+
+const cliSessionEndHint = "Press Ctrl+D to end the session."
 
 // cliSessionBarState is the compact status bar shown during a target session.
 type cliSessionBarState struct {
-	TargetName string
-	Protocol   access.Protocol
-	Cols       int
+	TargetName         string
+	Protocol           access.Protocol
+	Cols               int
+	ShowEndSessionHint bool // false on resume (Ctrl+D is sent to the remote)
 }
 
 func cliSeparatorLine(cols int) string {
@@ -107,7 +106,10 @@ type cliScreenLayout struct {
 
 func buildCLISessionBarLayout(bar cliSessionBarState) cliScreenLayout {
 	lines := []string{fmt.Sprintf("Connected to: %s [%s]", bar.TargetName, bar.Protocol)}
-	lines = append(lines, cliSessionDisconnectLines()...)
+	lines = append(lines, cliSessionDetachHint)
+	if bar.ShowEndSessionHint {
+		lines = append(lines, cliSessionEndHint)
+	}
 	lines = append(lines, cliSeparatorLine(bar.Cols))
 	return cliScreenLayout{lines: lines}
 }
@@ -181,7 +183,7 @@ func writeCLIScreen(w io.Writer, st cliScreenState, extraLines []string) error {
 }
 
 // formatCLIActiveSessionLines formats active session rows below the header.
-func formatCLIActiveSessionLines(sessions []*session.Session) []string {
+func formatCLIActiveSessionLines(sessions []*session.Session, mgr *session.Manager) []string {
 	if len(sessions) == 0 {
 		return []string{"Active sessions", "  (none)"}
 	}
@@ -191,11 +193,46 @@ func formatCLIActiveSessionLines(sessions []*session.Session) []string {
 		if name == "" {
 			name = "(no name)"
 		}
+		idleNote := cliSessionIdleSuffix(sess, mgr)
 		if sess.Description != "" {
-			lines = append(lines, fmt.Sprintf("  %d: %s — %s (%s)", i+1, name, sess.Description, sess.TargetName))
+			lines = append(lines, fmt.Sprintf("  %d: %s — %s (%s)%s", i+1, name, sess.Description, sess.TargetName, idleNote))
 		} else {
-			lines = append(lines, fmt.Sprintf("  %d: %s (%s)", i+1, name, sess.TargetName))
+			lines = append(lines, fmt.Sprintf("  %d: %s (%s)%s", i+1, name, sess.TargetName, idleNote))
 		}
 	}
+	if w := formatCLIIdleSessionsWarning(sessions, mgr); w != "" {
+		lines = append(lines, w)
+	}
 	return lines
+}
+
+func cliSessionIdleSuffix(sess *session.Session, mgr *session.Manager) string {
+	if mgr == nil || !mgr.IsIdle(sess) {
+		return ""
+	}
+	d := mgr.IdleDuration(sess).Round(time.Minute)
+	if d < time.Minute {
+		d = time.Minute
+	}
+	return fmt.Sprintf(" [idle %s]", d)
+}
+
+// formatCLIIdleSessionsWarning returns a summary line when any session exceeds the idle threshold.
+func formatCLIIdleSessionsWarning(sessions []*session.Session, mgr *session.Manager) string {
+	if mgr == nil || mgr.IdleWarnAfter() == 0 {
+		return ""
+	}
+	n := 0
+	for _, sess := range sessions {
+		if mgr.IsIdle(sess) {
+			n++
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	if n == 1 {
+		return "  Warning: 1 session has been idle for a long time (sessions are not auto-stopped)."
+	}
+	return fmt.Sprintf("  Warning: %d sessions have been idle for a long time (sessions are not auto-stopped).", n)
 }

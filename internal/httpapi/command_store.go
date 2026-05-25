@@ -39,7 +39,19 @@ type commandLogRecorder struct {
 	userID    string
 	targetID  string
 
-	buf []byte
+	buf  []byte
+	echo commandLineTracker
+}
+
+type commandLogStdoutWriter struct {
+	rec *commandLogRecorder
+}
+
+func (w commandLogStdoutWriter) Write(p []byte) (int, error) {
+	if w.rec != nil {
+		w.rec.recordStdout(p)
+	}
+	return len(p), nil
 }
 
 func newCommandLogRecorder(store *commandLogStore, sessionID, userID, targetID string) *commandLogRecorder {
@@ -55,6 +67,13 @@ func newCommandLogRecorder(store *commandLogStore, sessionID, userID, targetID s
 	}
 }
 
+func (r *commandLogRecorder) recordStdout(p []byte) {
+	if r == nil || len(p) == 0 {
+		return
+	}
+	r.echo.feed(p)
+}
+
 // RecordInput is called from sshproxy bridge when stdin bytes are sent to target.
 func (r *commandLogRecorder) RecordInput(p []byte) {
 	if r == nil || len(p) == 0 {
@@ -62,13 +81,28 @@ func (r *commandLogRecorder) RecordInput(p []byte) {
 	}
 	for _, b := range p {
 		if b == '\r' || b == '\n' {
-			if len(r.buf) > 0 {
-				line := string(r.buf)
-				r.store.appendLine(context.Background(), r.sessionID, r.userID, r.targetID, line)
-				r.buf = r.buf[:0]
-			}
+			r.flushLine()
+			continue
+		}
+		if b == '\t' {
+			// Tab triggers completion on the remote shell; the completed text arrives on stdout.
+			continue
+		}
+		if b < 32 {
 			continue
 		}
 		r.buf = append(r.buf, b)
 	}
+}
+
+func (r *commandLogRecorder) flushLine() {
+	stdinLine := strings.TrimSpace(string(r.buf))
+	echoLine := r.echo.currentLine()
+	line := mergeCommandLine(stdinLine, echoLine)
+	r.buf = r.buf[:0]
+	r.echo.reset()
+	if line == "" {
+		return
+	}
+	r.store.appendLine(context.Background(), r.sessionID, r.userID, r.targetID, line)
 }

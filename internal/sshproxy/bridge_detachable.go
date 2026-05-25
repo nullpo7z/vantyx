@@ -84,6 +84,9 @@ func (b *sshDetachableBridge) runStdinPump() {
 				return
 			}
 			if len(data) > 0 {
+				if b.touch != nil {
+					b.touch()
+				}
 				if b.stdinRecorder != nil {
 					b.stdinRecorder.RecordInput(data)
 				}
@@ -98,6 +101,9 @@ func (b *sshDetachableBridge) pumpReader(r io.Reader) {
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
+			if b.touch != nil {
+				b.touch()
+			}
 			_, _ = b.output.Write(buf[:n])
 			if b.tee != nil {
 				_, _ = b.tee.Write(buf[:n])

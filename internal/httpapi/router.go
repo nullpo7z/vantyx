@@ -23,11 +23,49 @@ import (
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
+	"github.com/nullpo7z/vantyx/internal/filetransfer"
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
 	"github.com/nullpo7z/vantyx/internal/tftp"
 )
+
+// sessionIdleWarnAfter reads VANTYX_TERMINAL_SESSION_IDLE_WARN_AFTER (default 30m). Zero disables idle warnings.
+func sessionIdleWarnAfter() time.Duration {
+	v := strings.TrimSpace(os.Getenv("VANTYX_TERMINAL_SESSION_IDLE_WARN_AFTER"))
+	if v == "0" {
+		return 0
+	}
+	if v == "" {
+		return 30 * time.Minute
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		log.Printf("invalid VANTYX_TERMINAL_SESSION_IDLE_WARN_AFTER %q: %v (using default 30m)", v, err)
+		return 30 * time.Minute
+	}
+	return d
+}
+
+// applyTerminalSessionIdleWarn configures idle warning threshold on the terminal session manager from env.
+func applyTerminalSessionIdleWarn(m *session.Manager) {
+	if m == nil {
+		return
+	}
+	if d := sessionIdleWarnAfter(); d > 0 {
+		m.SetIdleWarnAfter(d)
+	}
+}
+
+// applyRDPSessionIdleWarn configures idle warning threshold on the RDP VNC session manager from env.
+func applyRDPSessionIdleWarn(m *rdpvnc.Manager) {
+	if m == nil {
+		return
+	}
+	if d := sessionIdleWarnAfter(); d > 0 {
+		m.SetIdleWarnAfter(d)
+	}
+}
 
 const (
 	loginRateLimitWindow = 15 * time.Minute
@@ -199,8 +237,14 @@ type App struct {
 	// SessionEventBroker broadcasts session lifecycle events for SSE (GET /api/events/sessions).
 	SessionEventBroker *SessionEventBroker
 
+	// FileTransferEventBroker streams per-user file transfer updates for SSE (GET /api/events/file-transfers).
+	FileTransferEventBroker *FileTransferEventBroker
+
 	// CommandLogStore persists terminal stdin lines for search.
 	CommandLogStore *commandLogStore
+
+	// FileTransferManager tracks background file upload/download jobs.
+	FileTransferManager *filetransfer.Manager
 }
 
 // newAppDBOpen, newAppMigrate, and newAppUserStore are set in tests to inject failures for coverage.
@@ -269,23 +313,42 @@ func NewApp() *App {
 	targetStore := access.NewSQLiteTargetStore(db, storeCfg, encKey)
 	groupStore := access.NewSQLiteAccessGroupStore(db, storeCfg)
 	terminalSessions := session.NewManager()
+	applyTerminalSessionIdleWarn(terminalSessions)
+	rdpSessions := rdpvnc.NewManager()
+	applyRDPSessionIdleWarn(rdpSessions)
 
 	// Ensure admin user exists (password meets policy: 8+ chars, upper, lower, digit, special).
 	if _, err := userStore.CreateUser("admin", "admin", defaultAdminPassword, auth.RoleAdmin); err != nil && !errors.Is(err, auth.ErrUserExists) {
 		panic(err)
 	}
 
+	transferDir := filepath.Join(filepath.Dir(path), "file-transfers")
+	if err := os.MkdirAll(transferDir, 0o700); err != nil {
+		panic(err)
+	}
+
+	ftStore := filetransfer.NewStore(db)
+	ftManager := filetransfer.NewManager(transferDir, ftStore)
+	ftBroker := NewFileTransferEventBroker()
+	ftManager.SetNotifier(ftBroker.Publish)
+	reapCtx, reapCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if _, err := ftManager.ReapOrphans(reapCtx, "サーバー再起動により中断"); err != nil {
+		log.Printf("filetransfer reaper: %v", err)
+	}
+	reapCancel()
 	return &App{
-		UserStore:              userStore,
-		SessionStore:           sessionStore,
-		TargetStore:            targetStore,
-		AccessGroupStore:       groupStore,
-		TerminalSessionManager: terminalSessions,
-		LoginRateLimiter:       newLoginRateLimiter(),
-		DB:                     db,
-		RDPVNCManager:          rdpvnc.NewManager(),
-		SessionEventBroker:     NewSessionEventBroker(),
-		CommandLogStore:        newCommandLogStore(db),
+		UserStore:               userStore,
+		SessionStore:            sessionStore,
+		TargetStore:             targetStore,
+		AccessGroupStore:        groupStore,
+		TerminalSessionManager:  terminalSessions,
+		LoginRateLimiter:        newLoginRateLimiter(),
+		DB:                      db,
+		RDPVNCManager:           rdpSessions,
+		SessionEventBroker:      NewSessionEventBroker(),
+		FileTransferEventBroker: ftBroker,
+		CommandLogStore:         newCommandLogStore(db),
+		FileTransferManager:     ftManager,
 	}
 }
 
@@ -410,6 +473,8 @@ func (a *App) NewRouter() http.Handler {
 
 	// Session lifecycle events (SSE); frontend subscribes instead of polling.
 	r.Get("/api/events/sessions", a.handleSessionEvents)
+	// Background file transfer updates (SSE); used for real-time progress without polling.
+	r.Get("/api/events/file-transfers", a.handleFileTransferEvents)
 
 	// SSH/WebSocket terminal and session list (Phase 2: resume)
 	r.Route("/api/terminal/sessions", func(r chi.Router) {
@@ -428,6 +493,14 @@ func (a *App) NewRouter() http.Handler {
 	// Recordings (asciinema): list and download (owner only)
 	r.Get("/api/recordings", a.handleListRecordings)
 	r.Get("/api/recordings/{recording_id}/file", a.handleGetRecordingFile)
+
+	// Background file transfers (continue after leaving the files UI).
+	r.Get("/api/file-transfers", a.handleFileTransfersList)
+	r.Post("/api/file-transfers/download", a.handleFileTransferStartDownload)
+	r.Post("/api/file-transfers/upload", a.handleFileTransferUpload)
+	r.Get("/api/file-transfers/{transfer_id}", a.handleFileTransferGet)
+	r.Delete("/api/file-transfers/{transfer_id}", a.handleFileTransferDelete)
+	r.Get("/api/file-transfers/{transfer_id}/content", a.handleFileTransferContent)
 
 	// File transfer (SFTP/FTP): list, download, upload, delete (requires auth + target access + stored credentials)
 	r.Get("/api/targets/{target_id}/files/download", a.handleDownloadFile)
@@ -523,6 +596,7 @@ func isLoopbackHost(host string) bool {
 	if err != nil {
 		hostname = host
 	}
+	hostname = strings.TrimPrefix(strings.TrimSuffix(hostname, "]"), "[")
 	return hostname == "127.0.0.1" || hostname == "localhost" || hostname == "::1"
 }
 
@@ -1115,7 +1189,11 @@ type createGroupRequest struct {
 }
 
 // handleCreateGroup creates a new access group and adds the current user to it.
+// アクセスグループの作成はサーバー管理操作なので admin 限定にする。
 func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -1604,9 +1682,13 @@ type createTargetRequest struct {
 }
 
 // handleCreateTarget creates a new target and adds it to the specified access group.
+// ターゲット作成はサーバー管理操作なので admin 限定にする。
 func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !a.requireAdmin(w, r) {
 		return
 	}
 	c, err := r.Cookie("vantyx_session")
@@ -1731,10 +1813,13 @@ type updateTargetRequest struct {
 	TFTPEnabled             *bool   `json:"tftp_enabled,omitempty"`
 }
 
-// handleUpdateTarget updates an existing target. Caller must have access to the target.
+// handleUpdateTarget updates an existing target. admin 限定（サーバー管理操作）。
 func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !a.requireAdmin(w, r) {
 		return
 	}
 	targetID := chi.URLParam(r, "target_id")
@@ -1809,10 +1894,13 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(targetToResponse(t, tags))
 }
 
-// handleDeleteTarget deletes a target. Caller must have access to the target.
+// handleDeleteTarget deletes a target. admin 限定（サーバー管理操作）。
 func (a *App) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !a.requireAdmin(w, r) {
 		return
 	}
 	targetID := chi.URLParam(r, "target_id")
@@ -1888,8 +1976,11 @@ func (a *App) handleTargetTags(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(tagsResponse{Tags: tags})
 }
 
-// handleSetTargetTags sets tags for the target. Caller must have access to the target.
+// handleSetTargetTags sets tags for the target. admin 限定（サーバー管理操作）。
 func (a *App) handleSetTargetTags(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	targetID := chi.URLParam(r, "target_id")
 	targetID = strings.TrimSpace(targetID)
 	if targetID == "" {

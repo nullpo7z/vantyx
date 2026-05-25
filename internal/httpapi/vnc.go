@@ -65,5 +65,5 @@ func (a *App) handleVNCWebSocket(w http.ResponseWriter, r *http.Request) {
 		"target_id": targetID,
 		"addr":      targetAddr,
 	})
-	_ = vncproxy.Bridge(conn, targetAddr)
+	_ = vncproxy.Bridge(conn, targetAddr, nil)
 }

@@ -16,6 +16,24 @@ docker compose up --build
 - 初期ユーザー: `admin` / `Admin123!`（本番では必ず変更すること）
 - **データ永続化**: SQLite は環境変数 `VANTYX_SQLITE_PATH` でファイルパスを指定できます。未設定時は `data/vantyx.db` を使い、起動ディレクトリに `data/` を作成して永続化します。Docker ではボリュームでこのパスをマウントするとデータが残ります。
 
+## TFTP（組み込みサーバー）
+
+Vantyx は **2 種類の TFTP** を提供します。
+
+1. **リモート TFTP**: **サーバー管理**でプロトコル TFTP のターゲットを登録（転送プロトコルの追加チェックは SSH 等のみ）。**ホーム**で「ファイル」→ `/files?protocol=tftp`。
+2. **組み込み TFTP サーバー**: SSH/Telnet で TFTP を有効化し、**ホーム**でトグル ON。SSH 行の「ファイル」→ TFTP + コンソール（`/tftp-console`）。自動作成される `tftp` 行は一覧に表示しません。
+
+環境変数:
+
+| 変数 | 説明 |
+|------|------|
+| `VANTYX_TFTP_ROOT` | 組み込みサーバーのファイルルート（未設定時 `/app/data/tftp`）。ターゲット ID ごとにサブディレクトリ |
+| `VANTYX_TFTP_LISTEN` | UDP 待ち受けアドレス（未設定時 `0.0.0.0:6969`）。コンテナは nonroot のため 69 番を直接バインドできない |
+
+Docker Compose ではホスト **69** をコンテナ **6969/udp** にマップしています（`69:6969/udp`）。スイッチやクライアントはホストの 69 番へ送る想定です。
+
+**起動時の挙動**: プロセス起動時に、ホームの TFTP トグルで自動作成された **組み込み同行**（同一ホストの SSH/Telnet で TFTP 有効化に伴う `protocol=tftp` 行）のみ DB から削除され、トグルは OFF 表示になります。**サーバー管理**で登録した外部 TFTP ターゲットは保持されます。残存する TFTP ターゲットがある場合は組み込みサーバーが自動で再開します。組み込み TFTP を再度使う場合はホームでトグルを ON にしてください。
+
 ## セキュリティ（OWASP ASVS L2）
 
 本アプリは機密データの保存において [OWASP ASVS](https://owasp.org/www-project-application-security-verification-standard/) Level 2 に準拠するよう設計しています。

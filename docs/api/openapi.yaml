@@ -18,7 +18,9 @@ info:
     - ターゲットの一覧・作成・更新・削除 (GET/POST/PUT/DELETE /api/targets, /api/targets/{target_id})。プロトコルは ssh / telnet / vnc / tftp。一覧は limit / after_id でキーセットページネーション対応。
     - ターミナル WebSocket (GET /ws/ssh)。認証後、ターゲットへの SSH または Telnet をブリッジ。セッション永続化・レジューム対応（GET /api/terminal/sessions で一覧、session_id で再接続）。
     - VNC WebSocket (GET /ws/vnc)。認証後、protocol=vnc のターゲットへ noVNC 用に RFB をブリッジ。クエリ target_id 必須。
-    - ファイル転送: GET /api/targets/{target_id}/files（一覧・クエリ path）、GET /api/targets/{target_id}/files/download（ダウンロード・クエリ path）、POST /api/targets/{target_id}/files/upload（multipart: path, file）、DELETE /api/targets/{target_id}/files（削除・クエリ path）。SSH ターゲットは SFTP（保存済み認証必須）、TFTP ターゲットは TFTP（認証不要）。TFTP はディレクトリ一覧なし・削除未対応。
+    - ファイル転送: GET /api/targets/{target_id}/files（一覧・クエリ path）、GET /api/targets/{target_id}/files/download（ダウンロード・クエリ path）、POST /api/targets/{target_id}/files/upload（multipart: path, file）、DELETE /api/targets/{target_id}/files（削除・クエリ path）。SSH ターゲットは SFTP（保存済み認証必須）、リモート TFTP ターゲットは TFTP クライアント（認証不要・一覧・削除未対応）。
+    - 組み込み TFTP サーバー（Vantyx 内蔵）: GET /api/tftp/targets/{target_id}/files/*。protocol=tftp のターゲット向け。ローカルディスク（VANTYX_TFTP_ROOT）上のファイルを操作。
+    - バックグラウンドファイル転送: GET /api/file-transfers（自分のジョブ一覧）、GET /api/file-transfers/{transfer_id}（状態）、DELETE /api/file-transfers/{transfer_id}（キャンセル）、GET /api/file-transfers/{transfer_id}/content（完了したダウンロードの取得）、POST /api/file-transfers/download（JSON: backend, target_id, path → 202）、POST /api/file-transfers/upload（multipart: backend, target_id, path, file → 202）。backend は remote（SFTP/FTP/リモート TFTP）または tftp_server（組み込み TFTP）。ジョブはプロセス内メモリのみ（再起動で消失）。単一ファイル上限 64MB。アップロードは receiving（ブラウザ→Vantyx 受信）中に離脱すると失敗しうる。
     - 録画: GET /api/recordings（メタデータ一覧。クエリ target_id でフィルタ可）。GET /api/recordings/{recording_id}/file でファイル取得。クエリ format=cast|gif|webm（省略時 cast）。cast=Asciinema 形式。gif/webm は agg（および WebM は ffmpeg）必要、未導入時 503。ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象。
     - CLI SSH ゲートウェイ: VANTYX_SSH_LISTEN で有効化。ssh user@vantyx でログイン後、メニューからターゲット選択してプロキシ接続。VANTYX_RECORDINGS_DIR 設定時は CLI 接続も録画対象。
     - OpenAPI 仕様 (GET /api/spec) と Swagger UI (GET /docs) は admin のみアクセス可。
@@ -51,6 +53,10 @@ components:
       type: object
       description: 監査ログ 1 件（サーバー内部イベント + HTTP API 操作ログ）。fields はイベントごとに異なる任意フィールド。
       properties:
+        id:
+          type: integer
+          format: int64
+          description: audit_logs 行 ID（ページングの after_id に使用）
         time:
           type: string
           format: date-time
@@ -70,6 +76,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AuditEntry'
+        next_cursor:
+          type: string
+          description: 次ページ取得用カーソル（最終行の id）。省略時はこれ以上なし
       required:
         - items
     AuditForwarderConfig:
@@ -85,7 +94,7 @@ components:
           description: syslog 転送プロトコル
         addr:
           type: string
-          description: 宛先（udp/tcp: host:port、unix/unixgram: /dev/log 等）。unix/unixgram で空の場合は /dev/log を既定にする。
+          description: "宛先（udp/tcp: host:port、unix/unixgram: /dev/log 等）。unix/unixgram で空の場合は /dev/log を既定にする。"
         app:
           type: string
           description: syslog の app-name
@@ -108,7 +117,7 @@ components:
         source:
           type: string
           enum: [db, env]
-          description: 現在の設定ソース（db: 設定画面で保存済み、env: 環境変数のフォールバック）
+          description: "現在の設定ソース（db: 設定画面で保存済み、env: 環境変数のフォールバック）"
       required:
         - config
         - source
@@ -122,6 +131,10 @@ components:
     CommandLogItem:
       type: object
       properties:
+        id:
+          type: integer
+          format: int64
+          description: command_logs 行 ID（ページングの after_id に使用）
         time:
           type: string
           format: date-time
@@ -146,6 +159,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CommandLogItem'
+        next_cursor:
+          type: string
+          description: 次のページを取得する際に after_id に渡す値。存在しない場合は省略。
       required:
         - items
     LoginRequest:
@@ -363,6 +379,9 @@ components:
           type: string
         target_name:
           type: string
+        target_path:
+          type: string
+          description: "ターゲットの階層パス（例: prod/network）。未設定の場合は省略。"
         name:
           type: string
           description: セッション名（識別用・任意）。接続時の最初の JSON で name を送信可能。
@@ -372,11 +391,64 @@ components:
         created_at:
           type: string
           format: date-time
+        last_seen:
+          type: string
+          format: date-time
+          description: 最終活動時刻（クライアント操作およびリモート出力で更新）。
+        idle:
+          type: boolean
+          description: 無活動警告閾値を超えている場合 true（自動終了はしない）。
+        idle_seconds:
+          type: integer
+          description: 最終活動からの経過秒数（idle が true のとき）。
+        protocol:
+          type: string
+          description: ターゲットのプロトコル（ssh / telnet 等）。
       required:
         - session_id
         - target_id
         - target_name
         - created_at
+        - last_seen
+    RDPSessionItem:
+      type: object
+      description: アクティブな RDP（ブラウザ noVNC）セッション 1 件。
+      properties:
+        session_id:
+          type: string
+        target_id:
+          type: string
+        target_name:
+          type: string
+        target_path:
+          type: string
+          description: "ターゲットの階層パス（例: prod/network）。未設定の場合は省略。"
+        created_at:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+          description: 最終活動時刻（VNC 入出力・画面更新で更新。デタッチ後も監視継続）。
+        idle:
+          type: boolean
+          description: 無活動警告閾値を超えている場合 true（自動終了はしない）。
+        idle_seconds:
+          type: integer
+          description: 最終活動からの経過秒数（idle が true のとき）。
+      required:
+        - session_id
+        - target_id
+        - target_name
+        - created_at
+        - last_seen
+    RDPSessionListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RDPSessionItem'
     TerminalSessionListResponse:
       type: object
       properties:
@@ -384,6 +456,79 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TerminalSessionItem'
+    FileTransferJob:
+      type: object
+      description: バックグラウンドファイル転送ジョブのスナップショット。
+      properties:
+        id:
+          type: string
+        target_id:
+          type: string
+        target_name:
+          type: string
+        backend:
+          type: string
+          description: remote（SFTP/FTP/リモート TFTP）または tftp_server（組み込み TFTP）
+          enum: [remote, tftp_server]
+        direction:
+          type: string
+          enum: [upload, download]
+        remote_path:
+          type: string
+        file_name:
+          type: string
+        state:
+          type: string
+          description: receiving（アップロード受信中）, running, completed, failed, cancelled
+          enum: [receiving, running, completed, failed, cancelled]
+        progress:
+          type: integer
+          format: int64
+        total:
+          type: integer
+          format: int64
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - target_id
+        - backend
+        - direction
+        - remote_path
+        - file_name
+        - state
+        - progress
+        - total
+        - created_at
+        - updated_at
+    FileTransferListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileTransferJob'
+    FileTransferDownloadRequest:
+      type: object
+      required:
+        - backend
+        - target_id
+        - path
+      properties:
+        backend:
+          type: string
+          enum: [remote, tftp_server]
+        target_id:
+          type: string
+        path:
+          type: string
+          description: リモート上の絶対パス（先頭 / 推奨）
 
 paths:
   /healthz:
@@ -1052,6 +1197,126 @@ paths:
         '404':
         '502':
 
+  /api/tftp/targets/{target_id}/files:
+    get:
+      summary: 組み込み TFTP サーバー — ファイル一覧
+      description: |
+        Vantyx 組み込み TFTP サーバー用のローカルディレクトリ（`VANTYX_TFTP_ROOT/{target_id}/`）を一覧します。
+        ターゲットは `protocol=tftp` である必要があります（リモート TFTP クライアント向けの `/api/targets/.../files` とは別 API）。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+            default: /
+          description: ディレクトリパス（デフォルト `/`）
+      responses:
+        '200':
+          description: ディレクトリエントリ配列
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileEntry'
+        '400':
+        '401':
+        '403':
+    delete:
+      summary: 組み込み TFTP サーバー — ファイル削除
+      description: ローカル TFTP ディレクトリ内のファイルまたは空ディレクトリを削除します。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 削除完了
+        '400':
+        '401':
+        '403':
+        '404':
+
+  /api/tftp/targets/{target_id}/files/download:
+    get:
+      summary: 組み込み TFTP サーバー — ファイルダウンロード
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ファイル内容（バイナリ）
+        '400':
+        '401':
+        '403':
+        '404':
+
+  /api/tftp/targets/{target_id}/files/upload:
+    post:
+      summary: 組み込み TFTP サーバー — ファイルアップロード
+      description: multipart/form-data で path と file を送信。最大 64MB。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [path, file]
+              properties:
+                path:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: アップロード完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+        '400':
+        '401':
+        '403':
+
   /api/groups:
     get:
       summary: アクセスグループ一覧（所属 + ターゲット含む）
@@ -1621,8 +1886,9 @@ paths:
     get:
       summary: 監査ログ取得（管理者のみ）
       description: |
-        監査ログを新しい順に返します。`limit`/`event`/`user_id` でフィルタできます。
+        監査ログを新しい順に返します。`limit`/`event`/`user_id`/`from`/`to` でフィルタできます。
         実装は DB 永続ログ（audit_logs）を優先し、DB が使えない場合はメモリ上の直近分にフォールバックします。
+        `from`/`to` 未指定時は直近 30 日。最大範囲は 90 日（超過は 400）。
       security:
         - cookieAuth: []
       parameters:
@@ -1646,9 +1912,33 @@ paths:
           schema:
             type: string
           description: user_id の完全一致
+        - name: exclude_event
+          in: query
+          required: false
+          schema:
+            type: string
+          description: '除外する event（カンマ区切り可。例: http_request）'
+        - name: after_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 前ページ最終行の audit_logs.id（より古い行を取得）
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 期間開始（RFC3339 または YYYY-MM-DD、UTC 日境界）
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 期間終了（排他的。RFC3339 または YYYY-MM-DD）
       responses:
         '200':
-          description: 監査ログ一覧
+          description: 監査ログ一覧（next_cursor があれば続きあり）
           content:
             application/json:
               schema:
@@ -1661,6 +1951,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: 期間パラメータ不正（from > to、範囲超過など）
           content:
             application/json:
               schema:
@@ -1739,6 +2035,9 @@ paths:
       description: |
         ターミナルで入力された行（stdin）の一部を検索します。
         best-effort であり、シェルの編集操作等により完全なコマンド履歴とは一致しない場合があります。
+        `from`/`to` 未指定時は直近 30 日。最大範囲は 90 日（超過は 400）。
+        **ページネーション**: `after_id` に前ページの `next_cursor`（command_logs.id）を渡すと、より古い行を取得します。
+        レスポンスは `{ "items": [...], "next_cursor": "..." }` 形式です。
       security:
         - cookieAuth: []
       parameters:
@@ -1766,9 +2065,27 @@ paths:
             minimum: 1
             maximum: 500
             default: 200
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 期間開始（RFC3339 または YYYY-MM-DD）
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 期間終了（排他的）
+        - name: after_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 前ページ最終行の command_logs.id（より古い行を取得）
       responses:
         '200':
-          description: コマンドログ一覧
+          description: コマンドログ一覧（next_cursor があれば続きあり）
           content:
             application/json:
               schema:
@@ -1781,6 +2098,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: 期間パラメータ不正
           content:
             application/json:
               schema:
@@ -1820,6 +2143,9 @@ paths:
       description: |
         ログイン中のユーザーに属する録画のメタデータ一覧を返します。ファイルパスは含まれません。
         クエリ target_id を指定すると、そのターゲット（サーバー）に紐づく録画のみに絞り込みます。
+        `from`/`to` で started_at を期間絞り込み（未指定時は直近 30 日、最大 90 日）。
+        `channel_type`（browser / cli 等）、`session_id`（完全一致）でさらに絞り込み可能。
+        管理者は `user_id` を指定して他ユーザーの録画を参照できます（非管理者が指定した場合は 403）。
         ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象です（VANTYX_RECORDINGS_DIR 設定時）。
       security:
         - cookieAuth: []
@@ -1830,6 +2156,36 @@ paths:
           schema:
             type: string
           description: このターゲットに紐づく録画のみ返す（省略時は全件、最大 200 件）
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+          description: started_at の期間開始
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+          description: started_at の期間終了（排他的）
+        - name: channel_type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: チャネル種別（browser / cli 等）
+        - name: session_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: セッション ID（完全一致）
+        - name: user_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 録画所有者（管理者のみ。未指定時は自分の録画のみ）
       responses:
         '200':
           description: 録画一覧（items 配列）
@@ -1839,6 +2195,18 @@ paths:
                 $ref: '#/components/schemas/RecordingListResponse'
         '401':
           description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 非管理者が user_id を指定した場合など
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: 期間パラメータ不正
           content:
             application/json:
               schema:
@@ -1916,6 +2284,62 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/rdp/sessions:
+    get:
+      summary: アクティブな RDP セッション一覧
+      description: |
+        ログイン中のユーザーに属するアクティブな RDP（ブラウザ）セッション一覧を返します。
+        last_seen は VNC 経由の操作・画面更新で更新されます。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: セッション一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RDPSessionListResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/rdp/sessions/{session_id}:
+    delete:
+      summary: RDP セッションの終了
+      description: 指定した session_id の RDP セッションを終了します。自分のセッションのみ削除可能です。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 終了完了
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 権限なし
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: セッションが見つからない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/terminal/sessions/{session_id}:
     delete:
       summary: ターミナルセッションの終了
@@ -1939,6 +2363,241 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: セッションが存在しない、または自分のセッションでない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/file-transfers:
+    get:
+      summary: バックグラウンドファイル転送ジョブ一覧
+      description: ログイン中のユーザーが開始した転送ジョブの一覧を返します（新しい順）。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: ジョブ一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileTransferListResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/file-transfers/download:
+    post:
+      summary: バックグラウンドダウンロードの開始
+      description: |
+        指定パスのファイルをバックグラウンドで取得します。202 でジョブを返し、完了後は GET /api/file-transfers/{transfer_id}/content でダウンロードできます。
+        画面を離脱しても running フェーズはサーバー側で継続します。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileTransferDownloadRequest'
+      responses:
+        '202':
+          description: ジョブ受付
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileTransferJob'
+        '400':
+          description: リクエスト不正
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: ターゲットへのアクセス権なし
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ターゲットが見つからない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/file-transfers/upload:
+    post:
+      summary: バックグラウンドアップロードの開始
+      description: |
+        multipart でファイルを Vantyx に受信（receiving）した後、バックグラウンドでリモートへ転送（running）します。
+        receiving 中にブラウザが切断すると失敗しうる点に注意。単一ファイル上限 64MB。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - backend
+                - target_id
+                - path
+                - file
+              properties:
+                backend:
+                  type: string
+                  enum: [remote, tftp_server]
+                target_id:
+                  type: string
+                path:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '202':
+          description: ジョブ受付（受信完了後 running へ）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileTransferJob'
+        '400':
+          description: リクエスト不正
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: ターゲットへのアクセス権なし
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: ステージング失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/file-transfers/{transfer_id}:
+    get:
+      summary: 転送ジョブの状態取得
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: transfer_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ジョブ状態
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileTransferJob'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ジョブが見つからない、または自分のジョブでない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: 転送ジョブのキャンセル
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: transfer_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: キャンセル完了
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 権限なし
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ジョブが見つからない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/file-transfers/{transfer_id}/content:
+    get:
+      summary: 完了したダウンロードのファイル取得
+      description: direction=download かつ state=completed のジョブのみ。取得後はクライアント側でジョブ削除を推奨。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: transfer_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ファイル本体
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: アップロードジョブなどダウンロード以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ジョブが見つからない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 転送未完了
           content:
             application/json:
               schema:

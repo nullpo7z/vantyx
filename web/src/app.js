@@ -1,8 +1,15 @@
 import API from './api.js'
 import { renderLogin } from './login.js'
-import { initNav, setActiveNav } from './nav.js'
+import { applyStoredTheme, toggleStoredTheme } from './theme.js'
+import { initNav, setActiveNav, showAuthenticatedNav } from './nav.js'
 import { renderUsersPage } from './users_page.js'
 import { renderRecordingsPage } from './recordings_page.js'
+import { renderSessionsPage } from './sessions_page.js'
+import {
+  buildGroupedSessionListHTML,
+  bindSessionListActions,
+  countIdleSessions,
+} from './session_list_shared.js'
 import { renderUserInfo } from './account_page.js'
 import { renderAuditPage } from './audit_page.js'
 import { renderSettingsPage } from './settings_page.js'
@@ -25,25 +32,35 @@ function validateOptionalUserId(rawId) {
 }
 
 export function renderApp(container) {
+  // 画面遷移（renderApp 再呼び出し）時にも保存済みテーマを必ず適用し直す。
+  applyStoredTheme()
   container.innerHTML = `
     <div class="flex-1 flex flex-col">
-      <header class="bg-sky-800 text-white px-6 py-3 flex items-center justify-between shadow z-10 shrink-0">
-        <div class="flex items-center gap-8">
-          <h1 class="text-xl font-semibold tracking-wide">Vantyx</h1>
-          <nav class="flex items-center gap-6">
-            <a href="#" id="nav-targets" class="text-sm font-semibold border-b-2 border-white pb-1 transition-opacity">ホーム</a>
-            <a href="#" id="nav-recordings" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">録画</a>
-            <a href="#" id="nav-groups" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">サーバー管理</a>
-            <a href="#" id="nav-users" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">ユーザー管理</a>
-            <a href="#" id="nav-audit" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">監査ログ</a>
-            <a href="#" id="nav-settings" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">設定</a>
-            <a href="/docs" id="nav-api-ref" target="_blank" rel="noopener noreferrer" class="text-sm opacity-80 hover:opacity-100 transition-opacity hidden">API リファレンス</a>
-          </nav>
-        </div>
-        <div class="flex items-center gap-4">
+      <header class="text-white shadow z-10 shrink-0">
+        <div class="vantyx-header-inner">
+          <div class="vantyx-header-start">
+            <h1 class="vantyx-brand">Vantyx</h1>
+            <nav class="vantyx-nav" aria-label="メインメニュー">
+              <a href="#" id="nav-targets" class="vantyx-nav-link">ホーム</a>
+              <a href="#" id="nav-sessions" class="vantyx-nav-link hidden">セッション</a>
+              <a href="#" id="nav-recordings" class="vantyx-nav-link hidden">録画</a>
+              <a href="#" id="nav-groups" class="vantyx-nav-link hidden">サーバー管理</a>
+              <a href="#" id="nav-users" class="vantyx-nav-link hidden">ユーザー管理</a>
+              <a href="#" id="nav-audit" class="vantyx-nav-link hidden">監査ログ</a>
+              <a href="#" id="nav-settings" class="vantyx-nav-link hidden">設定</a>
+              <a href="/docs" id="nav-api-ref" target="_blank" rel="noopener noreferrer" class="vantyx-nav-link hidden">API リファレンス</a>
+            </nav>
+          </div>
+          <div class="vantyx-header-end">
+          <button id="theme-toggle" type="button" class="text-sm opacity-80 hover:opacity-100 transition-opacity focus:outline-none focus:ring-1 focus:ring-white/70 rounded px-1" aria-label="テーマ切替" title="テーマ切替">
+            <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+            <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
+          <div class="w-px h-4 bg-white/20"></div>
           <button id="user-name" class="text-sm font-medium opacity-90 hover:opacity-100 hover:underline focus:outline-none focus:ring-1 focus:ring-white/70 rounded px-1 cursor-pointer"></button>
           <div class="w-px h-4 bg-white/20"></div>
           <button id="logout-btn" class="text-sm opacity-80 hover:opacity-100 transition-opacity">ログアウト</button>
+          </div>
         </div>
       </header>
       <main class="flex-1 overflow-auto p-6 flex flex-col items-center" id="main-content">
@@ -61,6 +78,7 @@ export function renderApp(container) {
       <div id="recording-player-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
       <div id="change-password-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
       <div id="add-ssh-key-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
+      <div id="session-end-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
     </div>
   `
 
@@ -68,6 +86,7 @@ export function renderApp(container) {
   const userNameEl = document.getElementById('user-name')
   const logoutBtn = document.getElementById('logout-btn')
   const navTargets = document.getElementById('nav-targets')
+  const navSessions = document.getElementById('nav-sessions')
   const navRecordings = document.getElementById('nav-recordings')
   const navGroups = document.getElementById('nav-groups')
   const navUsers = document.getElementById('nav-users')
@@ -82,6 +101,10 @@ export function renderApp(container) {
   let selectedRecordingsGroupId = ''
   let selectedRecordingsTargetId = ''
   let selectedRecordingsTargetName = ''
+  let recordingsFilterFrom = ''
+  let recordingsFilterTo = ''
+  let recordingsFilterChannel = ''
+  let recordingsFilterUserId = ''
   /** 新しいタブに渡す SSH 認証情報（BroadcastChannel 用） */
   const pendingTerminalCreds = Object.create(null)
   /** ターミナルタブ用: 親タブへフォーカス要求するための待受（opener が無い環境向け） */
@@ -209,14 +232,36 @@ export function renderApp(container) {
     })
   }
 
+  async function showSessionsPage() {
+    if (window.vantyxSessionEventSource) {
+      window.vantyxSessionEventSource.close()
+      window.vantyxSessionEventSource = null
+    }
+    delete mainContent.dataset.treeMode
+    setActiveNav('sessions')
+    const sessionEndModal = document.getElementById('session-end-modal')
+    await renderSessionsPage({
+      mainContent,
+      escapeHtml,
+      sessionEndModal,
+      openTerminalTab: openTerminalTabWithParent,
+      getRdpResolutionForTarget,
+      onSubscribeSSE: (onMessage) => {
+        window.vantyxSessionEventSource = API.subscribeSessionEvents(onMessage)
+      },
+    })
+  }
+
   async function showRecordingsPage() {
     if (window.vantyxSessionEventSource) {
       window.vantyxSessionEventSource.close()
       window.vantyxSessionEventSource = null
     }
+    mainContent.className = TREE_MAIN_CLASS
     setActiveNav('recordings')
     await renderRecordingsPage({
       mainContent,
+      meData,
       escapeHtml,
       buildGroupTree,
       renderGroupTree,
@@ -229,11 +274,19 @@ export function renderApp(container) {
         groupId: selectedRecordingsGroupId,
         targetId: selectedRecordingsTargetId,
         targetName: selectedRecordingsTargetName,
+        filterFrom: recordingsFilterFrom,
+        filterTo: recordingsFilterTo,
+        filterChannel: recordingsFilterChannel,
+        filterUserId: recordingsFilterUserId,
       }),
       setState: (partial) => {
         if ('groupId' in partial) selectedRecordingsGroupId = partial.groupId
         if ('targetId' in partial) selectedRecordingsTargetId = partial.targetId
         if ('targetName' in partial) selectedRecordingsTargetName = partial.targetName
+        if ('filterFrom' in partial) recordingsFilterFrom = partial.filterFrom
+        if ('filterTo' in partial) recordingsFilterTo = partial.filterTo
+        if ('filterChannel' in partial) recordingsFilterChannel = partial.filterChannel
+        if ('filterUserId' in partial) recordingsFilterUserId = partial.filterUserId
       },
       refresh: () => showRecordingsPage(),
     })
@@ -805,7 +858,7 @@ export function renderApp(container) {
       try {
         const [sessionsRes, rdpRes] = await Promise.all([API.terminalSessions(), API.rdpSessions()])
         const allSessions = sessionsRes.items || []
-            const sessions = targetIdsInGroup.length > 0
+        const sessions = targetIdsInGroup.length > 0
           ? allSessions.filter((s) => targetIdsInGroup.includes(s.target_id))
           : allSessions
         const allRdp = rdpRes.items || []
@@ -813,103 +866,37 @@ export function renderApp(container) {
           ? allRdp.filter((r) => targetIdsInGroup.includes(r.target_id))
           : allRdp
         const hasAny = sessions.length > 0 || rdpSessions.length > 0
+        const idleN = countIdleSessions(sessions, rdpSessions)
+        const viewAllLink = '<p class="mt-4 pt-3 border-t border-slate-200"><a href="#" id="active-sessions-view-all" class="text-sm font-medium text-sky-700 hover:text-sky-900">すべてのセッションを表示 →</a></p>'
         if (!hasAny) {
           const oneServer = targetIdsInGroup.length === 1
-          bodyEl.innerHTML = targetIdsInGroup.length > 0
+          bodyEl.innerHTML = (targetIdsInGroup.length > 0
             ? (oneServer
               ? '<p class="text-sm text-slate-500">このサーバーに対する再接続可能なセッションはありません。接続したあと、一度切断するとここに表示され、再接続できます。</p>'
               : '<p class="text-sm text-slate-500">このグループ内のサーバーに対する再接続可能なセッションはありません。ターミナルで接続したあと、一度切断するとここに表示され、再接続できます。</p>')
-            : '<p class="text-sm text-slate-500">アクティブなセッションはありません。左のツリーでサーバー（グループ）を選択すると、そのグループに属するサーバー単位で表示されます。</p>'
+            : '<p class="text-sm text-slate-500">アクティブなセッションはありません。左のツリーでサーバー（グループ）を選択すると、そのグループに属するサーバー単位で表示されます。</p>') + viewAllLink
+          bodyEl.querySelector('#active-sessions-view-all')?.addEventListener('click', (e) => {
+            e.preventDefault()
+            close()
+            showSessionsPage()
+          })
           return
         }
-        const parts = []
-        if (sessions.length > 0) {
-          const byTarget = {}
-          sessions.forEach((s) => {
-            const id = s.target_id
-            if (!byTarget[id]) byTarget[id] = []
-            byTarget[id].push(s)
-          })
-          const targetIds = Object.keys(byTarget).sort((a, b) => {
-            const na = byTarget[a][0].target_name || a
-            const nb = byTarget[b][0].target_name || b
-            return na.localeCompare(nb)
-          })
-          parts.push(targetIds.map((targetId) => {
-            const list = byTarget[targetId]
-            const serverName = list[0].target_name || targetId
-            const rows = list.map((s) => {
-              const titleText = s.name ? escapeHtml(s.name) : '(無題)'
-              const descHtml = s.description ? `<p class="text-xs text-slate-500 mt-0.5 break-words">${escapeHtml(s.description)}</p>` : ''
-              const isTftpSession = typeof s.description === 'string' && s.description.startsWith('TFTP_CONSOLE:')
-              const reconnectLabel = isTftpSession ? 'TFTP 画面で再接続' : '再接続'
-              const reconnectAttrs = isTftpSession
-                ? `data-terminal-reconnect-session-id="${escapeHtml(s.session_id)}" data-terminal-reconnect-mode="tftp" data-terminal-reconnect-target-id="${escapeHtml(s.target_id)}"`
-                : `data-terminal-reconnect-session-id="${escapeHtml(s.session_id)}"`
-              return `<li class="flex items-start justify-between gap-3 py-2 px-3 rounded border border-slate-100 hover:bg-slate-50">
-                <div class="min-w-0 flex-1">
-                  <p class="text-sm font-medium text-slate-800">${titleText}</p>
-                  ${descHtml}
-                </div>
-                <button type="button" ${reconnectAttrs} class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shrink-0 self-center">${reconnectLabel}</button>
-              </li>`
-            }).join('')
-            return `<div class="mb-4"><h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">${escapeHtml(serverName)}（SSH ターミナル）</h4><ul class="space-y-2">${rows}</ul></div>`
-          }).join(''))
-        }
-        if (rdpSessions.length > 0) {
-          const rdpHtml = rdpSessions.map((r) => {
-            const name = escapeHtml(r.target_name || r.target_id)
-            const url = `/rdp?target_id=${encodeURIComponent(r.target_id)}&target_name=${encodeURIComponent(r.target_name || r.target_id)}&session_id=${encodeURIComponent(r.session_id)}`
-            return `<li class="flex items-start justify-between gap-3 py-2 px-3 rounded border border-slate-100 hover:bg-slate-50">
-              <div class="min-w-0 flex-1">
-                <p class="text-sm font-medium text-slate-800">${name}</p>
-                <p class="text-xs text-slate-500 mt-0.5">RDP（ブラウザ）</p>
-              </div>
-              <a href="${url}" target="_blank" rel="noopener noreferrer" data-rdp-target-id="${escapeHtml(r.target_id)}" class="rdp-reconnect-link rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shrink-0 self-center">再接続</a>
-            </li>`
-          }).join('')
-          parts.push(`<div class="mb-4"><h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">RDP（ブラウザ）</h4><ul class="space-y-2">${rdpHtml}</ul></div>`)
-        }
-        bodyEl.innerHTML = parts.join('')
-            bodyEl.querySelectorAll('[data-terminal-reconnect-session-id]').forEach((btn) => {
-          btn.addEventListener('click', () => {
-            const sid = btn.getAttribute('data-terminal-reconnect-session-id') || ''
-            if (!sid) return
-            const mode = btn.getAttribute('data-terminal-reconnect-mode') || ''
-            const targetId = btn.getAttribute('data-terminal-reconnect-target-id') || ''
-            if (mode === 'tftp' && targetId) {
-              // 説明フィールドから TFTP ターゲット ID を取り出す。
-              const li = btn.closest('li')
-              const descEl = li && li.querySelector('p.text-xs')
-              const desc = descEl ? descEl.textContent || '' : ''
-              let tftpTargetId = ''
-              if (desc && desc.startsWith('TFTP_CONSOLE:')) {
-                const m = desc.match(/tftp_target_id=([^;]+)/)
-                if (m && m[1]) tftpTargetId = m[1]
-              }
-              if (!tftpTargetId) {
-                alert('TFTP 用セッション情報を解析できませんでした。')
-                return
-              }
-              const name = `${targetId} (TFTP)`
-              const url = `/tftp-console?tftp_target_id=${encodeURIComponent(tftpTargetId)}&ssh_target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(name)}&session_id=${encodeURIComponent(sid)}`
-              openTerminalTabWithParent(url)
-              return
-            }
-            openTerminalTabWithParent(`/terminal?session_id=${encodeURIComponent(sid)}`)
-          })
+        const idleBanner = idleN > 0
+          ? `<div class="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">${idleN} 件が長時間無活動です。</div>`
+          : ''
+        bodyEl.innerHTML = idleBanner + buildGroupedSessionListHTML(sessions, rdpSessions, escapeHtml) + viewAllLink
+        bindSessionListActions(bodyEl, {
+          openTerminalTab: openTerminalTabWithParent,
+          getRdpResolutionForTarget,
+          onEnded: refresh,
+          escapeHtml,
+          sessionEndModal: document.getElementById('session-end-modal'),
         })
-        bodyEl.querySelectorAll('.rdp-reconnect-link').forEach((link) => {
-          link.addEventListener('click', (e) => {
-            e.preventDefault()
-            const id = link.dataset.rdpTargetId || ''
-            const { w, h } = getRdpResolutionForTarget(id)
-            const u = new URL(link.href, window.location.origin)
-            if (w) u.searchParams.set('rw', String(w))
-            if (h) u.searchParams.set('rh', String(h))
-            openTerminalTabWithParent(u.toString())
-          })
+        bodyEl.querySelector('#active-sessions-view-all')?.addEventListener('click', (e) => {
+          e.preventDefault()
+          close()
+          showSessionsPage()
         })
       } catch {
         bodyEl.innerHTML = '<p class="text-sm text-red-600">セッション一覧の取得に失敗しました。</p>'
@@ -976,7 +963,7 @@ export function renderApp(container) {
   /** 保存済み認証のターゲット用: 接続前にモーダルで不足情報を入力させる。
    * パスワード認証・パスフレーズ無しの公開鍵・パスフレーズありで登録済みの場合はセッション名と説明のみ。
    * パスワード未登録のときはパスワード欄、パスフレーズ未登録のときはパスフレーズ欄を表示する。 */
-  function showStoredCredentialModal(targetId, targetName, needsPassword, needsPassphrase, protocol = 'ssh') {
+  function showStoredCredentialModal(targetId, targetName, needsPassword, needsPassphrase, protocol = 'ssh', urlOpts = null) {
     const isTelnet = protocol === 'telnet'
     if (isTelnet) needsPassphrase = false
     const modal = document.getElementById('ssh-credential-modal')
@@ -1063,17 +1050,24 @@ export function renderApp(container) {
       const token = randomToken()
       pendingTerminalCreds[token] = { targetId, targetName, protocol, password: password || '', passphrase: isTelnet ? '' : (passphrase || ''), sessionName, sessionDesc, useStoredCredentials: true }
       params.set('channel', token)
-      openTerminalTabWithParent(`/terminal?${params.toString()}`)
+      if (urlOpts?.toUrl) {
+        params.set('needs_password', needsPassword ? '1' : '0')
+        params.set('needs_passphrase', needsPassphrase ? '1' : '0')
+        openTerminalTabWithParent(urlOpts.toUrl(params))
+      } else {
+        openTerminalTabWithParent(`/terminal?${params.toString()}`)
+      }
 
       // 新しいタブとは BroadcastChannel で不足分（パスワード/パスフレーズ）を受け渡しする（localStorageに保存しない）
       const bc = new BroadcastChannel(`vantyx-terminal-${token}`)
+      const channelTargetId = urlOpts?.channelTargetId || targetId
       const timeoutId = window.setTimeout(() => {
         try { bc.close() } catch { /* ignore */ }
         delete pendingTerminalCreds[token]
       }, 15_000)
       bc.onmessage = (ev) => {
         if (ev?.data?.type !== 'ready') return
-        if (ev?.data?.target_id !== targetId) return
+        if (ev?.data?.target_id !== channelTargetId) return
         const creds = pendingTerminalCreds[token]
         if (!creds) return
         try {
@@ -1097,7 +1091,7 @@ export function renderApp(container) {
     })
   }
 
-  function showSSHCredentialModal(targetId, targetName, protocol = 'ssh') {
+  function showSSHCredentialModal(targetId, targetName, protocol = 'ssh', urlOpts = null) {
     const isTelnet = protocol === 'telnet'
     const authLabel = isTelnet ? 'Telnet' : 'SSH'
     const modal = document.getElementById('ssh-credential-modal')
@@ -1163,19 +1157,29 @@ export function renderApp(container) {
       }
       const token = randomToken()
       pendingTerminalCreds[token] = { targetId, targetName, protocol, username, password, passphrase: isTelnet ? '' : passphrase, sessionName, sessionDesc }
-      const url = `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=${encodeURIComponent(protocol)}&channel=${encodeURIComponent(token)}`
+      let url
+      if (urlOpts?.toUrl) {
+        const p = new URLSearchParams()
+        p.set('channel', token)
+        p.set('session_name', sessionName)
+        p.set('session_description', sessionDesc)
+        url = urlOpts.toUrl(p)
+      } else {
+        url = `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=${encodeURIComponent(protocol)}&channel=${encodeURIComponent(token)}`
+      }
       // NOTE: ターミナルの「戻る/セッション終了」で元タブに戻れるよう、opener を残す（noreferrer/noopener は付けない）
       openTerminalTabWithParent(url)
 
       // 新しいタブとは BroadcastChannel で認証情報を受け渡しする
       const bc = new BroadcastChannel(`vantyx-terminal-${token}`)
+      const channelTargetId = urlOpts?.channelTargetId || targetId
       const timeoutId = window.setTimeout(() => {
         try { bc.close() } catch { /* ignore */ }
         delete pendingTerminalCreds[token]
       }, 15_000)
       bc.onmessage = (ev) => {
         if (ev?.data?.type !== 'ready') return
-        if (ev?.data?.target_id !== targetId) return
+        if (ev?.data?.target_id !== channelTargetId) return
         const creds = pendingTerminalCreds[token]
         if (!creds) return
         try {
@@ -1200,9 +1204,19 @@ export function renderApp(container) {
     })
   }
 
+  const TREE_MAIN_CLASS = 'flex-1 overflow-auto p-6 flex flex-col items-center min-h-0'
+
   async function showTreeView(mode = 'manage', useCache = false) {
+    const isAdminRole = meData?.role === 'admin'
+    // 非管理者は manage モードに入れない（サーバー管理はサーバー管理者専用）。
+    // URL や履歴から到達した場合もホームに降格する。
+    if (mode === 'manage' && !isAdminRole) {
+      mode = 'home'
+    }
     const isManageMode = mode === 'manage'
     const pageTitle = isManageMode ? 'サーバー管理' : 'ホーム'
+    setActiveNav(isManageMode ? 'groups' : 'targets')
+    mainContent.className = TREE_MAIN_CLASS
 
     const currentModeIndicator = mainContent.dataset.treeMode
     const isSameMode = currentModeIndicator === mode
@@ -1261,6 +1275,7 @@ export function renderApp(container) {
               </div>
             </div>
             <div class="px-5 py-4">
+              ${!isManageMode ? '<div id="idle-sessions-banner" class="hidden mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"></div>' : ''}
               ${renderGroupTargetsTable(targets, mode, escapeHtml, renderTagPills)}
               ${showMembersSection ? '<div id="group-members-container" class="mt-6 border-t border-slate-200 pt-4"><p class="text-slate-500">読み込み中…</p></div>' : ''}
             </div>
@@ -1417,21 +1432,44 @@ export function renderApp(container) {
             const termItems = Array.isArray(sessionsRes.items) ? sessionsRes.items : []
             const rdpItems = Array.isArray(rdpRes.items) ? rdpRes.items : []
             const counts = {}
+            const idleByTarget = {}
             termItems.forEach((s) => {
               const tid = s.target_id
               if (!tid) return
               counts[tid] = (counts[tid] || 0) + 1
+              if (s.idle) idleByTarget[tid] = true
             })
             rdpItems.forEach((s) => {
               const tid = s.target_id
               if (!tid) return
               counts[tid] = (counts[tid] || 0) + 1
+              if (s.idle) idleByTarget[tid] = true
             })
+            const totalIdle = countIdleSessions(termItems, rdpItems)
+            const idleBanner = mainContent.querySelector('#idle-sessions-banner')
+            if (idleBanner) {
+              if (totalIdle > 0) {
+                idleBanner.classList.remove('hidden')
+                idleBanner.innerHTML = `${totalIdle} 件のセッションが長時間無活動です。<a href="#" class="font-medium text-amber-950 underline hover:no-underline ml-1" id="idle-banner-sessions-link">セッション一覧</a>で確認できます。`
+                idleBanner.querySelector('#idle-banner-sessions-link')?.addEventListener('click', (e) => {
+                  e.preventDefault()
+                  showSessionsPage()
+                })
+              } else {
+                idleBanner.classList.add('hidden')
+              }
+            }
             mainContent.querySelectorAll('.active-sessions-btn').forEach((btn) => {
               const targetId = btn.dataset.targetId || ''
               const baseLabel = 'アクティブなセッション'
               const n = targetId ? (counts[targetId] || 0) : 0
-              btn.textContent = `${baseLabel} (${n})`
+              const idleMark = idleByTarget[targetId] ? ' ⚠' : ''
+              btn.textContent = `${baseLabel} (${n})${idleMark}`
+              if (idleByTarget[targetId]) {
+                btn.classList.add('border-amber-300', 'bg-amber-50')
+              } else {
+                btn.classList.remove('border-amber-300', 'bg-amber-50')
+              }
             })
             // アクティブセッション modal が開いていれば中身も更新
             const m = document.getElementById('active-sessions-modal')
@@ -1531,70 +1569,6 @@ export function renderApp(container) {
             }
           })
         })
-        // ファイルボタン: SFTP/FTP/TFTP（+コンソール）どれで開くか選択させる。
-        mainContent.querySelectorAll('.files-open-btn').forEach((btn) => {
-          btn.addEventListener('click', (e) => {
-            e.preventDefault()
-            if (btn.disabled || btn.dataset.filesDisabled === '1') {
-              return
-            }
-            const targetId = btn.dataset.filesTargetId || ''
-            const targetName = btn.dataset.filesTargetName || ''
-            const proto = btn.dataset.filesProtocol || 'ssh'
-            const hostForTftp = btn.dataset.filesHost || ''
-            if (!targetId) return
-            const actions = []
-            const sftpEnabled = btn.dataset.filesSftpEnabled === '1'
-            if (proto === 'ssh') {
-              if (sftpEnabled) {
-                actions.push({
-                  label: 'SFTP (SSH)',
-                  onSelect: () => {
-                    const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=sftp`
-                    window.location.href = url
-                  },
-                })
-              }
-              if (hostForTftp) {
-                const ftpTarget = targets.find((t) => t.protocol === 'ftp' && t.host === hostForTftp)
-                if (ftpTarget) {
-                  actions.push({
-                    label: 'FTP',
-                    onSelect: () => {
-                      const url = `/files?target_id=${encodeURIComponent(ftpTarget.id)}&target_name=${encodeURIComponent(ftpTarget.name || targetName || '')}&protocol=ftp`
-                      window.location.href = url
-                    },
-                  })
-                }
-                const tftpTarget = targets.find((t) => t.protocol === 'tftp' && t.host === hostForTftp)
-                if (tftpTarget) {
-                  actions.push({
-                    label: 'TFTP（TFTP + コンソール）',
-                    onSelect: () => {
-                      const name = tftpTarget.name || hostForTftp
-                      const url = `/tftp-console?tftp_target_id=${encodeURIComponent(tftpTarget.id)}&ssh_target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(name)}`
-                      openTerminalTabWithParent(url)
-                    },
-                  })
-                }
-              }
-            }
-            if (proto === 'ftp') {
-              actions.push({
-                label: 'FTP',
-                onSelect: () => {
-                  const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=ftp`
-                  window.location.href = url
-                },
-              })
-            }
-            showFileProtocolModal({
-              title: 'ファイル転送プロトコルの選択',
-              targetName,
-              actions,
-            })
-          })
-        })
         // SSH: 認証情報が保存済みならタブを直接開き、未保存なら認証モーダル表示。
         mainContent.querySelectorAll('.terminal-open-btn').forEach((btn) => {
           btn.addEventListener('click', (e) => {
@@ -1645,6 +1619,102 @@ export function renderApp(container) {
         })
       }
 
+      // ファイルボタン（ホーム・サーバー管理の両方）: SFTP/FTP/TFTP（+コンソール）を開く。
+      mainContent.querySelectorAll('.files-open-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault()
+          if (btn.disabled || btn.dataset.filesDisabled === '1') {
+            return
+          }
+          const targetId = btn.dataset.filesTargetId || ''
+          const targetName = btn.dataset.filesTargetName || ''
+          const proto = btn.dataset.filesProtocol || 'ssh'
+          const hostForTftp = btn.dataset.filesHost || ''
+          if (!targetId) return
+          const actions = []
+          const sftpEnabled = btn.dataset.filesSftpEnabled === '1'
+          if (proto === 'ssh') {
+            if (sftpEnabled) {
+              actions.push({
+                label: 'SFTP (SSH)',
+                onSelect: () => {
+                  const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=sftp`
+                  window.location.href = url
+                },
+              })
+            }
+            if (hostForTftp) {
+              const ftpTarget = targets.find((t) => t.protocol === 'ftp' && t.host === hostForTftp)
+              if (ftpTarget) {
+                actions.push({
+                  label: 'FTP',
+                  onSelect: () => {
+                    const url = `/files?target_id=${encodeURIComponent(ftpTarget.id)}&target_name=${encodeURIComponent(ftpTarget.name || targetName || '')}&protocol=ftp`
+                    window.location.href = url
+                  },
+                })
+              }
+              const tftpTarget = targets.find((t) => t.protocol === 'tftp' && t.host === hostForTftp)
+              const sshTarget = targets.find((t) => t.id === targetId)
+              if (tftpTarget && sshTarget) {
+                actions.push({
+                  label: 'TFTP（TFTP + コンソール）',
+                  onSelect: () => {
+                    const name = tftpTarget.name || hostForTftp
+                    const urlOpts = {
+                      channelTargetId: sshTarget.id,
+                      toUrl: (p) => {
+                        p.delete('target_id')
+                        p.delete('protocol')
+                        p.set('ssh_target_id', sshTarget.id)
+                        p.set('tftp_target_id', tftpTarget.id)
+                        p.set('target_name', name)
+                        return `/tftp-console?${p.toString()}`
+                      },
+                    }
+                    if (sshTarget.has_stored_credentials) {
+                      showStoredCredentialModal(
+                        sshTarget.id,
+                        sshTarget.name || targetName,
+                        sshTarget.needs_password,
+                        sshTarget.needs_passphrase,
+                        'ssh',
+                        urlOpts,
+                      )
+                    } else {
+                      showSSHCredentialModal(sshTarget.id, sshTarget.name || targetName, 'ssh', urlOpts)
+                    }
+                  },
+                })
+              }
+            }
+          }
+          if (proto === 'ftp') {
+            actions.push({
+              label: 'FTP',
+              onSelect: () => {
+                const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=ftp`
+                window.location.href = url
+              },
+            })
+          }
+          if (proto === 'tftp') {
+            const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=tftp`
+            window.location.href = url
+            return
+          }
+          if (actions.length === 1) {
+            actions[0].onSelect()
+            return
+          }
+          showFileProtocolModal({
+            title: 'ファイル転送プロトコルの選択',
+            targetName,
+            actions,
+          })
+        })
+      })
+
       mainContent.querySelectorAll('[data-group-toggle="1"]').forEach((el) => {
         el.addEventListener('click', (e) => {
           e.preventDefault()
@@ -1662,18 +1732,6 @@ export function renderApp(container) {
           showTreeView(mode, true)
         })
       })
-
-      const navHidden = meData?.role !== 'admin' ? ' hidden' : ''
-      navRecordings.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
-      if (isManageMode) {
-        navTargets.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity'
-        navGroups.className = 'text-sm font-semibold border-b-2 border-white pb-1 transition-opacity' + navHidden
-        navUsers.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
-      } else {
-        navTargets.className = 'text-sm font-semibold border-b-2 border-white pb-1 transition-opacity'
-        navGroups.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
-        navUsers.className = 'text-sm opacity-80 hover:opacity-100 transition-opacity' + navHidden
-      }
 
     } catch (e) {
       mainContent.dataset.treeMode = mode
@@ -2341,12 +2399,12 @@ export function renderApp(container) {
       const rowClassRoot = isSelectedRoot ? 'bg-sky-100 text-sky-800 font-medium' : ''
       html += `
         <li>
-          <div class="flex items-center py-1 pr-2 rounded hover:bg-slate-50 cursor-pointer ${rowClassRoot}" data-group-select="1" data-group-id="">
+          <div class="flex items-start py-1.5 pr-2 rounded hover:bg-slate-50 cursor-pointer ${rowClassRoot}" data-group-select="1" data-group-id="">
             <div class="w-[28px] shrink-0 self-stretch"></div>
-            <div class="w-3 h-3 rounded-sm bg-slate-200 border border-slate-300 shrink-0"></div>
+            <div class="w-3 h-3 rounded-sm bg-slate-200 border border-slate-300 shrink-0 mt-0.5"></div>
             <div class="flex-1 min-w-0 pl-2">
-              <div class="text-xs font-medium text-slate-800 truncate">root</div>
-              <div class="text-[10px] text-slate-500 truncate">${keys.length} グループ</div>
+              <div class="text-xs font-medium text-slate-800">root</div>
+              <div class="text-[10px] text-slate-500 leading-snug">${keys.length} グループ</div>
             </div>
           </div>
         </li>
@@ -2368,12 +2426,12 @@ export function renderApp(container) {
           : `<div class="w-[40px] shrink-0 self-stretch" data-group-toggle="0"></div>`
         html += `
           <li>
-            <div class="flex items-center py-1 pr-2 rounded hover:bg-slate-50 cursor-pointer ${rowClass}" data-group-select="1" data-group-id="${escapeHtml(child.id)}">
+            <div class="flex items-start py-1.5 pr-2 rounded hover:bg-slate-50 cursor-pointer ${rowClass}" data-group-select="1" data-group-id="${escapeHtml(child.id)}">
               ${caretHtml}
-              <div class="w-3 h-3 rounded-sm bg-slate-200 border border-slate-300 shrink-0"></div>
+              <div class="w-3 h-3 rounded-sm bg-slate-200 border border-slate-300 shrink-0 mt-0.5"></div>
               <div class="flex-1 min-w-0 pl-2">
-                <div class="text-xs font-medium text-slate-800 truncate">${escapeHtml(child.name)}</div>
-                <div class="text-[10px] text-slate-500 truncate">${escapeHtml(child.id)}${count ? ` ・ ${count} 台` : ''}</div>
+                <div class="text-xs font-medium text-slate-800 break-words">${escapeHtml(child.name)}</div>
+                <div class="text-[10px] text-slate-500 leading-snug break-words">${escapeHtml(child.id)}${count ? ` · ${count} 台` : ''}</div>
               </div>
             </div>
             ${hasChildren && isExpanded ? renderGroupTree(child, depth + 1) : ''}
@@ -2388,22 +2446,7 @@ export function renderApp(container) {
     try {
       meData = await API.me()
       userNameEl.textContent = meData.username
-      const isAdmin = meData.role === 'admin'
-      const navApiRef = document.getElementById('nav-api-ref')
-      navRecordings?.classList.remove('hidden')
-      if (isAdmin) {
-        navApiRef?.classList.remove('hidden')
-        navUsers?.classList.remove('hidden')
-        navGroups?.classList.remove('hidden')
-        navAudit?.classList.remove('hidden')
-        navSettings?.classList.remove('hidden')
-      } else {
-        navApiRef?.classList.add('hidden')
-        navUsers?.classList.add('hidden')
-        navGroups?.classList.add('hidden')
-        navAudit?.classList.add('hidden')
-        navSettings?.classList.add('hidden')
-      }
+      showAuthenticatedNav(meData.role === 'admin')
     } catch {
       renderLogin(container)
       return
@@ -2415,11 +2458,22 @@ export function renderApp(container) {
       groupsCache = null
     }
 
-    showTreeView('home')
+    const initialView = new URLSearchParams(window.location.search).get('view')
+    if (initialView === 'sessions') {
+      try {
+        const url = new URL(window.location.href)
+        url.searchParams.delete('view')
+        window.history.replaceState({}, '', url.toString())
+      } catch { /* ignore */ }
+      showSessionsPage()
+    } else {
+      showTreeView('home')
+    }
   })()
 
   initNav({
     navTargets,
+    navSessions,
     navRecordings,
     navGroups,
     navUsers,
@@ -2427,6 +2481,7 @@ export function renderApp(container) {
     navSettings,
     getMe: () => meData,
     onHome: () => showTreeView('home'),
+    onSessions: () => showSessionsPage(),
     onRecordings: () => showRecordingsPage(),
     onGroups: () => showTreeView('manage'),
     onUsers: () => showUsersPage(),
@@ -2449,6 +2504,16 @@ export function renderApp(container) {
     document.cookie = 'vantyx_session=; path=/; max-age=0'
     renderLogin(container)
   })
+
+  // テーマ切替（ライト/ダーク）。実体は theme.js に集約しており、ここでは
+  // クリック時にトグルを呼ぶだけ。renderApp 再呼出時にも先頭で applyStoredTheme
+  // を実行しているため、画面遷移後でも保存済みテーマが必ず反映される。
+  const themeToggleBtn = document.getElementById('theme-toggle')
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener('click', () => {
+      toggleStoredTheme()
+    })
+  }
 }
 
 function escapeHtml(s) {

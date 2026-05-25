@@ -102,3 +102,46 @@ func TestManager_StopUnknownIDNoOp(t *testing.T) {
 		t.Fatalf("expected 0 active sessions, got %d", n)
 	}
 }
+
+func TestManager_IsIdle(t *testing.T) {
+	m := NewManager()
+	m.SetIdleWarnAfter(5 * time.Minute)
+	now := time.Now()
+	m.now = func() time.Time { return now }
+
+	sess, err := m.Start("idle", StartOptions{}, func(ctx context.Context, _ *Session) { <-ctx.Done() })
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer m.Stop("idle")
+
+	if m.IsIdle(sess) {
+		t.Fatal("expected not idle immediately after start")
+	}
+
+	m.now = func() time.Time { return now.Add(6 * time.Minute) }
+	if !m.IsIdle(sess) {
+		t.Fatal("expected idle after threshold")
+	}
+
+	m.Touch("idle")
+	if m.IsIdle(sess) {
+		t.Fatal("expected not idle after Touch")
+	}
+}
+
+func TestManager_IdleWarnDisabled(t *testing.T) {
+	m := NewManager()
+	now := time.Now()
+	m.now = func() time.Time { return now.Add(24 * time.Hour) }
+
+	sess, err := m.Start("x", StartOptions{}, func(ctx context.Context, _ *Session) { <-ctx.Done() })
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer m.Stop("x")
+
+	if m.IsIdle(sess) {
+		t.Fatal("expected IsIdle false when idleWarnAfter is 0")
+	}
+}

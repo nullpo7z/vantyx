@@ -9,10 +9,10 @@ services:
       - "69:6969/udp"
     environment:
       # リダイレクト先のホスト（どちらか必須）。本番では FQDN を指定
-      - VANTYX_EXTERNAL_HOST=10.10.20.105
+      - VANTYX_EXTERNAL_HOST=10.10.110.105
       # サーバーIP/ホスト名でアクセスする場合は SAN を追加（証明書再生成が必要）
       # 例: VANTYX_TLS_SANS=192.168.1.10,vantyx.example.com
-      - VANTYX_TLS_SANS=10.10.20.105
+      - VANTYX_TLS_SANS=10.10.110.105
       # CLI アクセス: ssh -p 2222 admin@<host>
       - VANTYX_SSH_LISTEN=:2222
       # DB をボリュームに保存（未設定時は data/vantyx.db）

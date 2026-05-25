@@ -37,8 +37,12 @@ const (
 	hstsMaxAge                = "31536000"
 	hstsIncludeSubdomains     = "includeSubDomains"
 	defaultShutdownTimeoutSec = 10
-	// CSP: default self; script/style from self + unpkg (Swagger UI). script-src includes sha256 hash for /docs inline init script (ASVS V14.4.3). wasm-unsafe-eval required for asciinema-player (WebAssembly). img-src data: needed for noVNC cursor images.
-	cspValue = "default-src 'self'; script-src 'self' https://unpkg.com 'sha256-s8+L0bCTMcFupV+e7ZrRCMZiZTxI6IiNza6yMagaWHs=' 'wasm-unsafe-eval'; style-src 'self' https://unpkg.com 'unsafe-inline' 'unsafe-hashes'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'"
+	// CSP: default self; script/style from self + unpkg (Swagger UI).
+	// script-src には以下 2 つのインライン初期化スクリプトの sha256 ハッシュを含める（ASVS V14.4.3）:
+	//   - 'sha256-s8+L0bCTMcFupV+e7ZrRCMZiZTxI6IiNza6yMagaWHs=' : /docs (Swagger UI) の起動スクリプト
+	//   - 'sha256-ppXcR2AS79l0BcCFx2mAMj9Tt5teSfq2F7IKdQSf4ZM=' : SPA index.html のテーマ初期化（ダーク/ライトを <html> に適用、FOUC 防止）
+	// wasm-unsafe-eval は asciinema-player の WebAssembly 用、img-src data: は noVNC のカーソル画像用。
+	cspValue = "default-src 'self'; script-src 'self' https://unpkg.com 'sha256-s8+L0bCTMcFupV+e7ZrRCMZiZTxI6IiNza6yMagaWHs=' 'sha256-ppXcR2AS79l0BcCFx2mAMj9Tt5teSfq2F7IKdQSf4ZM=' 'wasm-unsafe-eval'; style-src 'self' https://unpkg.com 'unsafe-inline' 'unsafe-hashes'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'"
 )
 
 func main() {
@@ -97,7 +101,9 @@ func main() {
 	}
 
 	app := httpapi.NewApp()
-	tftp.DisableAtStartup(context.Background(), app.TargetStore)
+	ctx := context.Background()
+	tftp.DisableAtStartup(ctx, app.TargetStore)
+	tftp.StartServerIfNeeded(ctx, app.TargetStore)
 	httpsHandler := securityHeadersMiddleware(corsMiddleware(app.NewRouter()))
 	// ReadTimeout covers the whole request including body; increase via VANTYX_HTTPS_READ_TIMEOUT_SEC for large uploads, or use TimeoutHandler/MaxBytesReader in router.
 	httpsServer := &http.Server{

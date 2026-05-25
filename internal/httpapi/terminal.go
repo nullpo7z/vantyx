@@ -22,6 +22,8 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/auth"
+	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/recording"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
@@ -234,6 +236,15 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, "session not found or access denied", http.StatusNotFound)
 			return
 		}
+		canAccess, err := a.userCanAccessTarget(r.Context(), sess.UserID, access.TargetID(termSess.TargetID))
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		if !canAccess {
+			writeJSONError(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		conn, err := wsUpgrader.Upgrade(w, r, nil)
 		if err != nil {
 			audit("terminal_ws_upgrade_failed_attach", auditFields{
@@ -372,9 +383,33 @@ type TerminalSessionItem struct {
 	SessionID   string    `json:"session_id"`
 	TargetID    string    `json:"target_id"`
 	TargetName  string    `json:"target_name"`
-	Name        string    `json:"name,omitempty"`        // セッション名（識別用）
-	Description string    `json:"description,omitempty"` // 説明
+	TargetPath  string    `json:"target_path,omitempty"` // ターゲットの階層パス（例: prod/network）
+	Protocol    string    `json:"protocol"`              // ターゲットのプロトコル（ssh / telnet 等）
+	Name        string    `json:"name,omitempty"`
+	Description string    `json:"description,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
+	LastSeen    time.Time `json:"last_seen"`
+	Idle        bool      `json:"idle"`
+	IdleSeconds int       `json:"idle_seconds,omitempty"`
+}
+
+func terminalSessionItemFrom(sess *session.Session, mgr *session.Manager, protocol access.Protocol, targetPath string) TerminalSessionItem {
+	item := TerminalSessionItem{
+		SessionID:   string(sess.ID()),
+		TargetID:    sess.TargetID,
+		TargetName:  sess.TargetName,
+		TargetPath:  targetPath,
+		Protocol:    string(protocol),
+		Name:        sess.Name,
+		Description: sess.Description,
+		CreatedAt:   sess.CreatedAt(),
+		LastSeen:    sess.LastSeen(),
+	}
+	if mgr != nil && mgr.IsIdle(sess) {
+		item.Idle = true
+		item.IdleSeconds = int(mgr.IdleDuration(sess).Seconds())
+	}
+	return item
 }
 
 // handleTerminalSessions returns the list of active terminal sessions for the current user.
@@ -390,6 +425,16 @@ func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]interface{}{"items": []TerminalSessionItem{}})
 		return
 	}
+	ctx := r.Context()
+	allowedSet, err := a.allowedTargetIDSet(ctx, userID)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	var mgr *session.Manager
+	if m, ok := a.TerminalSessionManager.(*session.Manager); ok {
+		mgr = m
+	}
 	ids := lister.ActiveIDs()
 	items := make([]TerminalSessionItem, 0, len(ids))
 	for _, id := range ids {
@@ -397,14 +442,16 @@ func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 		if !ok || sess.UserID != userID {
 			continue
 		}
-		items = append(items, TerminalSessionItem{
-			SessionID:   string(sess.ID()),
-			TargetID:    sess.TargetID,
-			TargetName:  sess.TargetName,
-			Name:        sess.Name,
-			Description: sess.Description,
-			CreatedAt:   sess.CreatedAt(),
-		})
+		if _, ok := allowedSet[access.TargetID(sess.TargetID)]; !ok {
+			continue
+		}
+		protocol := access.ProtocolSSH
+		targetPath := ""
+		if target, err := a.TargetStore.Get(ctx, access.TargetID(sess.TargetID)); err == nil && target != nil {
+			protocol = target.Protocol
+			targetPath = target.Path
+		}
+		items = append(items, terminalSessionItemFrom(sess, mgr, protocol, targetPath))
 	}
 	writeJSON(w, map[string]interface{}{"items": items})
 }
@@ -427,6 +474,15 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, "session not found or access denied", http.StatusNotFound)
 		return
 	}
+	canAccess, err := a.userCanAccessTarget(r.Context(), userID, access.TargetID(termSess.TargetID))
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if !canAccess {
+		writeJSONError(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	a.TerminalSessionManager.Stop(id)
 	audit("terminal_session_stop", auditFields{
 		"session_id": sessionID,
@@ -439,6 +495,7 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 }
 
 // handleListRecordings returns recordings for the current user (metadata only, no file_path).
+// Admins may pass user_id to list another user's recordings.
 func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
@@ -451,13 +508,54 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	q := r.URL.Query()
-	targetID := q.Get("target_id")
+
+	filterUserID := userID
+	if requestedUser := strings.TrimSpace(q.Get("user_id")); requestedUser != "" && requestedUser != userID {
+		u, err := a.UserStore.GetByID(userID)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		if u == nil || u.Role != auth.RoleAdmin {
+			writeJSONError(w, "forbidden: admin only", http.StatusForbidden)
+			return
+		}
+		filterUserID = requestedUser
+	}
+
+	from, to, err := parseTimeRange(q.Get("from"), q.Get("to"), time.Now().UTC())
+	if err != nil {
+		writeTimeRangeError(w, err)
+		return
+	}
+
+	targetID := strings.TrimSpace(q.Get("target_id"))
+	channelType := strings.TrimSpace(q.Get("channel_type"))
+	sessionID := strings.TrimSpace(q.Get("session_id"))
+
 	query := `SELECT id, user_id, target_id, session_id, channel_type, started_at, ended_at, COALESCE(session_name, ''), COALESCE(session_description, '') FROM recordings WHERE user_id = ?`
-	args := []interface{}{userID}
+	args := []interface{}{filterUserID}
 	if targetID != "" {
 		query += ` AND target_id = ?`
 		args = append(args, targetID)
 	}
+	if channelType != "" {
+		query += ` AND channel_type = ?`
+		args = append(args, channelType)
+	}
+	if sessionID != "" {
+		query += ` AND session_id = ?`
+		args = append(args, sessionID)
+	}
+	// Recordings may use "2006-01-02 15:04:05" (browser) or RFC3339 (CLI/tests).
+	// Extend upper bound slightly so rows inserted at "now" are included (to is exclusive).
+	toRec := to.Add(time.Minute)
+	fromSpace := formatRecordingTime(from)
+	toSpace := formatRecordingTime(toRec)
+	fromRFC := from.UTC().Format(time.RFC3339)
+	toRFC := toRec.UTC().Format(time.RFC3339)
+	query += ` AND ((started_at >= ? AND started_at < ?) OR (started_at >= ? AND started_at < ?))`
+	args = append(args, fromSpace, toSpace, fromRFC, toRFC)
 	query += ` ORDER BY started_at DESC LIMIT 200`
 	rows, err := a.DB.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -731,7 +829,7 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		}
 	}
 
-	// Command log recorder: records stdin lines into command_logs for search.
+	// Command log recorder: stdin + PTY echo (for tab completion) into command_logs.
 	cmdRec := newCommandLogRecorder(a.CommandLogStore, string(id), termSess.UserID, termSess.TargetID)
 	if cmdRec != nil {
 		prev := stdinRecorder
@@ -741,6 +839,12 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 			}
 			cmdRec.RecordInput(p)
 		})
+		stdoutTap := commandLogStdoutWriter{rec: cmdRec}
+		if tee != nil {
+			tee = io.MultiWriter(tee, stdoutTap)
+		} else {
+			tee = stdoutTap
+		}
 	}
 
 	var bridgeErr error
@@ -760,16 +864,11 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		endMsg = "session_ended: SSH session closed"
 	}
 	if bridgeErr != nil {
-		errForAudit := bridgeErr.Error()
-		var ufe *telnetproxy.UserFacingError
-		if errors.As(bridgeErr, &ufe) && ufe.Err != nil {
-			errForAudit = ufe.Err.Error()
-		}
 		audit("terminal_bridge_end_error", auditFields{
 			"session_id": id,
-			"error":      errForAudit,
+			"error":      proxyerrors.UnwrapForAudit(bridgeErr),
 		})
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+bridgeErr.Error()))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+proxyerrors.BridgeErrorMessage(bridgeErr)))
 	} else {
 		audit("terminal_bridge_end", auditFields{
 			"session_id": id,

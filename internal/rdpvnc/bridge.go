@@ -308,6 +308,7 @@ type Session struct {
 	Width      int
 	Height     int
 	CreatedAt  time.Time
+	lastSeen   time.Time
 	Bridge     *Bridge
 }
 
@@ -318,6 +319,7 @@ type Manager struct {
 	sessionsByID   map[string]*Session // sessionID -> session
 	sessionIDByKey map[string]string   // key -> sessionID
 	now            func() time.Time
+	idleWarnAfter  time.Duration // 0 = idle warnings disabled
 }
 
 // NewManager creates a new bridge manager.
@@ -368,6 +370,7 @@ func (m *Manager) RegisterSession(key string, sessionID string, userID, targetID
 		delete(m.sessionsByID, oldID)
 	}
 
+	now := m.now()
 	s := &Session{
 		ID:         sessionID,
 		UserID:     userID,
@@ -375,12 +378,15 @@ func (m *Manager) RegisterSession(key string, sessionID string, userID, targetID
 		TargetName: targetName,
 		Width:      width,
 		Height:     height,
-		CreatedAt:  m.now(),
+		CreatedAt:  now,
+		lastSeen:   now,
 		Bridge:     b,
 	}
 	m.bridges[key] = b
 	m.sessionsByID[sessionID] = s
 	m.sessionIDByKey[key] = sessionID
+
+	m.startActivityMonitor(sessionID, b)
 
 	go func() {
 		<-b.Done()

@@ -94,6 +94,9 @@ func (b *detachableBridge) runStdinPump() {
 				return
 			}
 			if len(data) > 0 {
+				if b.touch != nil {
+					b.touch()
+				}
 				if b.stdinRecorder != nil {
 					b.stdinRecorder.RecordInput(data)
 				}
@@ -115,6 +118,9 @@ func (b *detachableBridge) runOutputPump() {
 		if n > 0 {
 			filtered := b.iacProc.Filter(buf[:n], b.replyTo)
 			if len(filtered) > 0 {
+				if b.touch != nil {
+					b.touch()
+				}
 				if b.loginAuto != nil {
 					loginAuto := b.loginAuto
 					loginAuto.OnOutput(filtered, func(reply []byte) error {

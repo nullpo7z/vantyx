@@ -1,9 +1,300 @@
 @import "tailwindcss";
 
+/* Class-based dark mode trigger: <html class="dark"> enables dark utilities. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* テーマトークン。XClarity 風に「ダークなナビ + 明るい本体」を基本にしつつ、
+   .dark を root に付けると全体がダーク基調に切り替わる。 */
+:root {
+  --vantyx-app-bg: #f1f5f9;
+  --vantyx-surface: #ffffff;
+  --vantyx-surface-2: #f8fafc;
+  --vantyx-surface-hover: #f1f5f9;
+  --vantyx-border: #e2e8f0;
+  --vantyx-border-strong: #cbd5e1;
+  --vantyx-text: #0f172a;
+  --vantyx-text-muted: #475569;
+  --vantyx-text-faint: #94a3b8;
+  --vantyx-header-bg: #1e293b;
+  --vantyx-header-border: rgba(255, 255, 255, 0.08);
+  --vantyx-accent-nav: #22c55e;
+  color-scheme: light;
+}
+
+.dark {
+  --vantyx-app-bg: #0f172a;
+  --vantyx-surface: #1e293b;
+  --vantyx-surface-2: #111827;
+  --vantyx-surface-hover: #243044;
+  --vantyx-border: #334155;
+  --vantyx-border-strong: #475569;
+  --vantyx-text: #f1f5f9;
+  --vantyx-text-muted: #cbd5e1;
+  --vantyx-text-faint: #94a3b8;
+  --vantyx-header-bg: #020617;
+  --vantyx-header-border: rgba(255, 255, 255, 0.06);
+  --vantyx-accent-nav: #4ade80;
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--vantyx-app-bg);
+  color: var(--vantyx-text);
+}
+
+/* ─── ダークモード時の Tailwind ユーティリティ上書き ───
+   すべてのページで頻出する surface / text / border 系のクラスだけを上書きし、
+   各ページのテンプレートに dark: バリアントを散らさずに済むようにする。 */
+.dark .bg-white { background-color: var(--vantyx-surface); }
+.dark .bg-slate-50,
+.dark .bg-gray-50 { background-color: var(--vantyx-surface-2); }
+.dark .bg-slate-100,
+.dark .bg-gray-100 { background-color: var(--vantyx-app-bg); }
+.dark .bg-slate-200 { background-color: #334155; }
+
+.dark .text-slate-900,
+.dark .text-slate-800 { color: var(--vantyx-text); }
+.dark .text-slate-700 { color: #e2e8f0; }
+.dark .text-slate-600,
+.dark .text-slate-500 { color: var(--vantyx-text-muted); }
+.dark .text-slate-400,
+.dark .text-slate-300 { color: var(--vantyx-text-faint); }
+
+.dark .border-slate-100,
+.dark .border-slate-200 { border-color: var(--vantyx-border); }
+.dark .border-slate-300 { border-color: var(--vantyx-border-strong); }
+.dark .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-color: var(--vantyx-border); }
+
+.dark .hover\:bg-slate-50:hover,
+.dark .hover\:bg-slate-100:hover { background-color: var(--vantyx-surface-hover); }
+
+/* 状態バッジ系（淡色背景 + 濃色文字）は dark でもコントラストを保つために
+   背景を半透明化して文字色は明るく寄せる。 */
+.dark .bg-emerald-50 { background-color: rgba(34, 197, 94, 0.15); }
+.dark .text-emerald-800 { color: #86efac; }
+.dark .bg-red-50 { background-color: rgba(239, 68, 68, 0.15); }
+.dark .text-red-700 { color: #fca5a5; }
+.dark .bg-amber-50 { background-color: rgba(245, 158, 11, 0.15); }
+.dark .text-amber-800,
+.dark .text-amber-900 { color: #fcd34d; }
+.dark .bg-sky-50 { background-color: rgba(56, 189, 248, 0.15); }
+.dark .bg-sky-100 { background-color: rgba(56, 189, 248, 0.22); }
+.dark .text-sky-700,
+.dark .text-sky-800 { color: #bae6fd; }
+.dark .border-amber-200 { border-color: rgba(245, 158, 11, 0.4); }
+
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: var(--vantyx-surface-2);
+  color: var(--vantyx-text);
+  border-color: var(--vantyx-border-strong);
+}
+.dark input::placeholder,
+.dark textarea::placeholder { color: var(--vantyx-text-faint); }
+.dark input[type='checkbox'],
+.dark input[type='radio'] { accent-color: var(--vantyx-accent-nav); }
+
+/* テーマ切替トグルのアイコン制御 */
+.theme-icon-dark { display: none; }
+.dark .theme-icon-light { display: none; }
+.dark .theme-icon-dark { display: inline-block; }
+
 /* xterm.js container */
 #terminal-container {
   @apply h-full w-full min-h-[320px] p-2 bg-slate-900 rounded;
 }
 #terminal-container .xterm {
   padding: 8px;
+}
+
+/* スタンドアロン SSH/Telnet ターミナル（/terminal）: 画面下端の余白をなくす */
+html.terminal-standalone,
+body.terminal-standalone {
+  height: 100%;
+  overflow: hidden;
+  background: #020617;
+}
+body.terminal-standalone #app {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+.terminal-page-root {
+  flex: 1 1 0%;
+  min-height: 0;
+}
+.terminal-xterm-host {
+  flex: 1 1 0%;
+  min-height: 0;
+  width: 100%;
+  background: #020617;
+}
+.terminal-xterm-host .xterm {
+  height: 100%;
+  padding: 8px;
+}
+
+/* 継続中セッション一覧: テーブルセル内テキストの見切れ・縦位置ずれを防ぐ */
+#sessions-table-wrap table {
+  border-collapse: collapse;
+  table-layout: auto;
+}
+#sessions-table-wrap th,
+#sessions-table-wrap td {
+  vertical-align: middle;
+  overflow: visible;
+  line-height: 1.5;
+  text-align: left;
+}
+#sessions-table-wrap td > * {
+  overflow: visible;
+}
+/* 最終活動・種別・操作は内容幅に合わせる（w-full で横に伸びない） */
+#sessions-table-wrap th.sessions-col-shrink,
+#sessions-table-wrap td.sessions-col-shrink {
+  width: 1%;
+  white-space: nowrap;
+}
+#sessions-table-wrap th.sessions-col-actions,
+#sessions-table-wrap td.sessions-col-actions {
+  width: 1%;
+  white-space: nowrap;
+}
+
+/* ヘッダー: ロゴ・ナビ・ユーザーの縦横位置を揃える */
+#app header .vantyx-header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 0.75rem 1.5rem;
+  box-sizing: border-box;
+}
+#app header .vantyx-header-start {
+  display: flex;
+  align-items: baseline;
+  column-gap: 1.5rem;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+#app header .vantyx-header-end {
+  display: flex;
+  align-items: center;
+  column-gap: 1rem;
+  flex-shrink: 0;
+}
+#app header {
+  background-color: var(--vantyx-header-bg);
+  border-bottom: 1px solid var(--vantyx-header-border);
+}
+#app header .vantyx-brand {
+  margin: 0;
+  padding: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.25rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#app header nav.vantyx-nav {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: nowrap;
+  column-gap: 1.5rem;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+#app header nav.vantyx-nav::-webkit-scrollbar {
+  display: none;
+}
+#app header .vantyx-nav-link {
+  display: block;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 500;
+  white-space: nowrap;
+  color: inherit;
+  opacity: 0.85;
+  text-decoration: none;
+  box-shadow: inset 0 -2px 0 0 transparent;
+  transition: opacity 0.15s ease;
+  flex-shrink: 0;
+}
+/* Tailwind の .hidden（display: none）はクラス詳細度が低くて
+   #app header .vantyx-nav-link に負けてしまうため明示的に上書きする。
+   これがないと非管理者でも admin 専用ナビが表示されてしまう。 */
+#app header .vantyx-nav-link.hidden {
+  display: none;
+}
+#app header .vantyx-nav-link:hover {
+  opacity: 1;
+}
+#app header .vantyx-nav-link[aria-current='page'] {
+  opacity: 1;
+  box-shadow: inset 0 -2px 0 0 var(--vantyx-accent-nav);
+}
+
+/* コンソール系ページ（/terminal, /rdp, /files, /tftp-console）のヘッダーを
+   ホーム画面のヘッダー高さ・パディングに揃えるための共通スタイル。
+   .vantyx-header-inner と同じ寸法を採用し、視覚的なジャンプを防ぐ。 */
+#app header .vantyx-page-context {
+  display: flex;
+  align-items: baseline;
+  column-gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  color: rgba(255, 255, 255, 0.85);
+}
+#app header .vantyx-page-context-label {
+  opacity: 0.7;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+#app header .vantyx-page-context-target {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* ヘッダー右側のアクションボタン（戻る・切断・更新等）の共通寸法。
+   ホームの「ログアウト」「テーマ切替」と縦位置が揃うようにする。 */
+#app header .vantyx-page-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background-color: rgba(255, 255, 255, 0.1);
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 600;
+  color: #ffffff;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+#app header .vantyx-page-btn:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+#app header .vantyx-page-btn-danger {
+  border-color: rgba(248, 113, 113, 0.6);
+  background-color: rgba(248, 113, 113, 0.85);
+}
+#app header .vantyx-page-btn-danger:hover {
+  background-color: rgba(220, 38, 38, 0.95);
+}
+/* ファイル/TFTP のパンくず・サブツールバー用の二段目スペーシング。 */
+#app header .vantyx-page-subrow {
+  padding: 0 1.5rem 0.5rem;
 }

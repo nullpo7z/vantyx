@@ -17,6 +17,9 @@ todos:
   - id: implement-file-transfer-sftp-tftp
     content: SFTP/TFTP ファイル転送バックエンドとファイルマネージャー UI を実装する
     status: completed
+  - id: phase4-background-transfers-docs-ui
+    content: バックグラウンド転送のドキュメント・OpenAPI・セッション一覧 UI・E2E を整備する
+    status: completed
   - id: implement-vnc-rdp-remote-desktop
     content: noVNC ベースの VNC プロキシと RDP ブリッジを実装する
     status: pending

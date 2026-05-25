@@ -1,11 +1,16 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/nullpo7z/vantyx/internal/httpapi"
@@ -145,6 +150,35 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 	}
 	if res.Header.Get("Content-Security-Policy") == "" {
 		t.Error("missing CSP header")
+	}
+}
+
+// TestCSP_InlineScriptHashesWhitelisted は web/index.html 内の各
+// <script>...</script>（外部参照を除く）の sha256 ハッシュが cspValue に
+// 含まれていることを確認する。これにより、SPA 側でインライン初期化スクリプト
+// （テーマ FOUC ガード等）を変更したのに Go 側 CSP のハッシュ更新を忘れた、
+// という事故をビルド前に検出できる。
+func TestCSP_InlineScriptHashesWhitelisted(t *testing.T) {
+	htmlPath := filepath.Join("..", "..", "web", "index.html")
+	raw, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Skipf("web/index.html を読めなかったためスキップ: %v", err)
+	}
+	// 属性なし <script>（インライン本体のみ）を抽出。type=module や src= 付き
+	// の外部スクリプトはマッチしないようにする。
+	re := regexp.MustCompile(`(?s)<script>(.*?)</script>`)
+	matches := re.FindAllSubmatch(raw, -1)
+	if len(matches) == 0 {
+		t.Skip("インライン <script> が見つからなかったためスキップ")
+	}
+	for i, m := range matches {
+		sum := sha256.Sum256(m[1])
+		hash := "sha256-" + base64.StdEncoding.EncodeToString(sum[:])
+		token := fmt.Sprintf("'%s'", hash)
+		if !strings.Contains(cspValue, token) {
+			t.Errorf("web/index.html のインライン script[%d] のハッシュ %s が cspValue に登録されていません。\ncspValue に %q を追加してください。\nスクリプト本体:\n%s",
+				i, hash, token, string(m[1]))
+		}
 	}
 }
 

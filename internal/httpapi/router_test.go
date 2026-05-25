@@ -815,6 +815,65 @@ func TestApp_Groups_Create(t *testing.T) {
 	}
 }
 
+// TestApp_CreateGroup_NonAdminForbidden は、非管理者ユーザーがアクセスグループを
+// 作成しようとした場合に 403 が返ることを検証する（サーバー管理操作 = admin 限定）。
+func TestApp_CreateGroup_NonAdminForbidden(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	if _, err := app.UserStore.CreateUser("regular", "regular", "Regular123!", ""); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	sess, err := app.SessionStore.Create("regular")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	body := []byte(`{"name":"MyGroup","path":""}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/groups", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin create group, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+// TestApp_CreateTarget_NonAdminForbidden は、非管理者ユーザーがターゲットを
+// 作成しようとした場合に 403 が返ることを検証する。
+func TestApp_CreateTarget_NonAdminForbidden(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	if _, err := app.UserStore.CreateUser("regular", "regular", "Regular123!", ""); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if _, err := app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1"); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	if err := app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("regular"), access.GroupID("g1")); err != nil {
+		t.Fatalf("add user to group: %v", err)
+	}
+	sess, err := app.SessionStore.Create("regular")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	body := []byte(`{"name":"T1","host":"10.0.0.1","port":22,"protocol":"ssh","group_id":"g1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/targets", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin create target, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+}
+
 func TestApp_CreateGroup_EmptyName_BadRequest(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
@@ -3595,6 +3654,27 @@ func TestTFTPServer_UploadDownloadDelete(t *testing.T) {
 	fullPath := filepath.Join(root, targetID, "dir", "file.txt")
 	if _, err := os.Stat(fullPath); !os.IsNotExist(err) {
 		t.Fatalf("expected file to be removed, stat err=%v", err)
+	}
+}
+
+func TestIsLoopbackHost(t *testing.T) {
+	cases := []struct {
+		host string
+		want bool
+	}{
+		{"127.0.0.1", true},
+		{"127.0.0.1:8443", true},
+		{"localhost", true},
+		{"localhost:443", true},
+		{"[::1]", true},
+		{"[::1]:8443", true},
+		{"10.0.0.1", false},
+		{"vantyx.example.com", false},
+	}
+	for _, tc := range cases {
+		if got := isLoopbackHost(tc.host); got != tc.want {
+			t.Fatalf("isLoopbackHost(%q)=%v want %v", tc.host, got, tc.want)
+		}
 	}
 }
 

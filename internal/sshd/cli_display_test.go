@@ -106,9 +106,10 @@ func TestWriteCLIScreen_emptyGroupStillListed(t *testing.T) {
 func TestWriteCLISessionBar(t *testing.T) {
 	var buf bytes.Buffer
 	if err := writeCLISessionBar(&buf, cliSessionBarState{
-		TargetName: "vantyx-testclient",
-		Protocol:   access.ProtocolTelnet,
-		Cols:       60,
+		TargetName:         "vantyx-testclient",
+		Protocol:           access.ProtocolTelnet,
+		Cols:               60,
+		ShowEndSessionHint: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -117,8 +118,8 @@ func TestWriteCLISessionBar(t *testing.T) {
 		t.Fatalf("connected line: %q", out)
 	}
 	idxConn := strings.Index(out, "Connected to:")
-	idxDetach := strings.Index(out, "Detach (keep session)")
-	idxEnd := strings.Index(out, "End session")
+	idxDetach := strings.Index(out, cliSessionDetachHint)
+	idxEnd := strings.Index(out, cliSessionEndHint)
 	idxSep := strings.Index(out, strings.Repeat("-", 60))
 	if idxConn < 0 || idxDetach < 0 || idxEnd < 0 || idxSep < 0 || !(idxConn < idxDetach && idxDetach < idxEnd && idxEnd < idxSep) {
 		t.Fatalf("order wrong: conn=%d detach=%d end=%d sep=%d\n%q", idxConn, idxDetach, idxEnd, idxSep, out)

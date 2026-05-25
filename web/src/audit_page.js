@@ -23,6 +23,102 @@ function fieldsToText(fields) {
     .join(' ')
 }
 
+const AUDIT_EVENT_LABELS = {
+  http_request: 'API',
+  login_success: 'ログイン成功',
+  login_failed: 'ログイン失敗',
+  login_rate_limited: 'ログイン制限',
+  terminal_session_start: 'ターミナル開始',
+  terminal_session_stop: 'ターミナル終了',
+  terminal_session_attach: 'ターミナル再接続',
+  terminal_ws_credentials_ok: 'ターミナル認証OK',
+  terminal_ws_credentials_invalid: 'ターミナル認証失敗',
+  files_upload_failed: 'ファイルアップロード失敗',
+  files_list_failed: 'ファイル一覧失敗',
+  target_access_forbidden: 'ターゲット拒否',
+  internal_error: 'サーバーエラー',
+}
+
+function auditEventLabel(event) {
+  return AUDIT_EVENT_LABELS[event] || event || '—'
+}
+
+function auditUserId(it) {
+  const f = it.fields || {}
+  return String(f.user_id || '').trim()
+}
+
+function formatAuditSummary(it) {
+  const ev = it.event || (it.fields && it.fields.event) || ''
+  const f = it.fields || {}
+  if (ev === 'http_request') {
+    const method = String(f.method || 'GET')
+    const path = String(f.path || '')
+    const status = f.status != null ? String(f.status) : ''
+    const ms = f.duration_ms != null ? `${f.duration_ms}ms` : ''
+    const query = f.query ? `?${f.query}` : ''
+    const tail = [status, ms].filter(Boolean).join(' · ')
+    return tail ? `${method} ${path}${query} → ${tail}` : `${method} ${path}${query}`
+  }
+  if (ev === 'login_success') {
+    return `${auditUserId(it) || 'ユーザー'} がログインしました`
+  }
+  if (ev === 'login_failed' || ev === 'login_rate_limited') {
+    const remote = f.remote ? ` (${f.remote})` : ''
+    return `${auditUserId(it) || 'ユーザー'}${remote}`
+  }
+  if (ev.startsWith('terminal_')) {
+    const parts = []
+    if (f.target_id) parts.push(`target=${f.target_id}`)
+    if (f.session_id) parts.push(`session=${f.session_id}`)
+    if (f.reason) parts.push(String(f.reason))
+    if (f.error) parts.push(String(f.error))
+    return parts.length ? parts.join(' · ') : auditEventLabel(ev)
+  }
+  if (ev.startsWith('files_')) {
+    const parts = []
+    if (f.target_id) parts.push(`target=${f.target_id}`)
+    if (f.path) parts.push(String(f.path))
+    if (f.error) parts.push(String(f.error))
+    return parts.join(' · ') || auditEventLabel(ev)
+  }
+  const text = fieldsToText(f)
+  return text.length > 120 ? text.slice(0, 117) + '…' : text
+}
+
+function httpStatusClass(status) {
+  const n = Number(status)
+  if (n >= 500) return 'text-red-700 bg-red-50'
+  if (n >= 400) return 'text-amber-800 bg-amber-50'
+  if (n >= 200 && n < 300) return 'text-emerald-800 bg-emerald-50'
+  return 'text-slate-700 bg-slate-100'
+}
+
+function defaultDateRange() {
+  const to = new Date()
+  const from = new Date(to)
+  from.setDate(from.getDate() - 30)
+  return {
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
+  }
+}
+
+function flattenTargets(groups) {
+  const out = []
+  for (const g of groups || []) {
+    for (const t of g.targets || []) {
+      out.push({ id: t.id, name: t.name || t.id })
+    }
+  }
+  return out.sort((a, b) => String(a.name).localeCompare(String(b.name)))
+}
+
+const TAB_BTN_ACTIVE =
+  'border-sky-600 text-sky-700 font-semibold'
+const TAB_BTN_INACTIVE =
+  'border-transparent text-slate-600 hover:text-slate-800 hover:border-slate-300'
+
 export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
   if (!meData || meData.role !== 'admin') {
     mainContent.innerHTML = `<p class="text-sm text-red-600">forbidden: admin only</p>`
@@ -30,27 +126,85 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
   }
   if (typeof setActiveNav === 'function') setActiveNav('audit')
 
+  const dates = defaultDateRange()
+  let users = []
+  let targets = []
+  try {
+    const [usersRes, groupsRes] = await Promise.all([API.users(), API.groups()])
+    users = (usersRes && usersRes.items) || []
+    targets = flattenTargets(groupsRes)
+  } catch {
+    /* dropdowns stay empty */
+  }
+
+  const userOptions =
+    '<option value="">(すべて)</option>' +
+    users.map((u) => `<option value="${escapeHtml(u.id)}">${escapeHtml(u.id)}</option>`).join('')
+  const targetOptions =
+    '<option value="">(すべて)</option>' +
+    targets
+      .map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} (${escapeHtml(t.id)})</option>`)
+      .join('')
+
   mainContent.innerHTML = `
-    <div class="w-full max-w-5xl">
-      <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
-        <h2 class="text-lg font-semibold text-slate-800">監査ログ</h2>
-        <button id="audit-refresh" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">更新</button>
+    <div class="w-full max-w-6xl">
+      <h2 class="text-lg font-semibold text-slate-800 mb-4">監査ログ</h2>
+
+      <div class="flex gap-1 border-b border-slate-200 mb-0" role="tablist" aria-label="証跡ログの種類">
+        <button type="button" id="audit-tab-btn-audit" role="tab" aria-selected="true" aria-controls="audit-panel-audit" data-tab="audit"
+          class="px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${TAB_BTN_ACTIVE}">
+          監査ログ
+        </button>
+        <button type="button" id="audit-tab-btn-cmd" role="tab" aria-selected="false" aria-controls="audit-panel-cmd" data-tab="cmd"
+          class="px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${TAB_BTN_INACTIVE}">
+          コマンドログ
+        </button>
+        <button type="button" id="audit-tab-btn-ft" role="tab" aria-selected="false" aria-controls="audit-panel-ft" data-tab="ft"
+          class="px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${TAB_BTN_INACTIVE}">
+          ファイル転送
+        </button>
       </div>
-      <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+
+      <div id="audit-panel-audit" role="tabpanel" aria-labelledby="audit-tab-btn-audit" class="bg-white rounded-b-lg rounded-tr-lg border border-t-0 border-slate-200 shadow-sm overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
+          <p class="text-xs text-slate-500">ログイン・ターミナル・ファイル操作など（API のアクセスログは既定で非表示）</p>
+          <button id="audit-refresh" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">更新</button>
+        </div>
         <div class="p-4 border-b border-slate-200 flex gap-3 flex-wrap items-end">
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">event</label>
-            <input id="audit-filter-event" class="w-64 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: login_" />
+            <label class="block text-xs font-medium text-slate-600 mb-1">開始日</label>
+            <input id="audit-filter-from" type="date" value="${escapeHtml(dates.from)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
           <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">終了日</label>
+            <input id="audit-filter-to" type="date" value="${escapeHtml(dates.to)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">種別</label>
+            <select id="audit-filter-event-preset" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="">すべて</option>
+              <option value="login_">ログイン</option>
+              <option value="terminal_">ターミナル</option>
+              <option value="files_">ファイル</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">event</label>
+            <input id="audit-filter-event" class="w-36 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: login_" />
+          </div>
+          <label class="flex items-center gap-2 text-sm text-slate-700 pb-2 cursor-pointer select-none">
+            <input id="audit-filter-http" type="checkbox" class="rounded border-slate-300" />
+            <span class="text-xs">HTTP/API ログを含める</span>
+          </label>
+          <div>
             <label class="block text-xs font-medium text-slate-600 mb-1">user_id</label>
-            <input id="audit-filter-user" class="w-64 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: admin" />
+            <input id="audit-filter-user" class="w-40 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: admin" />
           </div>
           <div>
             <label class="block text-xs font-medium text-slate-600 mb-1">limit</label>
             <input id="audit-filter-limit" type="number" min="1" max="1000" value="200" class="w-28 rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
-          <button id="audit-apply" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">適用</button>
+          <button id="audit-apply" type="button" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">適用</button>
         </div>
         <div id="audit-error" class="px-4 py-3 text-sm text-red-600 hidden"></div>
         <div class="overflow-x-auto">
@@ -58,43 +212,53 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
             <thead class="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th class="px-4 py-2 text-xs font-semibold text-slate-700">時刻</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">event</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">fields</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">種別</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザー</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">内容</th>
               </tr>
             </thead>
             <tbody id="audit-rows">
-              <tr><td colspan="3" class="px-4 py-6 text-center text-slate-500">読み込み中…</td></tr>
+              <tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">読み込み中…</td></tr>
             </tbody>
           </table>
         </div>
+        <div id="audit-footer" class="px-4 py-3 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
+          <span id="audit-count" class="text-xs text-slate-500"></span>
+          <button type="button" id="audit-load-more" class="hidden rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">さらに読み込む</button>
+        </div>
       </div>
 
-      <div class="mt-8 bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
-        <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <h3 class="text-sm font-semibold text-slate-800">コマンドログ検索</h3>
-            <p class="text-xs text-slate-500 mt-0.5">ターミナルで入力された行（stdin）を文字列で検索します。</p>
-          </div>
-          <button id="cmd-refresh" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">再検索</button>
+      <div id="audit-panel-cmd" role="tabpanel" aria-labelledby="audit-tab-btn-cmd" class="hidden bg-white rounded-b-lg rounded-tr-lg border border-t-0 border-slate-200 shadow-sm overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
+          <p class="text-xs text-slate-500">ターミナルで入力された行（stdin）を文字列で検索します（最大 90 日間）</p>
+          <button id="cmd-refresh" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">再検索</button>
         </div>
         <div class="p-4 border-b border-slate-200 flex gap-3 flex-wrap items-end">
           <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">開始日</label>
+            <input id="cmd-filter-from" type="date" value="${escapeHtml(dates.from)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">終了日</label>
+            <input id="cmd-filter-to" type="date" value="${escapeHtml(dates.to)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <div>
             <label class="block text-xs font-medium text-slate-600 mb-1">query</label>
-            <input id="cmd-filter-query" class="w-64 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: sudo, rm -rf" />
+            <input id="cmd-filter-query" class="w-48 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: sudo" />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">user_id</label>
-            <input id="cmd-filter-user" class="w-40 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: admin" />
+            <label class="block text-xs font-medium text-slate-600 mb-1">ユーザー</label>
+            <select id="cmd-filter-user" class="w-40 rounded border border-slate-300 px-3 py-2 text-sm bg-white">${userOptions}</select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">target_id</label>
-            <input id="cmd-filter-target" class="w-40 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: t1" />
+            <label class="block text-xs font-medium text-slate-600 mb-1">ターゲット</label>
+            <select id="cmd-filter-target" class="w-56 rounded border border-slate-300 px-3 py-2 text-sm bg-white">${targetOptions}</select>
           </div>
           <div>
             <label class="block text-xs font-medium text-slate-600 mb-1">limit</label>
             <input id="cmd-filter-limit" type="number" min="1" max="500" value="200" class="w-24 rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
-          <button id="cmd-apply" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">適用</button>
+          <button id="cmd-apply" type="button" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">適用</button>
         </div>
         <div id="cmd-error" class="px-4 py-3 text-sm text-red-600 hidden"></div>
         <div class="overflow-x-auto">
@@ -104,108 +268,507 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
                 <th class="px-4 py-2 text-xs font-semibold text-slate-700">時刻</th>
                 <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザー</th>
                 <th class="px-4 py-2 text-xs font-semibold text-slate-700">ターゲット</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">セッション</th>
                 <th class="px-4 py-2 text-xs font-semibold text-slate-700">入力</th>
               </tr>
             </thead>
             <tbody id="cmd-rows">
-              <tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">検索条件を入力して「適用」を押してください。</td></tr>
+              <tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">検索条件を入力して「適用」を押してください。</td></tr>
             </tbody>
           </table>
         </div>
+        <div id="cmd-footer" class="px-4 py-3 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
+          <span id="cmd-count" class="text-xs text-slate-500"></span>
+          <button type="button" id="cmd-load-more" class="hidden rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">さらに読み込む</button>
+        </div>
       </div>
 
-      <p class="text-xs text-slate-500 mt-3">注意: 監査ログはメモリ/DB 上の直近分のみ表示します。コマンドログは stdin に送信された行を best-effort で記録したものであり、完全なシェル履歴とは一致しない場合があります。</p>
+      <div id="audit-panel-ft" role="tabpanel" aria-labelledby="audit-tab-btn-ft" class="hidden bg-white rounded-b-lg rounded-tr-lg border border-t-0 border-slate-200 shadow-sm overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
+          <p class="text-xs text-slate-500">全ユーザーのファイル転送履歴（最大 90 日間）</p>
+          <button id="ft-refresh" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">再検索</button>
+        </div>
+        <div class="p-4 border-b border-slate-200 flex gap-3 flex-wrap items-end">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">開始日</label>
+            <input id="ft-filter-from" type="date" value="${escapeHtml(dates.from)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">終了日</label>
+            <input id="ft-filter-to" type="date" value="${escapeHtml(dates.to)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">状態</label>
+            <select id="ft-filter-state" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="">(すべて)</option>
+              <option value="completed">完了</option>
+              <option value="failed">失敗</option>
+              <option value="cancelled">キャンセル</option>
+              <option value="running">実行中</option>
+              <option value="receiving">受信中</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">方向</label>
+            <select id="ft-filter-direction" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="">(すべて)</option>
+              <option value="upload">アップロード</option>
+              <option value="download">ダウンロード</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">バックエンド</label>
+            <select id="ft-filter-backend" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="">(すべて)</option>
+              <option value="remote">remote</option>
+              <option value="tftp_server">tftp_server</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">ユーザー</label>
+            <select id="ft-filter-user" class="w-40 rounded border border-slate-300 px-3 py-2 text-sm bg-white">${userOptions}</select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">ターゲット</label>
+            <select id="ft-filter-target" class="w-56 rounded border border-slate-300 px-3 py-2 text-sm bg-white">${targetOptions}</select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">検索（ファイル名・パス・ターゲット名）</label>
+            <input id="ft-filter-query" class="w-56 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: report.pdf" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">limit</label>
+            <input id="ft-filter-limit" type="number" min="1" max="500" value="100" class="w-24 rounded border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <button id="ft-apply" type="button" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">適用</button>
+        </div>
+        <div id="ft-error" class="px-4 py-3 text-sm text-red-600 hidden"></div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-left text-sm">
+            <thead class="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">時刻</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザー</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">方向</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">バックエンド</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ターゲット</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ファイル</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">状態</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">進捗</th>
+              </tr>
+            </thead>
+            <tbody id="ft-rows">
+              <tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">検索条件を入力して「適用」を押してください。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="ft-footer" class="px-4 py-3 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
+          <span id="ft-count" class="text-xs text-slate-500"></span>
+          <button type="button" id="ft-load-more" class="hidden rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">さらに読み込む</button>
+        </div>
+      </div>
+
+      <p class="text-xs text-slate-500 mt-3">注意: コマンドログは Enter 時に PTY の表示行（Tab 補完を含む）を優先して記録します。シェルや端末設定によっては完全一致しない場合があります。</p>
     </div>
   `
 
-  const errEl = mainContent.querySelector('#audit-error')
-  const rowsEl = mainContent.querySelector('#audit-rows')
-  const eventEl = mainContent.querySelector('#audit-filter-event')
-  const userEl = mainContent.querySelector('#audit-filter-user')
-  const limitEl = mainContent.querySelector('#audit-filter-limit')
+  const tabBtnAudit = mainContent.querySelector('#audit-tab-btn-audit')
+  const tabBtnCmd = mainContent.querySelector('#audit-tab-btn-cmd')
+  const tabBtnFt = mainContent.querySelector('#audit-tab-btn-ft')
+  const panelAudit = mainContent.querySelector('#audit-panel-audit')
+  const panelCmd = mainContent.querySelector('#audit-panel-cmd')
+  const panelFt = mainContent.querySelector('#audit-panel-ft')
 
-  async function load() {
-    errEl.classList.add('hidden')
-    rowsEl.innerHTML = `<tr><td colspan="3" class="px-4 py-6 text-center text-slate-500">読み込み中…</td></tr>`
-    const limit = Number(limitEl.value || 200) || 200
-    const event = String(eventEl.value || '').trim()
-    const user_id = String(userEl.value || '').trim()
-    try {
-      const res = await API.auditLogs({ limit, event, user_id })
-      const items = (res && res.items) || []
-      if (!items.length) {
-        rowsEl.innerHTML = `<tr><td colspan="3" class="px-4 py-6 text-center text-slate-500">ログがありません</td></tr>`
-        return
-      }
-      rowsEl.innerHTML = items
-        .map((it) => {
-          const time = fmtTime(it.time)
-          const ev = it.event || (it.fields && it.fields.event) || ''
-          const fieldsText = fieldsToText(it.fields)
-          return `<tr class="border-b border-slate-200 hover:bg-slate-50">
-            <td class="px-4 py-2 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(time)}</td>
-            <td class="px-4 py-2 text-xs font-medium text-slate-900 whitespace-nowrap">${escapeHtml(ev)}</td>
-            <td class="px-4 py-2 text-[11px] text-slate-700 font-mono">${escapeHtml(fieldsText)}</td>
-          </tr>`
-        })
-        .join('')
-    } catch (e) {
-      errEl.textContent = e.message || '取得に失敗しました'
-      errEl.classList.remove('hidden')
-      rowsEl.innerHTML = `<tr><td colspan="3" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+  let ftLoadedOnce = false
+
+  function setActiveTab(tab) {
+    const tabs = [
+      { name: 'audit', btn: tabBtnAudit, panel: panelAudit },
+      { name: 'cmd', btn: tabBtnCmd, panel: panelCmd },
+      { name: 'ft', btn: tabBtnFt, panel: panelFt },
+    ]
+    for (const t of tabs) {
+      const active = t.name === tab
+      t.panel.classList.toggle('hidden', !active)
+      t.btn.setAttribute('aria-selected', active ? 'true' : 'false')
+      t.btn.className = `px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${active ? TAB_BTN_ACTIVE : TAB_BTN_INACTIVE}`
+    }
+    if (tab === 'ft' && !ftLoadedOnce) {
+      ftLoadedOnce = true
+      loadFt(false)
     }
   }
 
-  mainContent.querySelector('#audit-refresh').addEventListener('click', load)
-  mainContent.querySelector('#audit-apply').addEventListener('click', load)
+  tabBtnAudit.addEventListener('click', () => setActiveTab('audit'))
+  tabBtnCmd.addEventListener('click', () => setActiveTab('cmd'))
+  tabBtnFt.addEventListener('click', () => setActiveTab('ft'))
 
-  await load()
+  const errEl = mainContent.querySelector('#audit-error')
+  const rowsEl = mainContent.querySelector('#audit-rows')
+  const auditFromEl = mainContent.querySelector('#audit-filter-from')
+  const auditToEl = mainContent.querySelector('#audit-filter-to')
+  const eventEl = mainContent.querySelector('#audit-filter-event')
+  const userEl = mainContent.querySelector('#audit-filter-user')
+  const limitEl = mainContent.querySelector('#audit-filter-limit')
+  const includeHttpEl = mainContent.querySelector('#audit-filter-http')
+  const eventPresetEl = mainContent.querySelector('#audit-filter-event-preset')
+  const countEl = mainContent.querySelector('#audit-count')
+  const loadMoreEl = mainContent.querySelector('#audit-load-more')
 
-  // Command logs search
+  let auditNextCursor = ''
+  let auditRowCount = 0
+
+  function auditQueryParams() {
+    return {
+      limit: Number(limitEl.value || 200) || 200,
+      event: String(eventEl.value || '').trim(),
+      user_id: String(userEl.value || '').trim(),
+      from: String(auditFromEl.value || '').trim(),
+      to: String(auditToEl.value || '').trim(),
+      exclude_event: includeHttpEl && includeHttpEl.checked ? '' : 'http_request',
+    }
+  }
+
+  function renderAuditRow(it) {
+    const time = fmtTime(it.time)
+    const ev = it.event || (it.fields && it.fields.event) || ''
+    const label = auditEventLabel(ev)
+    const uid = auditUserId(it)
+    const summary = formatAuditSummary(it)
+    const status = it.fields && it.fields.status
+    const statusBadge =
+      ev === 'http_request' && status != null
+        ? `<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${httpStatusClass(status)}">${escapeHtml(String(status))}</span> `
+        : ''
+    return `<tr class="border-b border-slate-200 hover:bg-slate-50">
+      <td class="px-4 py-2 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(time)}</td>
+      <td class="px-4 py-2 text-xs text-slate-800 whitespace-nowrap" title="${escapeHtml(ev)}">${escapeHtml(label)}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap font-mono">${escapeHtml(uid || '—')}</td>
+      <td class="px-4 py-2 text-xs text-slate-800">${statusBadge}<span class="font-mono text-[11px] break-all">${escapeHtml(summary)}</span></td>
+    </tr>`
+  }
+
+  function updateAuditFooter() {
+    const hasMore = Boolean(auditNextCursor)
+    countEl.textContent = hasMore
+      ? `表示中 ${auditRowCount} 件（続きがあります）`
+      : `表示中 ${auditRowCount} 件`
+    loadMoreEl.classList.toggle('hidden', !hasMore)
+  }
+
+  async function loadAudit(append) {
+    errEl.classList.add('hidden')
+    if (!append) {
+      auditNextCursor = ''
+      auditRowCount = 0
+      rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">読み込み中…</td></tr>`
+      loadMoreEl.classList.add('hidden')
+    } else {
+      loadMoreEl.disabled = true
+      loadMoreEl.textContent = '読み込み中…'
+    }
+    const params = auditQueryParams()
+    try {
+      const res = await API.auditLogs({ ...params, after_id: append ? auditNextCursor : '' })
+      const items = (res && res.items) || []
+      auditNextCursor = (res && res.next_cursor) || ''
+      if (!append && !items.length) {
+        rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">ログがありません</td></tr>`
+        countEl.textContent = ''
+        loadMoreEl.classList.add('hidden')
+        return
+      }
+      const html = items.map(renderAuditRow).join('')
+      if (append) {
+        rowsEl.insertAdjacentHTML('beforeend', html)
+      } else {
+        rowsEl.innerHTML = html
+      }
+      auditRowCount += items.length
+      updateAuditFooter()
+    } catch (e) {
+      errEl.textContent = e.message || '取得に失敗しました'
+      errEl.classList.remove('hidden')
+      if (!append) {
+        rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+        countEl.textContent = ''
+      }
+      loadMoreEl.classList.add('hidden')
+    } finally {
+      loadMoreEl.disabled = false
+      loadMoreEl.textContent = 'さらに読み込む'
+    }
+  }
+
+  eventPresetEl?.addEventListener('change', () => {
+    const v = eventPresetEl.value || ''
+    eventEl.value = v
+  })
+
+  mainContent.querySelector('#audit-refresh').addEventListener('click', () => loadAudit(false))
+  mainContent.querySelector('#audit-apply').addEventListener('click', () => loadAudit(false))
+  loadMoreEl.addEventListener('click', () => loadAudit(true))
+
+  await loadAudit(false)
+
   const cmdErrEl = mainContent.querySelector('#cmd-error')
   const cmdRowsEl = mainContent.querySelector('#cmd-rows')
   const cmdQueryEl = mainContent.querySelector('#cmd-filter-query')
   const cmdUserEl = mainContent.querySelector('#cmd-filter-user')
   const cmdTargetEl = mainContent.querySelector('#cmd-filter-target')
+  const cmdFromEl = mainContent.querySelector('#cmd-filter-from')
+  const cmdToEl = mainContent.querySelector('#cmd-filter-to')
   const cmdLimitEl = mainContent.querySelector('#cmd-filter-limit')
+  const cmdCountEl = mainContent.querySelector('#cmd-count')
+  const cmdLoadMoreEl = mainContent.querySelector('#cmd-load-more')
 
-  async function loadCmd() {
-    cmdErrEl.classList.add('hidden')
-    const q = String(cmdQueryEl.value || '').trim()
-    const user_id = String(cmdUserEl.value || '').trim()
-    const target_id = String(cmdTargetEl.value || '').trim()
-    const limit = Number(cmdLimitEl.value || 200) || 200
-    if (!q && !user_id && !target_id) {
-      cmdRowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">検索条件を入力してください（query または user_id/target_id）。</td></tr>`
-      return
-    }
-    cmdRowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">検索中…</td></tr>`
-    try {
-      const res = await API.commandLogs({ query: q, user_id, target_id, limit })
-      const items = (res && res.items) || []
-      if (!items.length) {
-        cmdRowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">該当するコマンドはありません。</td></tr>`
-        return
-      }
-      cmdRowsEl.innerHTML = items
-        .map((it) => {
-          const time = fmtTime(it.time)
-          return `<tr class="border-b border-slate-200 hover:bg-slate-50">
-            <td class="px-4 py-2 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(time)}</td>
-            <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap">${escapeHtml(it.user_id || '')}</td>
-            <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap">${escapeHtml(it.target_id || '')}</td>
-            <td class="px-4 py-2 text-xs text-slate-800 font-mono text-[11px]">${escapeHtml(it.line_text || '')}</td>
-          </tr>`
-        })
-        .join('')
-    } catch (e) {
-      cmdErrEl.textContent = e.message || '取得に失敗しました'
-      cmdErrEl.classList.remove('hidden')
-      cmdRowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+  let cmdNextCursor = ''
+  let cmdRowCount = 0
+
+  function cmdQueryParams() {
+    return {
+      query: String(cmdQueryEl.value || '').trim(),
+      user_id: String(cmdUserEl.value || '').trim(),
+      target_id: String(cmdTargetEl.value || '').trim(),
+      from: String(cmdFromEl.value || '').trim(),
+      to: String(cmdToEl.value || '').trim(),
+      limit: Number(cmdLimitEl.value || 200) || 200,
     }
   }
 
-  mainContent.querySelector('#cmd-refresh').addEventListener('click', loadCmd)
-  mainContent.querySelector('#cmd-apply').addEventListener('click', loadCmd)
-}
+  function renderCmdRow(it) {
+    const time = fmtTime(it.time)
+    return `<tr class="border-b border-slate-200 hover:bg-slate-50">
+      <td class="px-4 py-2 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(time)}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap">${escapeHtml(it.user_id || '')}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap font-mono">${escapeHtml(it.target_id || '')}</td>
+      <td class="px-4 py-2 text-xs text-slate-500 whitespace-nowrap font-mono max-w-[8rem] truncate" title="${escapeHtml(it.session_id || '')}">${escapeHtml(it.session_id || '')}</td>
+      <td class="px-4 py-2 text-xs text-slate-800 font-mono text-[11px] break-all">${escapeHtml(it.line_text || '')}</td>
+    </tr>`
+  }
 
+  function updateCmdFooter() {
+    const hasMore = Boolean(cmdNextCursor)
+    cmdCountEl.textContent = hasMore
+      ? `表示中 ${cmdRowCount} 件（続きがあります）`
+      : cmdRowCount > 0
+        ? `表示中 ${cmdRowCount} 件`
+        : ''
+    cmdLoadMoreEl.classList.toggle('hidden', !hasMore)
+  }
+
+  async function loadCmd(append) {
+    cmdErrEl.classList.add('hidden')
+    if (!append) {
+      cmdNextCursor = ''
+      cmdRowCount = 0
+      cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">検索中…</td></tr>`
+      cmdLoadMoreEl.classList.add('hidden')
+      cmdCountEl.textContent = ''
+    } else {
+      cmdLoadMoreEl.disabled = true
+      cmdLoadMoreEl.textContent = '読み込み中…'
+    }
+    const params = cmdQueryParams()
+    try {
+      const res = await API.commandLogs({ ...params, after_id: append ? cmdNextCursor : '' })
+      const items = (res && res.items) || []
+      cmdNextCursor = (res && res.next_cursor) || ''
+      if (!append && !items.length) {
+        cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">該当するコマンドはありません。</td></tr>`
+        cmdCountEl.textContent = ''
+        cmdLoadMoreEl.classList.add('hidden')
+        return
+      }
+      const html = items.map(renderCmdRow).join('')
+      if (append) {
+        cmdRowsEl.insertAdjacentHTML('beforeend', html)
+      } else {
+        cmdRowsEl.innerHTML = html
+      }
+      cmdRowCount += items.length
+      updateCmdFooter()
+    } catch (e) {
+      cmdErrEl.textContent = e.message || '取得に失敗しました'
+      cmdErrEl.classList.remove('hidden')
+      if (!append) {
+        cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+        cmdCountEl.textContent = ''
+      }
+      cmdLoadMoreEl.classList.add('hidden')
+    } finally {
+      cmdLoadMoreEl.disabled = false
+      cmdLoadMoreEl.textContent = 'さらに読み込む'
+    }
+  }
+
+  mainContent.querySelector('#cmd-refresh').addEventListener('click', () => loadCmd(false))
+  mainContent.querySelector('#cmd-apply').addEventListener('click', () => loadCmd(false))
+  cmdLoadMoreEl.addEventListener('click', () => loadCmd(true))
+
+  const ftErrEl = mainContent.querySelector('#ft-error')
+  const ftRowsEl = mainContent.querySelector('#ft-rows')
+  const ftFromEl = mainContent.querySelector('#ft-filter-from')
+  const ftToEl = mainContent.querySelector('#ft-filter-to')
+  const ftStateEl = mainContent.querySelector('#ft-filter-state')
+  const ftDirectionEl = mainContent.querySelector('#ft-filter-direction')
+  const ftBackendEl = mainContent.querySelector('#ft-filter-backend')
+  const ftUserEl = mainContent.querySelector('#ft-filter-user')
+  const ftTargetEl = mainContent.querySelector('#ft-filter-target')
+  const ftQueryEl = mainContent.querySelector('#ft-filter-query')
+  const ftLimitEl = mainContent.querySelector('#ft-filter-limit')
+  const ftCountEl = mainContent.querySelector('#ft-count')
+  const ftLoadMoreEl = mainContent.querySelector('#ft-load-more')
+
+  let ftNextCursor = ''
+  let ftRowCount = 0
+
+  const FT_STATE_LABELS = {
+    completed: '完了',
+    failed: '失敗',
+    cancelled: 'キャンセル',
+    running: '実行中',
+    receiving: '受信中',
+  }
+  const FT_DIRECTION_LABELS = {
+    upload: 'アップロード',
+    download: 'ダウンロード',
+  }
+
+  function ftStateBadge(state) {
+    const label = FT_STATE_LABELS[state] || state || '—'
+    let cls = 'text-slate-700 bg-slate-100'
+    if (state === 'completed') cls = 'text-emerald-800 bg-emerald-50'
+    else if (state === 'failed') cls = 'text-red-700 bg-red-50'
+    else if (state === 'cancelled') cls = 'text-amber-800 bg-amber-50'
+    else if (state === 'running' || state === 'receiving') cls = 'text-sky-700 bg-sky-50'
+    return `<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${cls}">${escapeHtml(label)}</span>`
+  }
+
+  function formatBytes(n) {
+    const v = Number(n || 0)
+    if (!Number.isFinite(v) || v <= 0) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    let i = 0
+    let x = v
+    while (x >= 1024 && i < units.length - 1) {
+      x /= 1024
+      i++
+    }
+    return (i === 0 ? x.toFixed(0) : x.toFixed(x < 10 ? 2 : 1)) + ' ' + units[i]
+  }
+
+  function ftProgress(it) {
+    const total = Number(it.total || 0)
+    let prog = Number(it.progress || 0)
+    const state = String(it.state || '')
+    // 古いデータ（throttle で進捗が DB に書かれないまま完了したもの）の救済:
+    // 状態が completed かつ total が分かっていれば 100% として扱う。
+    if (state === 'completed' && total > 0 && prog < total) {
+      prog = total
+    }
+    if (total > 0) {
+      const pct = Math.min(100, Math.round((prog / total) * 100))
+      return `${pct}%（${formatBytes(prog)} / ${formatBytes(total)}）`
+    }
+    return prog > 0 ? formatBytes(prog) : '—'
+  }
+
+  function ftQueryParams() {
+    return {
+      from: String(ftFromEl.value || '').trim(),
+      to: String(ftToEl.value || '').trim(),
+      state: String(ftStateEl.value || '').trim(),
+      direction: String(ftDirectionEl.value || '').trim(),
+      backend: String(ftBackendEl.value || '').trim(),
+      userId: String(ftUserEl.value || '').trim(),
+      targetId: String(ftTargetEl.value || '').trim(),
+      query: String(ftQueryEl.value || '').trim(),
+      limit: Number(ftLimitEl.value || 100) || 100,
+    }
+  }
+
+  function renderFtRow(it) {
+    const time = fmtTime(it.updated_at || it.created_at)
+    const dirLabel = FT_DIRECTION_LABELS[it.direction] || it.direction || ''
+    const file = it.file_name || (it.remote_path ? it.remote_path.split('/').pop() : '—')
+    const path = it.remote_path || ''
+    const targetCell = it.target_name
+      ? `<span title="${escapeHtml(it.target_id || '')}">${escapeHtml(it.target_name)}</span>`
+      : escapeHtml(it.target_id || '')
+    const err = it.error ? `<div class="text-[11px] text-red-600 mt-0.5">${escapeHtml(it.error)}</div>` : ''
+    return `<tr class="border-b border-slate-200 hover:bg-slate-50">
+      <td class="px-4 py-2 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(time)}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap font-mono">${escapeHtml(it.user_id || '—')}</td>
+      <td class="px-4 py-2 text-xs text-slate-800 whitespace-nowrap">${escapeHtml(dirLabel)}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap font-mono">${escapeHtml(it.backend || '')}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap">${targetCell}</td>
+      <td class="px-4 py-2 text-xs text-slate-800">
+        <div class="font-mono text-[11px] break-all">${escapeHtml(file)}</div>
+        <div class="text-[11px] text-slate-500 break-all">${escapeHtml(path)}</div>
+        ${err}
+      </td>
+      <td class="px-4 py-2 text-xs whitespace-nowrap">${ftStateBadge(it.state)}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap font-mono">${escapeHtml(ftProgress(it))}</td>
+    </tr>`
+  }
+
+  function updateFtFooter() {
+    const hasMore = Boolean(ftNextCursor)
+    ftCountEl.textContent = hasMore
+      ? `表示中 ${ftRowCount} 件（続きがあります）`
+      : ftRowCount > 0
+        ? `表示中 ${ftRowCount} 件`
+        : ''
+    ftLoadMoreEl.classList.toggle('hidden', !hasMore)
+  }
+
+  async function loadFt(append) {
+    ftErrEl.classList.add('hidden')
+    if (!append) {
+      ftNextCursor = ''
+      ftRowCount = 0
+      ftRowsEl.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">読み込み中…</td></tr>`
+      ftLoadMoreEl.classList.add('hidden')
+      ftCountEl.textContent = ''
+    } else {
+      ftLoadMoreEl.disabled = true
+      ftLoadMoreEl.textContent = '読み込み中…'
+    }
+    const params = ftQueryParams()
+    try {
+      const res = await API.fileTransfers({ ...params, afterCursor: append ? ftNextCursor : '' })
+      const items = (res && res.items) || []
+      ftNextCursor = (res && res.next_cursor) || ''
+      if (!append && !items.length) {
+        ftRowsEl.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">該当する転送はありません。</td></tr>`
+        ftCountEl.textContent = ''
+        ftLoadMoreEl.classList.add('hidden')
+        return
+      }
+      const html = items.map(renderFtRow).join('')
+      if (append) {
+        ftRowsEl.insertAdjacentHTML('beforeend', html)
+      } else {
+        ftRowsEl.innerHTML = html
+      }
+      ftRowCount += items.length
+      updateFtFooter()
+    } catch (e) {
+      ftErrEl.textContent = e.message || '取得に失敗しました'
+      ftErrEl.classList.remove('hidden')
+      if (!append) {
+        ftRowsEl.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+        ftCountEl.textContent = ''
+      }
+      ftLoadMoreEl.classList.add('hidden')
+    } finally {
+      ftLoadMoreEl.disabled = false
+      ftLoadMoreEl.textContent = 'さらに読み込む'
+    }
+  }
+
+  mainContent.querySelector('#ft-refresh').addEventListener('click', () => loadFt(false))
+  mainContent.querySelector('#ft-apply').addEventListener('click', () => loadFt(false))
+  ftLoadMoreEl.addEventListener('click', () => loadFt(true))
+}

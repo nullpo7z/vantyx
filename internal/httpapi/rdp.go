@@ -79,10 +79,29 @@ func (a *App) handleRDPWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // RDPSessionItem is one entry in GET /api/rdp/sessions response.
 type RDPSessionItem struct {
-	SessionID  string    `json:"session_id"`
-	TargetID   string    `json:"target_id"`
-	TargetName string    `json:"target_name"`
-	CreatedAt  time.Time `json:"created_at"`
+	SessionID   string    `json:"session_id"`
+	TargetID    string    `json:"target_id"`
+	TargetName  string    `json:"target_name"`
+	TargetPath  string    `json:"target_path,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	LastSeen    time.Time `json:"last_seen"`
+	Idle        bool      `json:"idle"`
+	IdleSeconds int       `json:"idle_seconds,omitempty"`
+}
+
+func rdpSessionItemFrom(s rdpvnc.Session, mgr *rdpvnc.Manager) RDPSessionItem {
+	item := RDPSessionItem{
+		SessionID:  s.ID,
+		TargetID:   s.TargetID,
+		TargetName: s.TargetName,
+		CreatedAt:  s.CreatedAt,
+		LastSeen:   s.LastSeen(),
+	}
+	if mgr != nil && mgr.IsIdle(&s) {
+		item.Idle = true
+		item.IdleSeconds = int(mgr.IdleDuration(&s).Seconds())
+	}
+	return item
 }
 
 // handleRDPSessions returns the list of active RDP (browser) sessions for the current user.
@@ -120,12 +139,10 @@ func (a *App) handleRDPSessions(w http.ResponseWriter, r *http.Request) {
 		if target.Protocol != access.ProtocolRDP {
 			continue
 		}
-		items = append(items, RDPSessionItem{
-			SessionID:  s.ID,
-			TargetID:   targetID,
-			TargetName: target.Name,
-			CreatedAt:  s.CreatedAt,
-		})
+		item := rdpSessionItemFrom(s, a.RDPVNCManager)
+		item.TargetName = target.Name
+		item.TargetPath = target.Path
+		items = append(items, item)
 	}
 	writeJSON(w, map[string]interface{}{"items": items})
 }
@@ -149,6 +166,15 @@ func (a *App) handleRDPSessionDelete(w http.ResponseWriter, r *http.Request) {
 	s, ok := a.RDPVNCManager.GetSession(sessionID)
 	if !ok || s.UserID != userID {
 		writeJSONError(w, "session not found or access denied", http.StatusNotFound)
+		return
+	}
+	canAccess, err := a.userCanAccessTarget(r.Context(), userID, access.TargetID(s.TargetID))
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if !canAccess {
+		writeJSONError(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	a.RDPVNCManager.RemoveSession(sessionID)
@@ -189,10 +215,12 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 	bridgeKey := fmt.Sprintf("%s:%s", userID, targetID)
 	var bridge *rdpvnc.Bridge
 	var targetAddr string
+	var sessionID string
 	if a.RDPVNCManager != nil {
 		if existingSess, ok := a.RDPVNCManager.GetSessionByKey(bridgeKey); ok && existingSess.Bridge != nil {
 			ew, eh := existingSess.Bridge.Size()
 			if ew == width && eh == height {
+				sessionID = existingSess.ID
 				targetAddr = fmt.Sprintf("127.0.0.1:%d", existingSess.Bridge.VNCPort())
 				audit("rdp_browser_reconnect", auditFields{
 					"user_id":    userID,
@@ -235,7 +263,8 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 				writeJSONError(w, "failed to start RDP session", http.StatusInternalServerError)
 				return
 			}
-			a.RDPVNCManager.RegisterSession(bridgeKey, sid, userID, targetID, target.Name, width, height, bridge)
+			sess := a.RDPVNCManager.RegisterSession(bridgeKey, sid, userID, targetID, target.Name, width, height, bridge)
+			sessionID = sess.ID
 			if a.SessionEventBroker != nil {
 				a.SessionEventBroker.Broadcast()
 			}
@@ -262,10 +291,21 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 	}
 	defer wsConn.Close()
 
+	if sessionID == "" && a.RDPVNCManager != nil {
+		if existingSess, ok := a.RDPVNCManager.GetSessionByKey(bridgeKey); ok {
+			sessionID = existingSess.ID
+		}
+	}
+	var touch func()
+	if a.RDPVNCManager != nil && sessionID != "" {
+		sid := sessionID
+		touch = func() { a.RDPVNCManager.Touch(sid) }
+	}
+
 	proxyDone := make(chan struct{})
 	go func() {
 		defer close(proxyDone)
-		_ = vncproxy.Bridge(wsConn, targetAddr)
+		_ = vncproxy.Bridge(wsConn, targetAddr, touch)
 	}()
 
 	if bridge != nil {

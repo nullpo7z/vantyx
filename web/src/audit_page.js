@@ -168,7 +168,7 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
       <div id="audit-panel-audit" role="tabpanel" aria-labelledby="audit-tab-btn-audit" class="bg-white rounded-b-lg rounded-tr-lg border border-t-0 border-slate-200 shadow-sm overflow-hidden">
         <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
           <p class="text-xs text-slate-500">ログイン・ターミナル・ファイル操作など（API のアクセスログは既定で非表示）</p>
-          <button id="audit-refresh" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">更新</button>
+          <button id="audit-refresh" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">更新</button>
         </div>
         <div class="p-4 border-b border-slate-200 flex gap-3 flex-wrap items-end">
           <div>

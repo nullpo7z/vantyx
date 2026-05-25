@@ -5,8 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vantyx</title>
     <link rel="stylesheet" href="/src/style.css" />
+    <script>
+      // テーマ初期化: ペイント前に <html class="dark"> を確定させて FOUC を防ぐ。
+      (function () {
+        try {
+          var saved = localStorage.getItem('vantyx_theme');
+          var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (saved === 'dark' || (!saved && prefersDark)) {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (_) {
+          /* ignore */
+        }
+      })();
+    </script>
   </head>
-  <body class="min-h-screen flex flex-col bg-slate-100 font-sans text-slate-900">
+  <body class="min-h-screen flex flex-col font-sans">
     <div id="app" class="flex flex-col flex-1"></div>
     <script type="module" src="/src/main.js"></script>
   </body>

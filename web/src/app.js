@@ -33,7 +33,7 @@ function validateOptionalUserId(rawId) {
 export function renderApp(container) {
   container.innerHTML = `
     <div class="flex-1 flex flex-col">
-      <header class="bg-sky-800 text-white shadow z-10 shrink-0">
+      <header class="text-white shadow z-10 shrink-0">
         <div class="vantyx-header-inner">
           <div class="vantyx-header-start">
             <h1 class="vantyx-brand">Vantyx</h1>
@@ -49,6 +49,11 @@ export function renderApp(container) {
             </nav>
           </div>
           <div class="vantyx-header-end">
+          <button id="theme-toggle" type="button" class="text-sm opacity-80 hover:opacity-100 transition-opacity focus:outline-none focus:ring-1 focus:ring-white/70 rounded px-1" aria-label="テーマ切替" title="テーマ切替">
+            <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+            <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
+          <div class="w-px h-4 bg-white/20"></div>
           <button id="user-name" class="text-sm font-medium opacity-90 hover:opacity-100 hover:underline focus:outline-none focus:ring-1 focus:ring-white/70 rounded px-1 cursor-pointer"></button>
           <div class="w-px h-4 bg-white/20"></div>
           <button id="logout-btn" class="text-sm opacity-80 hover:opacity-100 transition-opacity">ログアウト</button>
@@ -2496,6 +2501,20 @@ export function renderApp(container) {
     document.cookie = 'vantyx_session=; path=/; max-age=0'
     renderLogin(container)
   })
+
+  // テーマ切替（ライト/ダーク）。設定は localStorage に保存し、main.js でも
+  // 初期化済みなのでここではトグル動作だけを担当する。
+  const themeToggleBtn = document.getElementById('theme-toggle')
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener('click', () => {
+      const isDark = document.documentElement.classList.toggle('dark')
+      try {
+        localStorage.setItem('vantyx_theme', isDark ? 'dark' : 'light')
+      } catch {
+        /* localStorage 不可（プライベートブラウジング等）でも動作は継続 */
+      }
+    })
+  }
 }
 
 function escapeHtml(s) {

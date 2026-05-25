@@ -1,5 +1,106 @@
 @import "tailwindcss";
 
+/* Class-based dark mode trigger: <html class="dark"> enables dark utilities. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* テーマトークン。XClarity 風に「ダークなナビ + 明るい本体」を基本にしつつ、
+   .dark を root に付けると全体がダーク基調に切り替わる。 */
+:root {
+  --vantyx-app-bg: #f1f5f9;
+  --vantyx-surface: #ffffff;
+  --vantyx-surface-2: #f8fafc;
+  --vantyx-surface-hover: #f1f5f9;
+  --vantyx-border: #e2e8f0;
+  --vantyx-border-strong: #cbd5e1;
+  --vantyx-text: #0f172a;
+  --vantyx-text-muted: #475569;
+  --vantyx-text-faint: #94a3b8;
+  --vantyx-header-bg: #1e293b;
+  --vantyx-header-border: rgba(255, 255, 255, 0.08);
+  --vantyx-accent-red: #e2231a;
+  --vantyx-accent-nav: #22c55e;
+  color-scheme: light;
+}
+
+.dark {
+  --vantyx-app-bg: #0f172a;
+  --vantyx-surface: #1e293b;
+  --vantyx-surface-2: #111827;
+  --vantyx-surface-hover: #243044;
+  --vantyx-border: #334155;
+  --vantyx-border-strong: #475569;
+  --vantyx-text: #f1f5f9;
+  --vantyx-text-muted: #cbd5e1;
+  --vantyx-text-faint: #94a3b8;
+  --vantyx-header-bg: #020617;
+  --vantyx-header-border: rgba(255, 255, 255, 0.06);
+  --vantyx-accent-red: #ef4444;
+  --vantyx-accent-nav: #4ade80;
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--vantyx-app-bg);
+  color: var(--vantyx-text);
+}
+
+/* ─── ダークモード時の Tailwind ユーティリティ上書き ───
+   すべてのページで頻出する surface / text / border 系のクラスだけを上書きし、
+   各ページのテンプレートに dark: バリアントを散らさずに済むようにする。 */
+.dark .bg-white { background-color: var(--vantyx-surface); }
+.dark .bg-slate-50,
+.dark .bg-gray-50 { background-color: var(--vantyx-surface-2); }
+.dark .bg-slate-100,
+.dark .bg-gray-100 { background-color: var(--vantyx-app-bg); }
+.dark .bg-slate-200 { background-color: #334155; }
+
+.dark .text-slate-900,
+.dark .text-slate-800 { color: var(--vantyx-text); }
+.dark .text-slate-700 { color: #e2e8f0; }
+.dark .text-slate-600,
+.dark .text-slate-500 { color: var(--vantyx-text-muted); }
+.dark .text-slate-400,
+.dark .text-slate-300 { color: var(--vantyx-text-faint); }
+
+.dark .border-slate-100,
+.dark .border-slate-200 { border-color: var(--vantyx-border); }
+.dark .border-slate-300 { border-color: var(--vantyx-border-strong); }
+.dark .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-color: var(--vantyx-border); }
+
+.dark .hover\:bg-slate-50:hover,
+.dark .hover\:bg-slate-100:hover { background-color: var(--vantyx-surface-hover); }
+
+/* 状態バッジ系（淡色背景 + 濃色文字）は dark でもコントラストを保つために
+   背景を半透明化して文字色は明るく寄せる。 */
+.dark .bg-emerald-50 { background-color: rgba(34, 197, 94, 0.15); }
+.dark .text-emerald-800 { color: #86efac; }
+.dark .bg-red-50 { background-color: rgba(239, 68, 68, 0.15); }
+.dark .text-red-700 { color: #fca5a5; }
+.dark .bg-amber-50 { background-color: rgba(245, 158, 11, 0.15); }
+.dark .text-amber-800,
+.dark .text-amber-900 { color: #fcd34d; }
+.dark .bg-sky-50 { background-color: rgba(56, 189, 248, 0.15); }
+.dark .text-sky-700,
+.dark .text-sky-800 { color: #7dd3fc; }
+.dark .border-amber-200 { border-color: rgba(245, 158, 11, 0.4); }
+
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: var(--vantyx-surface-2);
+  color: var(--vantyx-text);
+  border-color: var(--vantyx-border-strong);
+}
+.dark input::placeholder,
+.dark textarea::placeholder { color: var(--vantyx-text-faint); }
+.dark input[type='checkbox'],
+.dark input[type='radio'] { accent-color: var(--vantyx-accent-nav); }
+
+/* テーマ切替トグルのアイコン制御 */
+.theme-icon-dark { display: none; }
+.dark .theme-icon-light { display: none; }
+.dark .theme-icon-dark { display: inline-block; }
+
 /* xterm.js container */
 #terminal-container {
   @apply h-full w-full min-h-[320px] p-2 bg-slate-900 rounded;
@@ -87,6 +188,10 @@ body.terminal-standalone #app {
   column-gap: 1rem;
   flex-shrink: 0;
 }
+#app header {
+  background-color: var(--vantyx-header-bg);
+  border-bottom: 1px solid var(--vantyx-header-border);
+}
 #app header .vantyx-brand {
   margin: 0;
   padding: 0;
@@ -95,6 +200,17 @@ body.terminal-standalone #app {
   line-height: 1.25rem;
   white-space: nowrap;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+#app header .vantyx-brand::before {
+  content: '';
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background-color: var(--vantyx-accent-red);
 }
 #app header nav.vantyx-nav {
   display: flex;
@@ -129,5 +245,5 @@ body.terminal-standalone #app {
 }
 #app header .vantyx-nav-link[aria-current='page'] {
   opacity: 1;
-  box-shadow: inset 0 -2px 0 0 #fff;
+  box-shadow: inset 0 -2px 0 0 var(--vantyx-accent-nav);
 }

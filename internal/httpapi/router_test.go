@@ -815,8 +815,9 @@ func TestApp_Groups_Create(t *testing.T) {
 	}
 }
 
-// TestApp_CreateGroup_NonAdminForbidden は、非管理者ユーザーがアクセスグループを
-// 作成しようとした場合に 403 が返ることを検証する（サーバー管理操作 = admin 限定）。
+// TestApp_CreateGroup_NonAdminForbidden checks that a non-admin user
+// gets HTTP 403 when trying to create an access group (server-
+// management operations are admin-only).
 func TestApp_CreateGroup_NonAdminForbidden(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
@@ -841,8 +842,8 @@ func TestApp_CreateGroup_NonAdminForbidden(t *testing.T) {
 	}
 }
 
-// TestApp_CreateTarget_NonAdminForbidden は、非管理者ユーザーがターゲットを
-// 作成しようとした場合に 403 が返ることを検証する。
+// TestApp_CreateTarget_NonAdminForbidden checks that a non-admin user
+// gets HTTP 403 when trying to create a target.
 func TestApp_CreateTarget_NonAdminForbidden(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
@@ -1364,8 +1365,8 @@ func TestApp_Files_ListWithMock(t *testing.T) {
 		return
 	}
 	mock.AddDir("/", []MockFileInfo{
-		{Name_: "a.txt", Size_: 10, IsDir_: false, Mod_: time.Now()},
-		{Name_: "dir", Size_: 0, IsDir_: true, Mod_: time.Now()},
+		{NameField: "a.txt", SizeField: 10, IsDirField: false, ModTimeField: time.Now()},
+		{NameField: "dir", SizeField: 0, IsDirField: true, ModTimeField: time.Now()},
 	})
 	router := app.NewRouter()
 	sess, _ := app.SessionStore.Create("admin")
@@ -2859,7 +2860,7 @@ func TestApp_SetGroupTags_InvalidBody(t *testing.T) {
 
 func TestApp_ListFiles_RelativePath(t *testing.T) {
 	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
-	mock.AddDir("/", []MockFileInfo{{Name_: "sub", Size_: 0, IsDir_: true, Mod_: time.Now()}})
+	mock.AddDir("/", []MockFileInfo{{NameField: "sub", SizeField: 0, IsDirField: true, ModTimeField: time.Now()}})
 	mock.AddDir("/sub", nil)
 	router := app.NewRouter()
 	sess, _ := app.SessionStore.Create("admin")
@@ -3551,7 +3552,7 @@ func setupAppWithTFTPServerTarget(t *testing.T, root string) (*App, string) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	// TFTP サーバー用ターゲット (プロトコル: tftp、機能フラグ: tftp_enabled=true)
+	// Target that exposes the embedded TFTP server (protocol=tftp, tftp_enabled=true).
 	id := access.TargetID("tftp1")
 	if _, err := app.TargetStore.CreateWithPath(ctx, id, "TFTP1", "127.0.0.1", 69, access.ProtocolTFTP, access.GroupID("g1"), "", "", "", "", "", false, false, true); err != nil {
 		t.Fatalf("CreateWithPath: %v", err)

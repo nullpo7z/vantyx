@@ -1,4 +1,24 @@
+/**
+ * @file Thin wrapper around the Vantyx REST API.
+ *
+ * Every method returns a parsed JSON body on success and throws an
+ * Error whose `message` field is the server-supplied message (or the
+ * HTTP status text when the response is not JSON). Callers can rely on
+ * `try { await API.foo() } catch (err) { showError(err.message) }`.
+ *
+ * Cookies are required: the session is stored in `vantyx_session` and
+ * every request opts in with `credentials: 'include'`.
+ */
+
 const API = {
+  /**
+   * Authenticate with the local credential store.
+   *
+   * @param {string} username
+   * @param {string} password
+   * @returns {Promise<{user_id: string, username: string, role: string, require_password_change?: boolean}>}
+   * @throws {Error} When the server rejects the credentials.
+   */
   async login(username, password) {
     const res = await fetch('/api/login', {
       method: 'POST',
@@ -13,6 +33,13 @@ const API = {
     return res.json()
   },
 
+  /**
+   * Rotate the current user's password.
+   *
+   * @param {string} currentPassword
+   * @param {string} newPassword
+   * @returns {Promise<void>}
+   */
   async changePassword(currentPassword, newPassword) {
     const res = await fetch('/api/me/password', {
       method: 'POST',
@@ -26,6 +53,11 @@ const API = {
     }
   },
 
+  /**
+   * Invalidate the current session server-side and clear the cookie.
+   *
+   * @returns {Promise<void>}
+   */
   async logout() {
     const res = await fetch('/api/logout', {
       method: 'POST',
@@ -37,6 +69,12 @@ const API = {
     }
   },
 
+  /**
+   * Return information about the currently authenticated user.
+   *
+   * @returns {Promise<{user_id: string, username: string, role: string}>}
+   * @throws {Error} On 401 / 403.
+   */
   async me() {
     const res = await fetch('/api/me', { credentials: 'include' })
     if (!res.ok) {

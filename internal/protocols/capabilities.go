@@ -2,21 +2,22 @@ package protocols
 
 import "github.com/nullpo7z/vantyx/internal/access"
 
-// Capability represents a high-level feature that a protocol may support.
-// このパッケージは「どのプロトコルがどの機能をサポートするか」を 1 箇所にまとめて管理するためのものです。
+// Capability is a high-level feature that a protocol may or may not
+// implement. The package keeps the mapping in one place so that adding
+// a new bridge is a single edit.
 type Capability string
 
 const (
-	CapabilityTerminal     Capability = "terminal"      // 対話型セッション（SSH/Telnet/RDP/VNC など）
-	CapabilityFileTransfer Capability = "file_transfer" // ファイル転送（SFTP/FTP/TFTP サーバー経由 など）
-	CapabilityTFTPServer   Capability = "tftp_server"   // Vantyx 内蔵 TFTP サーバー機能
+	CapabilityTerminal     Capability = "terminal"      // interactive session (SSH / Telnet / RDP / VNC ...).
+	CapabilityFileTransfer Capability = "file_transfer" // file transfer (SFTP / FTP / TFTP).
+	CapabilityTFTPServer   Capability = "tftp_server"   // exposes Vantyx's embedded TFTP server.
 )
 
-// Supports reports whether protocol p supports the given high-level capability.
+// Supports reports whether protocol p exposes the given capability.
 func Supports(p access.Protocol, cap Capability) bool {
 	switch cap {
 	case CapabilityTerminal:
-		// 対話型セッションを持つプロトコル
+		// Protocols that drive an interactive session.
 		switch p {
 		case access.ProtocolSSH, access.ProtocolTelnet, access.ProtocolRDP, access.ProtocolVNC:
 			return true
@@ -24,7 +25,7 @@ func Supports(p access.Protocol, cap Capability) bool {
 			return false
 		}
 	case CapabilityFileTransfer:
-		// ファイル転送に使えるプロトコル
+		// Protocols usable for file transfer.
 		switch p {
 		case access.ProtocolSSH, access.ProtocolFTP, access.ProtocolTFTP:
 			return true

@@ -14,73 +14,25 @@ import { renderUserInfo } from './account_page.js'
 import { renderAuditPage } from './audit_page.js'
 import { renderSettingsPage } from './settings_page.js'
 import { renderGroupTargetsTable } from './targets_page.js'
-
-// TFTP 機能フラグ用の内部タグ名（サーバー管理画面での「TFTP を有効にする」に対応）
-const TFTP_CAPABILITY_TAG = 'tftp_enabled'
-// SFTP 無効化用の内部タグ（SSH ターゲットで「ファイル転送で使用するプロトコル」の SFTP をオフにした場合に付与）
-const SFTP_DISABLED_TAG = 'no-sftp'
-// バックエンドの ID バリデーション (^[a-zA-Z0-9_\\-]+$, 長さ上限) に合わせた制約
-const ID_MAX_LENGTH = 512
-const ID_PATTERN = /^[A-Za-z0-9_-]+$/
-
-function validateOptionalUserId(rawId) {
-  if (!rawId) return null
-  if (rawId.length > ID_MAX_LENGTH || !ID_PATTERN.test(rawId)) {
-    return 'ユーザーIDは英数字・ハイフン・アンダースコアのみ、最大512文字で入力してください'
-  }
-  return null
-}
+import {
+  TFTP_CAPABILITY_TAG,
+  SFTP_DISABLED_TAG,
+  TREE_MAIN_CLASS,
+} from './constants.js'
+import { validateOptionalUserId } from './validation.js'
+import { escapeHtml, renderTagPills, fillExistingTagsPicker } from './dom_helpers.js'
+import {
+  randomToken,
+  openPopup,
+  getRdpResolutionForTarget,
+  setRdpResolutionForTarget,
+} from './window_helpers.js'
+import { buildAppShellHTML } from './header_template.js'
 
 export function renderApp(container) {
   // 画面遷移（renderApp 再呼び出し）時にも保存済みテーマを必ず適用し直す。
   applyStoredTheme()
-  container.innerHTML = `
-    <div class="flex-1 flex flex-col">
-      <header class="text-white shadow z-10 shrink-0">
-        <div class="vantyx-header-inner">
-          <div class="vantyx-header-start">
-            <h1 class="vantyx-brand">Vantyx</h1>
-            <nav class="vantyx-nav" aria-label="メインメニュー">
-              <a href="#" id="nav-targets" class="vantyx-nav-link">ホーム</a>
-              <a href="#" id="nav-sessions" class="vantyx-nav-link hidden">セッション</a>
-              <a href="#" id="nav-recordings" class="vantyx-nav-link hidden">録画</a>
-              <a href="#" id="nav-groups" class="vantyx-nav-link hidden">サーバー管理</a>
-              <a href="#" id="nav-users" class="vantyx-nav-link hidden">ユーザー管理</a>
-              <a href="#" id="nav-audit" class="vantyx-nav-link hidden">監査ログ</a>
-              <a href="#" id="nav-settings" class="vantyx-nav-link hidden">設定</a>
-              <a href="/docs" id="nav-api-ref" target="_blank" rel="noopener noreferrer" class="vantyx-nav-link hidden">API リファレンス</a>
-            </nav>
-          </div>
-          <div class="vantyx-header-end">
-          <button id="theme-toggle" type="button" class="text-sm opacity-80 hover:opacity-100 transition-opacity focus:outline-none focus:ring-1 focus:ring-white/70 rounded px-1" aria-label="テーマ切替" title="テーマ切替">
-            <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
-            <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          </button>
-          <div class="w-px h-4 bg-white/20"></div>
-          <button id="user-name" class="text-sm font-medium opacity-90 hover:opacity-100 hover:underline focus:outline-none focus:ring-1 focus:ring-white/70 rounded px-1 cursor-pointer"></button>
-          <div class="w-px h-4 bg-white/20"></div>
-          <button id="logout-btn" class="text-sm opacity-80 hover:opacity-100 transition-opacity">ログアウト</button>
-          </div>
-        </div>
-      </header>
-      <main class="flex-1 overflow-auto p-6 flex flex-col items-center" id="main-content">
-        <div class="w-full max-w-5xl flex-1 flex flex-col">
-          <p class="text-slate-500">読み込み中…</p>
-        </div>
-      </main>
-      <div id="add-target-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
-      <div id="add-user-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
-      <div id="add-member-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
-      <div id="edit-tags-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
-      <div id="ssh-credential-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
-      <div id="active-sessions-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
-      <div id="file-protocol-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
-      <div id="recording-player-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
-      <div id="change-password-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
-      <div id="add-ssh-key-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
-      <div id="session-end-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
-    </div>
-  `
+  container.innerHTML = buildAppShellHTML()
 
   const mainContent = document.getElementById('main-content')
   const userNameEl = document.getElementById('user-name')
@@ -96,7 +48,7 @@ export function renderApp(container) {
   let meData = null
   let groupsCache = null
   let selectedGroupId = ''
-  let expandedGroups = new Set()
+  const expandedGroups = new Set()
   /** 録画ページ用: 選択中のグループID・ターゲットID（サーバー）・表示名 */
   let selectedRecordingsGroupId = ''
   let selectedRecordingsTargetId = ''
@@ -109,12 +61,6 @@ export function renderApp(container) {
   const pendingTerminalCreds = Object.create(null)
   /** ターミナルタブ用: 親タブへフォーカス要求するための待受（opener が無い環境向け） */
   const pendingTerminalParents = Object.create(null)
-
-  function randomToken() {
-    const b = new Uint8Array(16)
-    crypto.getRandomValues(b)
-    return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
-  }
 
   function openTerminalTabWithParent(url) {
     const token = randomToken()
@@ -147,51 +93,6 @@ export function renderApp(container) {
 
     // ターミナルタブ側は parent_token (BroadcastChannel) で親タブへ戻れるため、opener は無効化する。
     window.open(u.toString(), '_blank', 'noopener')
-  }
-
-  function getRdpResolutionForTarget(id) {
-    try {
-      if (!id) return { w: 1920, h: 1080 }
-      const raw = localStorage.getItem(`vantyx_rdp_res_${id}`)
-      if (!raw) return { w: 1920, h: 1080 }
-      const parsed = JSON.parse(raw)
-      const w = Number(parsed.w) || 1920
-      const h = Number(parsed.h) || 1080
-      return { w, h }
-    } catch {
-      return { w: 1920, h: 1080 }
-    }
-  }
-
-  function setRdpResolutionForTarget(id, w, h) {
-    try {
-      if (!id) return
-      const ww = Number(w) || 0
-      const hh = Number(h) || 0
-      if (!ww || !hh) {
-        localStorage.removeItem(`vantyx_rdp_res_${id}`)
-        return
-      }
-      localStorage.setItem(`vantyx_rdp_res_${id}`, JSON.stringify({ w: ww, h: hh }))
-    } catch {
-      // ignore storage errors
-    }
-  }
-
-  function openPopup(url, title, w = 1280, h = 800) {
-    const left = Math.max(0, Math.round((window.screen.width - w) / 2))
-    const top = Math.max(0, Math.round((window.screen.height - h) / 2))
-    const feats = [
-      'popup=yes',
-      'resizable=yes',
-      'scrollbars=no',
-      'noopener=yes',
-      `width=${w}`,
-      `height=${h}`,
-      `left=${left}`,
-      `top=${top}`,
-    ].join(',')
-    window.open(url, title || '_blank', feats)
   }
 
   // When this tab regains focus, refresh active sessions modal if open.
@@ -1203,8 +1104,6 @@ export function renderApp(container) {
       close()
     })
   }
-
-  const TREE_MAIN_CLASS = 'flex-1 overflow-auto p-6 flex flex-col items-center min-h-0'
 
   async function showTreeView(mode = 'manage', useCache = false) {
     const isAdminRole = meData?.role === 'admin'
@@ -2516,49 +2415,3 @@ export function renderApp(container) {
   }
 }
 
-function escapeHtml(s) {
-  const div = document.createElement('div')
-  div.textContent = s
-  return div.innerHTML
-}
-
-/** Proxmox風のタグピル（角丸・枠線・タグアイコン）を返す。tags は文字列配列。 */
-function renderTagPills(tags) {
-  if (!tags || tags.length === 0) {
-    return '<span class="text-xs text-slate-400">—</span>'
-  }
-  const tagIcon = '<svg class="shrink-0 opacity-70" width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M2 1.5C2 1.22 2.22 1 2.5 1H7.5l3 3-3 3H2.5C2.22 7 2 6.78 2 6.5v-5z"/></svg>'
-  return tags
-    .map((t) => `<span class="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 shadow-sm">${tagIcon}${escapeHtml(t)}</span>`)
-    .join('')
-}
-
-/** モーダル内のタグ入力欄の下に「登録済みのタグから選択」を表示し、クリックで入力欄に追加する */
-function fillExistingTagsPicker(modalEl, inputId) {
-  const input = modalEl.querySelector(`#${inputId}`)
-  const container = modalEl.querySelector(`#${inputId}-picker`)
-  if (!input || !container) return
-  API.tags()
-    .then((res) => {
-      const allTags = (res && res.tags) || []
-      if (allTags.length === 0) {
-        container.innerHTML = ''
-        return
-      }
-      container.innerHTML = `<p class="text-xs text-slate-500 mb-1.5">登録済みのタグから選択:</p><div class="flex flex-wrap gap-2">${allTags.map((t) => `<button type="button" class="existing-tag-pill rounded border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-sky-50 hover:border-sky-300 transition-colors" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`).join('')}</div>`
-      container.querySelectorAll('.existing-tag-pill').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const tag = (btn.dataset.tag || '').trim()
-          if (!tag) return
-          const raw = input.value.trim()
-          const current = raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : []
-          if (!current.includes(tag)) {
-            input.value = current.length ? `${raw}, ${tag}` : tag
-          }
-        })
-      })
-    })
-    .catch(() => {
-      container.innerHTML = ''
-    })
-}

@@ -56,7 +56,7 @@ type AccessGroupStore interface {
 	GroupIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]GroupID, error)
 	TargetIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]TargetID, error)
 	TargetIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]TargetID, error)
-	// Tags: グループに付与されたタグ。タグ一致でもアクセス権を付与する。
+	// Tags applied to the group. Matching tags also grant access (tag-based ACL).
 	TagsForGroup(ctx context.Context, groupID GroupID) ([]string, error)
 	SetGroupTags(ctx context.Context, groupID GroupID, tags []string) error
 }

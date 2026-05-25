@@ -152,7 +152,7 @@ export function renderRdpPage(container) {
     if (w > 3840) w = 3840
     if (h < 480) h = 480
     if (h > 2160) h = 2160
-    let wsUrl = `${wsScheme}//${window.location.host}/ws/rdp/browser?target_id=${encodeURIComponent(targetId)}&w=${w}&h=${h}`
+    const wsUrl = `${wsScheme}//${window.location.host}/ws/rdp/browser?target_id=${encodeURIComponent(targetId)}&w=${w}&h=${h}`
 
     try {
       rfb = new RFB(screenEl, wsUrl, { shared: true })

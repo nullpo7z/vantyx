@@ -538,8 +538,8 @@ type Credentials struct {
 	Password             string `json:"password"`
 	PrivateKey           string `json:"-"`           // PEM; set server-side when using stored key
 	PrivateKeyPassphrase string `json:"-"`           // passphrase for encrypted PEM
-	Name                 string `json:"name"`        // セッション名（識別用・任意）
-	Description          string `json:"description"` // 説明（任意）
+	Name                 string `json:"name"`        // optional human-readable session name (for identification).
+	Description          string `json:"description"` // optional free-form description.
 }
 
 // ReadCredentials reads the first WebSocket text message and parses it as Credentials.

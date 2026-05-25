@@ -229,6 +229,7 @@ func (b *sshDetachableBridge) doAttach(conn interface{}) {
 	}
 }
 
+//nolint:unparam // Error return preserved for signature parity with the bridge variants.
 func (b *sshDetachableBridge) run(initialConn interface{}) error {
 	if initialConn != nil {
 		b.doAttach(initialConn)

@@ -14,8 +14,8 @@ type StartOptions struct {
 	UserID      string
 	TargetID    string
 	TargetName  string
-	Name        string // セッション名（識別用）
-	Description string // 説明（任意）
+	Name        string // optional human-readable session name (for identification).
+	Description string // optional free-form description.
 }
 
 // Manager manages long-lived sessions backed by goroutines.
@@ -36,8 +36,8 @@ type Session struct {
 	UserID      string
 	TargetID    string
 	TargetName  string
-	Name        string // セッション名（識別用）
-	Description string // 説明（任意）
+	Name        string // optional human-readable session name (for identification).
+	Description string // optional free-form description.
 
 	Output   *RingBuffer    // optional; set when Start creates the session for terminal replay
 	AttachCh chan AttachReq // for resume: send client connection to re-attach

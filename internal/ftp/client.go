@@ -3,6 +3,7 @@ package ftp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -13,6 +14,16 @@ import (
 	"time"
 
 	jftp "github.com/jlaffaye/ftp"
+)
+
+// Sentinel errors that callers can branch on with [errors.Is].
+var (
+	// ErrPathRequired is returned by Open / RemoveAll when the supplied path is empty.
+	ErrPathRequired = errors.New("ftp: path is required")
+	// ErrCannotOpenDirectory is returned by Open when the target path is a directory.
+	ErrCannotOpenDirectory = errors.New("ftp: cannot open directory")
+	// ErrRefuseRemoveRoot is returned by RemoveAll when called with "/" or empty input.
+	ErrRefuseRemoveRoot = errors.New("ftp: refusing to remove root")
 )
 
 // ftpSizeToInt64 converts FTP entry size (uint64) to int64 for os.FileInfo, capping at math.MaxInt64.
@@ -147,14 +158,14 @@ func (f *ftpFile) Stat() (os.FileInfo, error) { return f.info, nil }
 // Open opens a remote file for reading.
 func (c *Client) Open(p string) (io.ReadCloser, error) {
 	if p == "" {
-		return nil, fmt.Errorf("path is required")
+		return nil, ErrPathRequired
 	}
 	info, err := c.stat(p)
 	if err != nil {
 		return nil, err
 	}
 	if info.IsDir() {
-		return nil, fmt.Errorf("cannot open directory")
+		return nil, ErrCannotOpenDirectory
 	}
 	rc, err := c.conn.Retr(p)
 	if err != nil {
@@ -184,7 +195,7 @@ func (w *ftpWriter) Close() error {
 // Create creates or truncates a remote file and returns a WriteCloser.
 func (c *Client) Create(p string) (io.WriteCloser, error) {
 	if p == "" {
-		return nil, fmt.Errorf("path is required")
+		return nil, ErrPathRequired
 	}
 	return &ftpWriter{
 		client: c,
@@ -196,7 +207,7 @@ func (c *Client) Create(p string) (io.WriteCloser, error) {
 // RemoveAll removes a file or directory tree.
 func (c *Client) RemoveAll(p string) error {
 	if p == "" || p == "/" {
-		return fmt.Errorf("refusing to remove root")
+		return ErrRefuseRemoveRoot
 	}
 	// Use RemoveDirRecur for directories; fall back to Delete for files.
 	if err := c.conn.RemoveDirRecur(p); err == nil {

@@ -1,3 +1,9 @@
+/**
+ * @file Header navigation links: visibility, active state, and click
+ * handlers. The SPA shell calls `initNav` once on render and then uses
+ * `setActiveNav` to highlight whatever page is currently in view.
+ */
+
 let state = {
   navTargets: null,
   navSessions: null,
@@ -34,6 +40,26 @@ function setNavLinkVisible(el, visible) {
   }
 }
 
+/**
+ * Wire up header navigation links to page renderers and click handlers.
+ *
+ * @param {object} opts
+ * @param {HTMLElement} opts.navTargets
+ * @param {HTMLElement} opts.navSessions
+ * @param {HTMLElement} opts.navRecordings
+ * @param {HTMLElement} opts.navGroups
+ * @param {HTMLElement} opts.navUsers
+ * @param {HTMLElement} opts.navAudit
+ * @param {HTMLElement} opts.navSettings
+ * @param {() => ({role: string} | null)} opts.getMe
+ * @param {() => void} opts.onHome
+ * @param {() => void} opts.onSessions
+ * @param {() => void} opts.onRecordings
+ * @param {() => void} opts.onGroups
+ * @param {() => void} opts.onUsers
+ * @param {() => void} opts.onAudit
+ * @param {() => void} opts.onSettings
+ */
 export function initNav({
   navTargets,
   navSessions,
@@ -112,6 +138,12 @@ export function initNav({
   }
 }
 
+/**
+ * Mark the supplied tab as active and refresh per-link visibility based
+ * on the current user's role.
+ *
+ * @param {'targets'|'sessions'|'recordings'|'groups'|'users'|'audit'|'settings'} tab
+ */
 export function setActiveNav(tab) {
   const { navTargets, navRecordings, navGroups, getMe } = state
   if (!navTargets || !navRecordings || !navGroups) return
@@ -139,7 +171,12 @@ export function setActiveNav(tab) {
   }
 }
 
-/** ログイン後にユーザー向けナビ項目を表示する */
+/**
+ * Reveal authenticated navigation entries after a successful login.
+ *
+ * @param {boolean} isAdmin - When true, admin-only entries are also
+ *   shown.
+ */
 export function showAuthenticatedNav(isAdmin) {
   const { navSessions, navRecordings } = state
   setNavLinkVisible(navSessions, true)

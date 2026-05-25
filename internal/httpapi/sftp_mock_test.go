@@ -7,7 +7,7 @@ import (
 )
 
 func TestMockFileInfo_ModeAndSys(t *testing.T) {
-	info := &MockFileInfo{Name_: "f", Size_: 0, IsDir_: false, Mod_: time.Now()}
+	info := &MockFileInfo{NameField: "f", SizeField: 0, IsDirField: false, ModTimeField: time.Now()}
 	if mode := info.Mode(); mode != 0 {
 		t.Errorf("Mode() = %v, want 0", mode)
 	}

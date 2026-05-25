@@ -20,20 +20,33 @@ type MockSFTPFile struct {
 func (f *MockSFTPFile) Close() error               { return nil }
 func (f *MockSFTPFile) Stat() (os.FileInfo, error) { return &f.info, nil }
 
-// MockFileInfo implements os.FileInfo for the mock.
+// MockFileInfo implements [os.FileInfo] for the mock. Field names are
+// suffixed with "Field" to avoid clashing with the method names that
+// satisfy the interface.
 type MockFileInfo struct {
-	Name_  string
-	Size_  int64
-	IsDir_ bool
-	Mod_   time.Time
+	NameField    string
+	SizeField    int64
+	IsDirField   bool
+	ModTimeField time.Time
 }
 
-func (m *MockFileInfo) Name() string       { return m.Name_ }
-func (m *MockFileInfo) Size() int64        { return m.Size_ }
-func (m *MockFileInfo) Mode() os.FileMode  { return 0 }
-func (m *MockFileInfo) ModTime() time.Time { return m.Mod_ }
-func (m *MockFileInfo) IsDir() bool        { return m.IsDir_ }
-func (m *MockFileInfo) Sys() interface{}   { return nil }
+// Name returns the base name of the file.
+func (m *MockFileInfo) Name() string { return m.NameField }
+
+// Size returns the length in bytes for regular files.
+func (m *MockFileInfo) Size() int64 { return m.SizeField }
+
+// Mode returns the file mode bits. The mock always reports 0.
+func (m *MockFileInfo) Mode() os.FileMode { return 0 }
+
+// ModTime returns the modification time.
+func (m *MockFileInfo) ModTime() time.Time { return m.ModTimeField }
+
+// IsDir reports whether the entry represents a directory.
+func (m *MockFileInfo) IsDir() bool { return m.IsDirField }
+
+// Sys returns the underlying data source. Always nil for the mock.
+func (m *MockFileInfo) Sys() interface{} { return nil }
 
 // MockSFTPClient is an in-memory SFTP client for testing file transfer handlers.
 // Keys are cleaned paths like "/" or "/dir/file.txt". Values are either:
@@ -129,12 +142,12 @@ func (m *MockSFTPClient) Open(path string) (FileTransferFile, error) {
 		// directory: return a file that Stat() says IsDir
 		return &MockSFTPFile{
 			Reader: bytes.NewReader(nil),
-			info:   MockFileInfo{Name_: filepath.Base(path), IsDir_: true, Mod_: time.Now()},
+			info:   MockFileInfo{NameField: filepath.Base(path), IsDirField: true, ModTimeField: time.Now()},
 		}, nil
 	}
 	return &MockSFTPFile{
 		Reader: bytes.NewReader(e.content),
-		info:   MockFileInfo{Name_: filepath.Base(path), Size_: int64(len(e.content)), IsDir_: false, Mod_: time.Now()},
+		info:   MockFileInfo{NameField: filepath.Base(path), SizeField: int64(len(e.content)), IsDirField: false, ModTimeField: time.Now()},
 	}, nil
 }
 

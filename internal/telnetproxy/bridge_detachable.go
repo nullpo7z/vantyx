@@ -241,6 +241,7 @@ func (b *detachableBridge) doAttach(conn interface{}) {
 	}
 }
 
+//nolint:unparam // Error return preserved for signature parity with the bridge variants.
 func (b *detachableBridge) runAttachLoop(initialConn interface{}, attachCh <-chan session.AttachReq) error {
 	if initialConn != nil {
 		b.doAttach(initialConn)

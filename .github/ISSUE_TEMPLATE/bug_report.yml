@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a defect or unexpected behaviour in Vantyx.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+        Please do **not** use this template for security issues; see
+        [SECURITY.md](https://github.com/nullpo7z/vantyx/blob/main/SECURITY.md).
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps that trigger the bug.
+      placeholder: |
+        1. Start vantyx with ...
+        2. Open the SPA at ...
+        3. Click ...
+        4. See error ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Vantyx version / commit
+      placeholder: "e.g. v0.1.0 or commit sha"
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment method
+      options:
+        - Docker / docker compose
+        - Bare binary (go run / go build)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Host OS and version
+      placeholder: "e.g. Ubuntu 24.04, macOS 14.5"
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser (if UI-related)
+      placeholder: "e.g. Chrome 125, Firefox 127"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Paste relevant server logs (`docker compose logs vantyx`) and / or
+        browser console output. Redact secrets before sharing.
+      render: shell
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: This is not a security vulnerability (otherwise see SECURITY.md).
+          required: true

@@ -2,17 +2,10 @@ package httpapi
 
 import (
 	"context"
-	"crypto/rand"
-	"database/sql"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -22,87 +15,27 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
-	"github.com/nullpo7z/vantyx/internal/auth"
 	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/recording"
-	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
 	"github.com/nullpo7z/vantyx/internal/telnetproxy"
 )
 
+// supportsDetachableTerminal reports whether p has a long-lived
+// detachable bridge implementation (SSH or Telnet today).
 func supportsDetachableTerminal(p access.Protocol) bool {
 	return p == access.ProtocolSSH || p == access.ProtocolTelnet
 }
 
-// listTerminalSessions is satisfied by *session.Manager for GET /api/terminal/sessions.
+// listTerminalSessions is satisfied by [*session.Manager] for
+// GET /api/terminal/sessions.
 type listTerminalSessions interface {
 	ActiveIDs() []session.ID
 }
 
-// terminalSessionIDGen is set in tests to force duplicate session ID and cover Start error path.
-var terminalSessionIDGen func() session.ID
-
-func newTerminalSessionID() (session.ID, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return session.ID(hex.EncodeToString(b)), nil
-}
-
-func allowedWebSocketOrigin(r *http.Request) bool {
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin == "" {
-		// Some non-browser clients may omit Origin. Disallow by default (CSWSH protection).
-		// Can be enabled explicitly for local development/testing.
-		if strings.TrimSpace(os.Getenv("VANTYX_ALLOW_WS_NO_ORIGIN")) != "1" {
-			return false
-		}
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			host = r.RemoteAddr
-		}
-		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() {
-			return false
-		}
-		return true
-	}
-
-	u, err := url.Parse(origin)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return false
-	}
-
-	// Allow explicit allowlist (comma-separated full origins like https://example.com).
-	if v := strings.TrimSpace(os.Getenv("VANTYX_WS_ALLOWED_ORIGINS")); v != "" {
-		for _, s := range strings.Split(v, ",") {
-			if strings.TrimSpace(s) == origin {
-				return true
-			}
-		}
-	}
-
-	// Default: same-origin (scheme + host) only.
-	wantScheme := "https"
-	if r.TLS == nil {
-		wantScheme = "http"
-	}
-	wantHost := r.Host
-	if strings.EqualFold(u.Scheme, wantScheme) && strings.EqualFold(u.Host, wantHost) {
-		return true
-	}
-	return false
-}
-
-var wsUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return allowedWebSocketOrigin(r)
-	},
-}
-
-// terminalSessionStarter is satisfied by *session.Manager; allows tests to inject a stub.
+// terminalSessionStarter is satisfied by [*session.Manager]; allows
+// tests to inject a stub.
 type terminalSessionStarter interface {
 	Start(id session.ID, opts session.StartOptions, fn func(context.Context, *session.Session)) (*session.Session, error)
 	Get(id session.ID) (*session.Session, bool)
@@ -110,107 +43,23 @@ type terminalSessionStarter interface {
 	Stop(id session.ID)
 }
 
-// wsAuthMessage is the first WebSocket message for new SSH connection (credentials or use_stored_credentials).
-type wsAuthMessage struct {
-	UseStoredCredentials bool   `json:"use_stored_credentials"`
-	Username             string `json:"username"`
-	Password             string `json:"password"`
-	PrivateKeyPassphrase string `json:"private_key_passphrase"` // 保存済み秘密鍵が暗号化されている場合に接続時に入力
-	Name                 string `json:"name"`
-	Description          string `json:"description"`
+// writeJSON serialises v as JSON to w. Caller should not have written
+// the body before calling.
+func writeJSON(w http.ResponseWriter, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
 }
 
-// wsReadConn is the minimal interface needed from *websocket.Conn for readTerminalCredentials.
-type wsReadConn interface {
-	ReadMessage() (int, []byte, error)
-	SetReadDeadline(time.Time) error
-}
-
-// readTerminalCredentials reads the first text message and returns credentials.
-// If use_stored_credentials is true, uses target's stored SSH username/password/key; client may send password or private_key_passphrase when not stored.
-func readTerminalCredentials(conn wsReadConn, target *access.Target) (sshproxy.Credentials, error) {
-	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
-	mt, msg, err := conn.ReadMessage()
-	if err != nil {
-		return sshproxy.Credentials{}, err
-	}
-	if mt != websocket.TextMessage {
-		return sshproxy.Credentials{}, errInvalidCredentials
-	}
-	var m wsAuthMessage
-	if err := json.Unmarshal(msg, &m); err != nil {
-		return sshproxy.Credentials{}, errInvalidCredentials
-	}
-	if m.UseStoredCredentials {
-		if target.SSHUsername == "" {
-			return sshproxy.Credentials{}, errNoStoredCredentials
-		}
-		// パスワードや秘密鍵は未保存でも可。接続時にクライアントが password または private_key_passphrase を送る。
-		// 接続時に入力された値は保存済みを上書きする（誤保存の修正や、その場で正しい値を入力できるようにする）。
-		password := target.SSHPassword
-		if m.Password != "" {
-			password = m.Password
-		}
-		creds := sshproxy.Credentials{
-			Username:    target.SSHUsername,
-			Password:    password,
-			Name:        m.Name,
-			Description: m.Description,
-		}
-		if target.Protocol != access.ProtocolTelnet {
-			keyPassphrase := target.SSHPrivateKeyPassphrase
-			if m.PrivateKeyPassphrase != "" {
-				keyPassphrase = m.PrivateKeyPassphrase
-			}
-			creds.PrivateKey = target.SSHPrivateKey
-			creds.PrivateKeyPassphrase = keyPassphrase
-		}
-		if err := credentialsDecrypted(creds); err != nil {
-			return sshproxy.Credentials{}, err
-		}
-		return creds, nil
-	}
-	if m.Username == "" {
-		return sshproxy.Credentials{}, errInvalidCredentials
-	}
-	creds := sshproxy.Credentials{
-		Username:    m.Username,
-		Password:    m.Password,
-		Name:        m.Name,
-		Description: m.Description,
-	}
-	// ターゲットに保存済みの秘密鍵があり、クライアントがパスフレーズを送った場合はその鍵を使う（SSH のみ）
-	if target.Protocol != access.ProtocolTelnet && target.SSHPrivateKey != "" && m.PrivateKeyPassphrase != "" {
-		creds.PrivateKey = target.SSHPrivateKey
-		creds.PrivateKeyPassphrase = m.PrivateKeyPassphrase
-	}
-	if err := credentialsDecrypted(creds); err != nil {
-		return sshproxy.Credentials{}, err
-	}
-	return creds, nil
-}
-
-// credentialsDecrypted returns an error if PrivateKey or PrivateKeyPassphrase is still ciphertext (decryption failed at rest).
-func credentialsDecrypted(creds sshproxy.Credentials) error {
-	if creds.PrivateKey != "" && strings.HasPrefix(creds.PrivateKey, secret.CiphertextVersionPrefix) {
-		return errCredentialsNotDecrypted
-	}
-	if creds.PrivateKeyPassphrase != "" && strings.HasPrefix(creds.PrivateKeyPassphrase, secret.CiphertextVersionPrefix) {
-		return errCredentialsNotDecrypted
-	}
-	return nil
-}
-
-var (
-	errInvalidCredentials      = errors.New("invalid or missing credentials (send JSON: {\"username\":\"...\",\"password\":\"...\"} or {\"use_stored_credentials\":true})")
-	errNoStoredCredentials     = errors.New("stored credentials not configured for this target")
-	errCredentialsNotDecrypted = errors.New("保存された認証情報の復号に失敗しています。VANTYX_ENCRYPTION_KEY を確認してください")
-)
-
-// handleSSHWebSocket upgrades the connection and starts a goroutine-backed terminal session.
-// Requires query parameter target_id; the user must have access to that target.
-// For Phase 2, the session still behaves as an echo server; actual SSH bridging follows.
+// handleSSHWebSocket upgrades the connection and starts a
+// goroutine-backed terminal session.
+//
+// New connection: requires query parameter target_id; the user must
+// have access to that target.
+//
+// Resume (attach): requires query parameter session_id; no target_id
+// or credentials are sent. The caller must own the existing session.
+//
+//nolint:gocyclo // handles both new-connection and resume code paths.
 func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("vantyx_session")
 	if err != nil || cookie.Value == "" {
@@ -229,42 +78,9 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resume (attach) to existing session: session_id in query, no target_id or credentials.
+	// Resume (attach) to an existing session.
 	if sessionIDParam := r.URL.Query().Get("session_id"); sessionIDParam != "" {
-		termSess, ok := a.TerminalSessionManager.Get(session.ID(sessionIDParam))
-		if !ok || termSess.UserID != sess.UserID {
-			writeJSONError(w, "session not found or access denied", http.StatusNotFound)
-			return
-		}
-		canAccess, err := a.userCanAccessTarget(r.Context(), sess.UserID, access.TargetID(termSess.TargetID))
-		if err != nil {
-			writeInternalError(w, err)
-			return
-		}
-		if !canAccess {
-			writeJSONError(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		conn, err := wsUpgrader.Upgrade(w, r, nil)
-		if err != nil {
-			audit("terminal_ws_upgrade_failed_attach", auditFields{
-				"session_id": sessionIDParam,
-				"error":      err.Error(),
-			})
-			writeJSONError(w, "failed to upgrade connection", http.StatusBadRequest)
-			return
-		}
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(""))
-		select {
-		case termSess.AttachCh <- session.AttachReq{Conn: conn}:
-			audit("terminal_session_attach", auditFields{
-				"session_id": sessionIDParam,
-				"user_id":    sess.UserID,
-			})
-		default:
-			_ = conn.WriteMessage(websocket.TextMessage, []byte("error: session attach slot busy"))
-			_ = conn.Close()
-		}
+		a.handleTerminalAttach(w, r, sess.UserID, sessionIDParam)
 		return
 	}
 
@@ -312,12 +128,10 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		"ssh_user":  creds.Username,
 	})
 
-	// terminalSessionIDGen is overridden in tests to trigger Start id-collision error path.
 	var id session.ID
 	if terminalSessionIDGen != nil {
 		id = terminalSessionIDGen()
 	} else {
-		var err error
 		id, err = newTerminalSessionID()
 		if err != nil {
 			audit("terminal_session_idgen_failed", auditFields{
@@ -378,13 +192,54 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// TerminalSessionItem is one entry in GET /api/terminal/sessions response.
+// handleTerminalAttach handles the resume branch of /ws/ssh: the
+// caller already owns a backgrounded session and wants to re-attach a
+// fresh WebSocket connection to it.
+func (a *App) handleTerminalAttach(w http.ResponseWriter, r *http.Request, userID, sessionIDParam string) {
+	termSess, ok := a.TerminalSessionManager.Get(session.ID(sessionIDParam))
+	if !ok || termSess.UserID != userID {
+		writeJSONError(w, "session not found or access denied", http.StatusNotFound)
+		return
+	}
+	canAccess, err := a.userCanAccessTarget(r.Context(), userID, access.TargetID(termSess.TargetID))
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if !canAccess {
+		writeJSONError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		audit("terminal_ws_upgrade_failed_attach", auditFields{
+			"session_id": sessionIDParam,
+			"error":      err.Error(),
+		})
+		writeJSONError(w, "failed to upgrade connection", http.StatusBadRequest)
+		return
+	}
+	_ = conn.WriteMessage(websocket.TextMessage, []byte(""))
+	select {
+	case termSess.AttachCh <- session.AttachReq{Conn: conn}:
+		audit("terminal_session_attach", auditFields{
+			"session_id": sessionIDParam,
+			"user_id":    userID,
+		})
+	default:
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: session attach slot busy"))
+		_ = conn.Close()
+	}
+}
+
+// TerminalSessionItem is one entry in the GET /api/terminal/sessions
+// response.
 type TerminalSessionItem struct {
 	SessionID   string    `json:"session_id"`
 	TargetID    string    `json:"target_id"`
 	TargetName  string    `json:"target_name"`
-	TargetPath  string    `json:"target_path,omitempty"` // ターゲットの階層パス（例: prod/network）
-	Protocol    string    `json:"protocol"`              // ターゲットのプロトコル（ssh / telnet 等）
+	TargetPath  string    `json:"target_path,omitempty"` // hierarchical path of the target (e.g. "prod/network").
+	Protocol    string    `json:"protocol"`              // target protocol (ssh / telnet / ...).
 	Name        string    `json:"name,omitempty"`
 	Description string    `json:"description,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -412,7 +267,8 @@ func terminalSessionItemFrom(sess *session.Session, mgr *session.Manager, protoc
 	return item
 }
 
-// handleTerminalSessions returns the list of active terminal sessions for the current user.
+// handleTerminalSessions returns the list of active terminal sessions
+// for the current user.
 func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
@@ -456,7 +312,8 @@ func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"items": items})
 }
 
-// handleTerminalSessionDelete terminates the given terminal session. Caller must own the session.
+// handleTerminalSessionDelete terminates the given terminal session.
+// Caller must own the session.
 func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
@@ -494,282 +351,21 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleListRecordings returns recordings for the current user (metadata only, no file_path).
-// Admins may pass user_id to list another user's recordings.
-func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
-	userID := strings.TrimSpace(a.currentUserID(r))
-	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if a.DB == nil {
-		writeJSON(w, map[string]interface{}{"items": []interface{}{}})
-		return
-	}
-	ctx := r.Context()
-	q := r.URL.Query()
-
-	filterUserID := userID
-	if requestedUser := strings.TrimSpace(q.Get("user_id")); requestedUser != "" && requestedUser != userID {
-		u, err := a.UserStore.GetByID(userID)
-		if err != nil {
-			writeInternalError(w, err)
-			return
-		}
-		if u == nil || u.Role != auth.RoleAdmin {
-			writeJSONError(w, "forbidden: admin only", http.StatusForbidden)
-			return
-		}
-		filterUserID = requestedUser
-	}
-
-	from, to, err := parseTimeRange(q.Get("from"), q.Get("to"), time.Now().UTC())
-	if err != nil {
-		writeTimeRangeError(w, err)
-		return
-	}
-
-	targetID := strings.TrimSpace(q.Get("target_id"))
-	channelType := strings.TrimSpace(q.Get("channel_type"))
-	sessionID := strings.TrimSpace(q.Get("session_id"))
-
-	query := `SELECT id, user_id, target_id, session_id, channel_type, started_at, ended_at, COALESCE(session_name, ''), COALESCE(session_description, '') FROM recordings WHERE user_id = ?`
-	args := []interface{}{filterUserID}
-	if targetID != "" {
-		query += ` AND target_id = ?`
-		args = append(args, targetID)
-	}
-	if channelType != "" {
-		query += ` AND channel_type = ?`
-		args = append(args, channelType)
-	}
-	if sessionID != "" {
-		query += ` AND session_id = ?`
-		args = append(args, sessionID)
-	}
-	// Recordings may use "2006-01-02 15:04:05" (browser) or RFC3339 (CLI/tests).
-	// Extend upper bound slightly so rows inserted at "now" are included (to is exclusive).
-	toRec := to.Add(time.Minute)
-	fromSpace := formatRecordingTime(from)
-	toSpace := formatRecordingTime(toRec)
-	fromRFC := from.UTC().Format(time.RFC3339)
-	toRFC := toRec.UTC().Format(time.RFC3339)
-	query += ` AND ((started_at >= ? AND started_at < ?) OR (started_at >= ? AND started_at < ?))`
-	args = append(args, fromSpace, toSpace, fromRFC, toRFC)
-	query += ` ORDER BY started_at DESC LIMIT 200`
-	rows, err := a.DB.QueryContext(ctx, query, args...)
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	defer rows.Close()
-	var items []map[string]interface{}
-	for rows.Next() {
-		var id, userID, tID, sessID, channelType, startedAt, sessName, sessDesc string
-		var endedAt sql.NullString
-		if err := rows.Scan(&id, &userID, &tID, &sessID, &channelType, &startedAt, &endedAt, &sessName, &sessDesc); err != nil {
-			continue
-		}
-		items = append(items, map[string]interface{}{
-			"id":                  id,
-			"user_id":             userID,
-			"target_id":           tID,
-			"session_id":          sessID,
-			"channel_type":        channelType,
-			"started_at":          startedAt,
-			"ended_at":            endedAt.String,
-			"session_name":        sessName,
-			"session_description": sessDesc,
-		})
-	}
-	writeJSON(w, map[string]interface{}{"items": items})
-}
-
-// handleGetRecordingFile serves the recording file. Query format=cast|gif|webm (default cast).
-// cast = asciinema .cast; gif/webm require agg (and ffmpeg for webm) to be installed, else 503.
-func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
-	userID := strings.TrimSpace(a.currentUserID(r))
-	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	rawID := chi.URLParam(r, "recording_id")
-	if rawID == "" {
-		writeJSONError(w, "recording_id required", http.StatusBadRequest)
-		return
-	}
-	recordingID := rawID
-	if decoded, e := url.PathUnescape(rawID); e == nil {
-		recordingID = decoded
-	}
-	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
-	if format == "" {
-		format = "cast"
-	}
-	switch format {
-	case "cast", "gif", "webm":
-	default:
-		writeJSONError(w, "format must be cast, gif, or webm", http.StatusBadRequest)
-		return
-	}
-	if a.DB == nil {
-		writeJSONError(w, "recordings not available", http.StatusServiceUnavailable)
-		return
-	}
-	var (
-		filePath string
-		err      error
-	)
-	err = a.DB.QueryRowContext(r.Context(), `SELECT file_path FROM recordings WHERE id = ? AND user_id = ?`, recordingID, userID).Scan(&filePath)
-	if err == sql.ErrNoRows {
-		writeJSONError(w, "recording not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	recordingDir := os.Getenv("VANTYX_RECORDINGS_DIR")
-	if recordingDir == "" {
-		writeJSONError(w, "recordings not configured", http.StatusServiceUnavailable)
-		return
-	}
-	absPath, err := filepath.Abs(filePath)
-	if err != nil {
-		writeJSONError(w, "invalid path", http.StatusBadRequest)
-		return
-	}
-	absDir, err := filepath.Abs(recordingDir)
-	if err != nil {
-		writeJSONError(w, "invalid path", http.StatusBadRequest)
-		return
-	}
-	rel, err := filepath.Rel(absDir, absPath)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		writeJSONError(w, "invalid path", http.StatusBadRequest)
-		return
-	}
-	tryOpen := func(path string) (*os.File, error) {
-		return os.Open(path) // #nosec G304 -- path validated above (no .. or prefix)
-	}
-	sanitizeBasename := func(name string) string {
-		const ext = ".cast"
-		if !strings.HasSuffix(name, ext) {
-			s := strings.ReplaceAll(name, ":", "-")
-			return strings.ReplaceAll(s, ".", "-")
-		}
-		prefix := name[:len(name)-len(ext)]
-		safe := strings.ReplaceAll(prefix, ":", "-")
-		safe = strings.ReplaceAll(safe, ".", "-")
-		return safe + ext
-	}
-	castPath := filePath
-	f, err := tryOpen(filePath)
-	if err != nil {
-		dir, base := filepath.Dir(filePath), filepath.Base(filePath)
-		safeBase := sanitizeBasename(base)
-		if safeBase != base {
-			castPath = filepath.Join(dir, safeBase)
-			f, err = tryOpen(castPath)
-		}
-	}
-	if err != nil {
-		writeJSONError(w, "recording file not found", http.StatusNotFound)
-		return
-	}
-	if format == "cast" {
-		defer f.Close()
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(castPath))
-		_, _ = io.Copy(w, f)
-		return
-	}
-	f.Close()
-	// GIF or WebM: convert with agg (and ffmpeg for webm)
-	outPath, contentType, disposition, err := convertCastToVideo(castPath, format)
-	if err != nil {
-		audit("recording_convert_failed", auditFields{
-			"id":     recordingID,
-			"format": format,
-			"error":  err.Error(),
-		})
-		writeJSONError(w, "video export unavailable: "+err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer os.Remove(outPath)
-	out, err := os.Open(outPath) // #nosec G304 -- path from convertCastToVideo (temp file we created)
-	if err != nil {
-		writeJSONError(w, "failed to read converted file", http.StatusInternalServerError)
-		return
-	}
-	defer out.Close()
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Disposition", disposition)
-	_, _ = io.Copy(w, out)
-}
-
-// convertCastToVideo converts a .cast file to gif or webm using agg (and ffmpeg for webm).
-// Returns (outPath, contentType, contentDisposition, error). Caller must os.Remove(outPath).
-func convertCastToVideo(castPath, format string) (string, string, string, error) {
-	aggPath, err := exec.LookPath("agg")
-	if err != nil {
-		return "", "", "", errors.New("agg not found in PATH (install asciinema-agg for GIF/WebM export)")
-	}
-	dir := filepath.Dir(castPath)
-	gifFile, err := os.CreateTemp(dir, "rec-*.gif")
-	if err != nil {
-		return "", "", "", err
-	}
-	gifPath := gifFile.Name()
-	gifFile.Close()
-	defer func() {
-		if format == "webm" {
-			_ = os.Remove(gifPath)
-		}
-	}()
-	cmd := exec.Command(aggPath, castPath, gifPath) // #nosec G204 -- paths from validated castPath and temp file
-	if out, runErr := cmd.CombinedOutput(); runErr != nil {
-		_ = os.Remove(gifPath)
-		return "", "", "", errors.New(strings.TrimSpace(string(out)) + ": " + runErr.Error())
-	}
-	if format == "gif" {
-		return gifPath, "image/gif", `attachment; filename="recording.gif"`, nil
-	}
-	// WebM: ffmpeg -i gifPath -c:v libvpx-vp9 -pix_fmt yuv420p -an -b:v 0 -crf 30 out.webm
-	// Use yuv420p (not yuva420p); terminal GIFs from agg are opaque. -vf scale ensures even dimensions.
-	ffmpegPath, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		return "", "", "", errors.New("ffmpeg not found in PATH (required for WebM export)")
-	}
-	webmFile, err := os.CreateTemp(dir, "rec-*.webm")
-	if err != nil {
-		return "", "", "", err
-	}
-	webmPath := webmFile.Name()
-	webmFile.Close()
-	cmd = exec.Command(ffmpegPath, "-y", "-i", gifPath,
-		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-		"-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p", "-an", "-b:v", "0", "-crf", "30",
-		webmPath) // #nosec G204
-	if out, runErr := cmd.CombinedOutput(); runErr != nil {
-		_ = os.Remove(webmPath)
-		return "", "", "", errors.New("ffmpeg: " + strings.TrimSpace(string(out)))
-	}
-	return webmPath, "video/webm", `attachment; filename="recording.webm"`, nil
-}
-
-func writeJSON(w http.ResponseWriter, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-// runDetachableBridge starts the SSH bridge and keeps it running when the client detaches.
-// Initial conn is attached first; further attaches (resume) come via termSess.AttachCh.
-// When VANTYX_RECORDINGS_DIR is set, asciinema-format recording is written and metadata stored in recordings table.
-// cols and rows are the initial terminal size (from client) for PTY and recording; 0 uses bridge default.
+// runDetachableBridge starts the SSH / Telnet bridge and keeps it
+// running when the client detaches. The initial conn is attached
+// first; further attaches (resume) come via termSess.AttachCh.
+//
+// When VANTYX_RECORDINGS_DIR is set an asciinema-format recording is
+// written and metadata is stored in the recordings table.
+//
+// cols / rows are the initial terminal size (from the client) used for
+// PTY and recording; 0 falls back to the bridge default.
+//
+//nolint:gocyclo // bridge coordinates recording, command logging, and the upstream bridge.
 func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session, manager terminalSessionStarter, id session.ID, conn *websocket.Conn, target *access.Target, creds sshproxy.Credentials, cols, rows int) {
 	_ = conn.WriteMessage(websocket.TextMessage, []byte(""))
-	// Send session_id so the client can reconnect (resume) without credentials.
+	// Send session_id so the client can reconnect (resume) without
+	// credentials.
 	if b, err := json.Marshal(struct {
 		SessionID string `json:"session_id"`
 	}{SessionID: string(id)}); err == nil {
@@ -777,75 +373,11 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 	}
 	touch := func() { manager.Touch(id) }
 
-	var tee io.Writer
-	var stdinRecorder sshproxy.StdinRecorder
-	var recordingCloser func()
-	if recordingDir := os.Getenv("VANTYX_RECORDINGS_DIR"); recordingDir != "" {
-		_ = os.MkdirAll(recordingDir, 0750) // #nosec G703 -- path from env, dir is admin-configured
-		// セッションIDは RFC3339Nano でコロンを含むため、ファイル名として使う場合はサニタイズ（Windows 等で不可の文字を置換）
-		safeName := strings.ReplaceAll(string(id), ":", "-")
-		safeName = strings.ReplaceAll(safeName, ".", "-")
-		castPath := filepath.Join(recordingDir, safeName+".cast")
-		f, err := os.Create(castPath) // #nosec G703 G304 -- path under recordingDir, safeName sanitized
-		if err != nil {
-			audit("recording_create_failed", auditFields{
-				"session_id": id,
-				"path":       castPath,
-				"error":      err.Error(),
-			})
-		} else {
-			startedAt := time.Now().UTC()
-			w, h := cols, rows
-			if w <= 0 {
-				w = 80
-			}
-			if h <= 0 {
-				h = 24
-			}
-			asc := recording.NewAsciinemaWriter(f, w, h)
-			tee = asc
-			stdinRecorder = asc
-			if a.DB != nil {
-				sessName := termSess.Name
-				sessDesc := termSess.Description
-				if _, err := a.DB.ExecContext(ctx, `INSERT INTO recordings (id, user_id, target_id, session_id, channel_type, file_path, started_at, session_name, session_description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-					string(id), termSess.UserID, termSess.TargetID, string(id), "browser", castPath, startedAt.Format("2006-01-02 15:04:05"), sessName, sessDesc); err != nil {
-					audit("recording_insert_failed", auditFields{
-						"session_id": id,
-						"error":      err.Error(),
-					})
-				}
-			}
-			recordingCloser = func() {
-				_ = f.Sync() // バッファをディスクにフラッシュしてから閉じる
-				_ = f.Close()
-				if a.DB != nil {
-					_, _ = a.DB.ExecContext(context.Background(), `UPDATE recordings SET ended_at = ? WHERE id = ?`, time.Now().UTC().Format("2006-01-02 15:04:05"), string(id))
-				}
-			}
-		}
-		if recordingCloser != nil {
-			defer recordingCloser()
-		}
+	tee, stdinRecorder, recordingCloser := a.setupRecording(ctx, termSess, id, cols, rows)
+	if recordingCloser != nil {
+		defer recordingCloser()
 	}
-
-	// Command log recorder: stdin + PTY echo (for tab completion) into command_logs.
-	cmdRec := newCommandLogRecorder(a.CommandLogStore, string(id), termSess.UserID, termSess.TargetID)
-	if cmdRec != nil {
-		prev := stdinRecorder
-		stdinRecorder = sshproxy.StdinRecorderFunc(func(p []byte) {
-			if prev != nil {
-				prev.RecordInput(p)
-			}
-			cmdRec.RecordInput(p)
-		})
-		stdoutTap := commandLogStdoutWriter{rec: cmdRec}
-		if tee != nil {
-			tee = io.MultiWriter(tee, stdoutTap)
-		} else {
-			tee = stdoutTap
-		}
-	}
+	tee, stdinRecorder = a.wrapWithCommandLog(termSess, id, tee, stdinRecorder)
 
 	var bridgeErr error
 	var endReason, endMsg string
@@ -877,27 +409,88 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(endMsg))
 	}
 	_ = conn.Close()
-	// コールバックから return すると Manager の goroutine が sess.done を close し delete(m.sessions, id) するため、
-	// ここで manager.Stop(id) を呼ぶとデッドロックになる（Stop は <-sess.done で待つが、return するまで done は close されない）。
-	// セッション一覧からの削除はコールバック return 時に自動で行われる。
+	// Returning from this callback lets the Manager goroutine close
+	// sess.done and call delete(m.sessions, id). Calling
+	// manager.Stop(id) here would deadlock because Stop waits on
+	// <-sess.done, which is only closed once this callback returns.
 }
 
-// InsertRecording inserts a recording row (for CLI or other non-browser channels).
-// Used by sshd when RecordingsDir and RecordingStore are set. No-op if a.DB is nil.
-func (a *App) InsertRecording(ctx context.Context, id, userID, targetID, sessionID, channelType, filePath, startedAt, sessionName, sessionDesc string) error {
-	if a.DB == nil {
-		return nil
+// setupRecording configures asciinema recording for a session when
+// VANTYX_RECORDINGS_DIR is set. It returns the writer tee, the stdin
+// recorder, and a closer that flushes / closes the cast file and
+// updates the recordings table. When recording is disabled all three
+// return values are zero.
+func (a *App) setupRecording(ctx context.Context, termSess *session.Session, id session.ID, cols, rows int) (io.Writer, sshproxy.StdinRecorder, func()) {
+	recordingDir := os.Getenv("VANTYX_RECORDINGS_DIR")
+	if recordingDir == "" {
+		return nil, nil, nil
 	}
-	_, err := a.DB.ExecContext(ctx, `INSERT INTO recordings (id, user_id, target_id, session_id, channel_type, file_path, started_at, session_name, session_description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, userID, targetID, sessionID, channelType, filePath, startedAt, sessionName, sessionDesc)
-	return err
+	_ = os.MkdirAll(recordingDir, 0750) // #nosec G703 -- path from env, dir is admin-configured.
+	// Session IDs are RFC3339Nano timestamps containing colons. Replace
+	// characters that are illegal on Windows file systems so the
+	// recording file can be opened by tooling on any host.
+	safeName := strings.ReplaceAll(string(id), ":", "-")
+	safeName = strings.ReplaceAll(safeName, ".", "-")
+	castPath := filepath.Join(recordingDir, safeName+".cast")
+	f, err := os.Create(castPath) // #nosec G703 G304 -- path under recordingDir, safeName sanitised.
+	if err != nil {
+		audit("recording_create_failed", auditFields{
+			"session_id": id,
+			"path":       castPath,
+			"error":      err.Error(),
+		})
+		return nil, nil, nil
+	}
+	startedAt := time.Now().UTC()
+	w, h := cols, rows
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 24
+	}
+	asc := recording.NewAsciinemaWriter(f, w, h)
+	if a.DB != nil {
+		sessName := termSess.Name
+		sessDesc := termSess.Description
+		if _, err := a.DB.ExecContext(ctx, `INSERT INTO recordings (id, user_id, target_id, session_id, channel_type, file_path, started_at, session_name, session_description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			string(id), termSess.UserID, termSess.TargetID, string(id), "browser", castPath, startedAt.Format("2006-01-02 15:04:05"), sessName, sessDesc); err != nil {
+			audit("recording_insert_failed", auditFields{
+				"session_id": id,
+				"error":      err.Error(),
+			})
+		}
+	}
+	closer := func() {
+		_ = f.Sync() // flush the OS buffer to disk before closing.
+		_ = f.Close()
+		if a.DB != nil {
+			_, _ = a.DB.ExecContext(context.Background(), `UPDATE recordings SET ended_at = ? WHERE id = ?`, time.Now().UTC().Format("2006-01-02 15:04:05"), string(id))
+		}
+	}
+	return asc, asc, closer
 }
 
-// UpdateRecordingEnded sets ended_at for a recording. No-op if a.DB is nil.
-func (a *App) UpdateRecordingEnded(ctx context.Context, id, endedAt string) error {
-	if a.DB == nil {
-		return nil
+// wrapWithCommandLog adds a command-log recorder on top of an existing
+// tee / stdin recorder pair. The recorder captures stdin and PTY echo
+// (for tab completion) into the command_logs table.
+func (a *App) wrapWithCommandLog(termSess *session.Session, id session.ID, tee io.Writer, stdinRecorder sshproxy.StdinRecorder) (io.Writer, sshproxy.StdinRecorder) {
+	cmdRec := newCommandLogRecorder(a.CommandLogStore, string(id), termSess.UserID, termSess.TargetID)
+	if cmdRec == nil {
+		return tee, stdinRecorder
 	}
-	_, err := a.DB.ExecContext(ctx, `UPDATE recordings SET ended_at = ? WHERE id = ?`, endedAt, id)
-	return err
+	prev := stdinRecorder
+	wrapped := sshproxy.StdinRecorderFunc(func(p []byte) {
+		if prev != nil {
+			prev.RecordInput(p)
+		}
+		cmdRec.RecordInput(p)
+	})
+	stdoutTap := commandLogStdoutWriter{rec: cmdRec}
+	if tee != nil {
+		tee = io.MultiWriter(tee, stdoutTap)
+	} else {
+		tee = stdoutTap
+	}
+	return tee, wrapped
 }

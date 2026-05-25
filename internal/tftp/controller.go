@@ -13,9 +13,10 @@ import (
 // controller manages the lifecycle of the TFTP server based on the number of
 // enabled TFTP targets in the current process.
 //
-// フロントエンドからの TFTP トグルは最終的に /api/targets の
-// Create/Delete に集約される想定なので、そのイベントに応じて
-// refCount を増減させ、0→1 で起動・1→0 で Shutdown する。
+// The frontend TFTP toggle ultimately maps to /api/targets create /
+// delete events. Controller bumps the reference count on those events
+// and starts the server when refCount transitions 0→1 / stops it on
+// the 1→0 transition.
 
 type controller struct {
 	mu       sync.Mutex
@@ -99,7 +100,8 @@ func NotifyTargetCreated(ctx context.Context, store access.TargetStore, proto ac
 
 	addr := strings.TrimSpace(os.Getenv("VANTYX_TFTP_LISTEN"))
 	if addr == "" {
-		// コンテナで nonroot のため 69 は使えない。6969 をデフォルトにし、docker で 69:6969/udp でマップする。
+		// The container runs as non-root and therefore cannot bind to UDP 69.
+		// Default to 6969 inside the container; docker compose maps host 69 → container 6969.
 		addr = "0.0.0.0:6969"
 		slog.Info("TFTP server using default listen address (set VANTYX_TFTP_LISTEN to override)", "addr", addr)
 	}

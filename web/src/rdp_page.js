@@ -3,7 +3,7 @@
  * Browser-based RDP via noVNC (FreeRDP→Xvfb→x11vnc on server side).
  * Connects immediately on page load using stored target credentials.
  */
-import RFB from '@novnc/novnc/lib/rfb.js'
+import RFB from '@novnc/novnc'
 import API from './api.js'
 function escapeHtml(s) {
   if (s == null) return ''

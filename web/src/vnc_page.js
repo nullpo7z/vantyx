@@ -1,7 +1,7 @@
 /**
  * VNC viewer page: connects to /ws/vnc?target_id=... via noVNC (RFB over WebSocket).
  */
-import RFB from '@novnc/novnc/lib/rfb.js'
+import RFB from '@novnc/novnc'
 
 export function renderVncPage(container) {
   const params = new URLSearchParams(window.location.search)

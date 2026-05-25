@@ -286,6 +286,10 @@ func (m *Manager) Cancel(id, userID string) error {
 }
 
 // SetState updates job state and optional error message and persists the change.
+// On a successful completion the in-memory progress is also normalised to total
+// (since progressCopy may have written `progress == total` after the throttled
+// DB write, leaving the DB row stuck at a sub-100% value). The latest progress
+// is then flushed to the DB unconditionally so history rows are consistent.
 func (j *Job) SetState(state State, errMsg string) {
 	if j == nil || j.mgr == nil {
 		return
@@ -295,8 +299,15 @@ func (j *Job) SetState(state State, errMsg string) {
 	j.State = state
 	j.Error = errMsg
 	j.UpdatedAt = now
+	if state == StateCompleted && j.Total > 0 && j.Progress < j.Total {
+		j.Progress = j.Total
+	}
+	progress := j.Progress
+	total := j.Total
+	j.lastPersistedAt = now
 	j.mu.Unlock()
 	if j.mgr.store != nil {
+		_ = j.mgr.store.UpdateProgress(context.Background(), j.ID, progress, total, now)
 		_ = j.mgr.store.UpdateState(context.Background(), j.ID, state, errMsg, now)
 	}
 	j.mgr.emit(j)

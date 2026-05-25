@@ -230,6 +230,74 @@ func TestManagerNotifierFires(t *testing.T) {
 	}
 }
 
+// TestJobCompletedNormalizesProgress verifies that SetState(StateCompleted)
+// (a) flushes the in-memory progress to the DB even when the previous
+// SetProgress call was suppressed by the 200ms throttle, and
+// (b) bumps a sub-total progress up to total so completed history rows
+// never appear as e.g. "4% completed".
+func TestJobCompletedNormalizesProgress(t *testing.T) {
+	m, _ := newTestManager(t)
+
+	// Case 1: progress < total, then SetState(Completed) should normalize.
+	j1, _ := m.Create(CreateOpts{
+		UserID: "u1", TargetID: "t1",
+		Direction: DirectionDownload, Backend: BackendRemote,
+		Total: 1000,
+	}, func() {})
+	j1.SetProgress(100, 1000) // first write goes through (throttle is unset)
+	j1.SetState(StateCompleted, "")
+
+	got, ok := m.Get(j1.ID)
+	if !ok {
+		t.Fatal("missing job after completion")
+	}
+	if got.Progress != 1000 || got.Total != 1000 {
+		t.Fatalf("expected progress=total=1000, got progress=%d total=%d", got.Progress, got.Total)
+	}
+	if got.State != StateCompleted {
+		t.Fatalf("expected completed, got %s", got.State)
+	}
+
+	// Case 2: throttled progress write — final SetProgress is dropped, but
+	// SetState(Completed) must still flush the in-memory value to DB.
+	j2, _ := m.Create(CreateOpts{
+		UserID: "u1", TargetID: "t1",
+		Direction: DirectionDownload, Backend: BackendRemote,
+		Total: 2000,
+	}, func() {})
+	// First write persists immediately, second write is within 200ms and dropped
+	// from the DB but updates the in-memory Progress.
+	j2.SetProgress(500, 2000)
+	j2.SetProgress(2000, 2000)
+	j2.SetState(StateCompleted, "")
+	got2, _ := m.Get(j2.ID)
+	if got2.Progress != 2000 {
+		t.Fatalf("expected progress flushed to 2000, got %d", got2.Progress)
+	}
+}
+
+// TestJobFailedKeepsPartialProgress verifies that failed/cancelled states do
+// NOT artificially bump progress (we still want to see how far it got), but
+// the final in-memory value must still be flushed to the DB.
+func TestJobFailedKeepsPartialProgress(t *testing.T) {
+	m, _ := newTestManager(t)
+	j, _ := m.Create(CreateOpts{
+		UserID: "u1", TargetID: "t1",
+		Direction: DirectionDownload, Backend: BackendRemote,
+		Total: 1000,
+	}, func() {})
+	j.SetProgress(123, 1000)
+	j.SetProgress(456, 1000) // throttled out of DB
+	j.SetState(StateFailed, "boom")
+	got, _ := m.Get(j.ID)
+	if got.Progress != 456 {
+		t.Fatalf("expected progress flushed to 456, got %d", got.Progress)
+	}
+	if got.State != StateFailed || got.Error != "boom" {
+		t.Fatalf("expected failed/boom, got %s/%s", got.State, got.Error)
+	}
+}
+
 func TestManagerNilStore(t *testing.T) {
 	m := NewManager(t.TempDir(), nil)
 	if _, ok := m.Get("any"); ok {

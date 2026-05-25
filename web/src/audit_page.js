@@ -645,14 +645,33 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
     return `<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${cls}">${escapeHtml(label)}</span>`
   }
 
+  function formatBytes(n) {
+    const v = Number(n || 0)
+    if (!Number.isFinite(v) || v <= 0) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    let i = 0
+    let x = v
+    while (x >= 1024 && i < units.length - 1) {
+      x /= 1024
+      i++
+    }
+    return (i === 0 ? x.toFixed(0) : x.toFixed(x < 10 ? 2 : 1)) + ' ' + units[i]
+  }
+
   function ftProgress(it) {
     const total = Number(it.total || 0)
-    const prog = Number(it.progress || 0)
+    let prog = Number(it.progress || 0)
+    const state = String(it.state || '')
+    // 古いデータ（throttle で進捗が DB に書かれないまま完了したもの）の救済:
+    // 状態が completed かつ total が分かっていれば 100% として扱う。
+    if (state === 'completed' && total > 0 && prog < total) {
+      prog = total
+    }
     if (total > 0) {
       const pct = Math.min(100, Math.round((prog / total) * 100))
-      return `${pct}%（${prog}/${total}）`
+      return `${pct}%（${formatBytes(prog)} / ${formatBytes(total)}）`
     }
-    return prog > 0 ? `${prog} B` : '—'
+    return prog > 0 ? formatBytes(prog) : '—'
   }
 
   function ftQueryParams() {

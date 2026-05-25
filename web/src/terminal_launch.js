@@ -137,7 +137,7 @@ export async function openTerminalForTarget(API, opts) {
   const { targetId, targetName } = opts
   if (!targetId) return
 
-  let target = null
+  let target
   try {
     const res = await API.targets()
     const items = Array.isArray(res?.items) ? res.items : []

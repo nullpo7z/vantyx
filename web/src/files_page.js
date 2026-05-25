@@ -307,33 +307,32 @@ export function renderFilesPage(container) {
   }
 
   container.innerHTML = `
-    <div class="min-h-screen w-full flex flex-col bg-slate-100">
-      <header class="shrink-0 bg-slate-800 text-white">
-        <div class="px-4 py-3 flex items-center justify-between gap-3">
-          <div class="min-w-0 flex items-center gap-3">
-            ${
-              isTftp
-                ? `<button type="button" id="files-back" class="flex items-center gap-1.5 shrink-0 rounded-lg border border-slate-500 bg-slate-700 px-3 py-2 text-sm font-medium text-white hover:bg-slate-600" title="ホームへ戻る">${iconArrowBack}<span>戻る</span></button>`
-                : `<a href="/" id="files-back" class="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white" title="ホーム">${iconArrowBack}</a>`
-            }
-            <div class="min-w-0">
-              <div class="text-xs text-slate-400">ファイル${isTftp ? ' (TFTP)' : ''}</div>
-              <div class="text-sm font-semibold truncate">${escapeHtml(targetName)}</div>
+    <div class="min-h-screen w-full flex flex-col">
+      <header class="shrink-0 text-white">
+        <div class="vantyx-header-inner">
+          <div class="vantyx-header-start">
+            <h1 class="vantyx-brand">Vantyx</h1>
+            <div class="vantyx-page-context">
+              <span class="vantyx-page-context-label">${isTftp ? 'ファイル (TFTP)' : 'ファイル'}</span>
+              <span class="vantyx-page-context-target">${escapeHtml(targetName)}</span>
             </div>
           </div>
-          ${
-            isTftp
-              ? `<button type="button" id="files-back-header" class="shrink-0 rounded-lg border border-slate-500 bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-600 shadow-sm">戻る</button>`
-              : showTerminalBtn
-                ? `<button type="button" id="files-terminal-open" class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm text-white" title="ターミナルで開く">${iconTerminal}<span class="hidden sm:inline">ターミナル</span></button>`
-                : ''
-          }
+          <div class="vantyx-header-end">
+            ${
+              isTftp
+                ? `<button type="button" id="files-back" class="vantyx-page-btn">戻る</button>`
+                : showTerminalBtn
+                  ? `<button type="button" id="files-terminal-open" class="vantyx-page-btn" title="ターミナルで開く">ターミナル</button>
+                     <a href="/" id="files-back" class="vantyx-page-btn" title="ホームへ戻る">ホーム</a>`
+                  : `<a href="/" id="files-back" class="vantyx-page-btn" title="ホームへ戻る">ホーム</a>`
+            }
+          </div>
         </div>
         ${
           isTftp
             ? ''
-            : `<div class="px-4 pb-2">
-          <nav id="files-breadcrumb" class="flex items-center flex-wrap gap-0.5 text-sm min-h-8">${renderBreadcrumb()}</nav>
+            : `<div class="vantyx-page-subrow">
+          <nav id="files-breadcrumb" class="flex items-center flex-wrap gap-0.5 text-sm min-h-8 text-white/85">${renderBreadcrumb()}</nav>
         </div>`
         }
       </header>
@@ -385,7 +384,6 @@ export function renderFilesPage(container) {
     })
   }
   bindBack(container.querySelector('#files-back'))
-  bindBack(container.querySelector('#files-back-header'))
 
   container.querySelector('#files-terminal-open')?.addEventListener('click', () => {
     openTerminalForTarget(API, { targetId, targetName })

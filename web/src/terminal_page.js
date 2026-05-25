@@ -32,17 +32,19 @@ export function renderTerminalPage(container) {
 
   container.innerHTML = `
     <div class="terminal-page-root flex flex-1 min-h-0 w-full flex-col overflow-hidden font-sans text-slate-900">
-      <header class="relative z-30 bg-sky-800 text-white px-6 py-3 flex items-center justify-between shadow shrink-0">
-        <div class="flex items-center gap-8 min-w-0">
-          <h1 class="text-xl font-semibold tracking-wide">Vantyx</h1>
-          <div class="min-w-0 text-[11px] leading-tight">
-            <div class="opacity-70">${isTelnet ? 'Telnet ターミナル' : 'SSH ターミナル'}</div>
-            <div class="text-xs sm:text-[13px] font-semibold truncate">${escapeHtml(targetName)}</div>
+      <header class="relative z-30 shrink-0 shadow text-white">
+        <div class="vantyx-header-inner">
+          <div class="vantyx-header-start">
+            <h1 class="vantyx-brand">Vantyx</h1>
+            <div class="vantyx-page-context">
+              <span class="vantyx-page-context-label">${isTelnet ? 'Telnet ターミナル' : 'SSH ターミナル'}</span>
+              <span class="vantyx-page-context-target">${escapeHtml(targetName)}</span>
+            </div>
           </div>
-        </div>
-        <div class="flex items-center gap-2">
-          <button id="term-back" type="button" class="rounded border border-white/30 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 shadow-sm">戻る</button>
-          <button id="term-close" type="button" class="rounded border border-white/30 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 shadow-sm">セッション終了</button>
+          <div class="vantyx-header-end">
+            <button id="term-back" type="button" class="vantyx-page-btn">戻る</button>
+            <button id="term-close" type="button" class="vantyx-page-btn">セッション終了</button>
+          </div>
         </div>
       </header>
 

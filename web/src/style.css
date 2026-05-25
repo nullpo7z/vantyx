@@ -241,3 +241,60 @@ body.terminal-standalone #app {
   opacity: 1;
   box-shadow: inset 0 -2px 0 0 var(--vantyx-accent-nav);
 }
+
+/* コンソール系ページ（/terminal, /rdp, /files, /tftp-console）のヘッダーを
+   ホーム画面のヘッダー高さ・パディングに揃えるための共通スタイル。
+   .vantyx-header-inner と同じ寸法を採用し、視覚的なジャンプを防ぐ。 */
+#app header .vantyx-page-context {
+  display: flex;
+  align-items: baseline;
+  column-gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  color: rgba(255, 255, 255, 0.85);
+}
+#app header .vantyx-page-context-label {
+  opacity: 0.7;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+#app header .vantyx-page-context-target {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* ヘッダー右側のアクションボタン（戻る・切断・更新等）の共通寸法。
+   ホームの「ログアウト」「テーマ切替」と縦位置が揃うようにする。 */
+#app header .vantyx-page-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background-color: rgba(255, 255, 255, 0.1);
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 600;
+  color: #ffffff;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+#app header .vantyx-page-btn:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+#app header .vantyx-page-btn-danger {
+  border-color: rgba(248, 113, 113, 0.6);
+  background-color: rgba(248, 113, 113, 0.85);
+}
+#app header .vantyx-page-btn-danger:hover {
+  background-color: rgba(220, 38, 38, 0.95);
+}
+/* ファイル/TFTP のパンくず・サブツールバー用の二段目スペーシング。 */
+#app header .vantyx-page-subrow {
+  padding: 0 1.5rem 0.5rem;
+}

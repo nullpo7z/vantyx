@@ -132,21 +132,24 @@ export function renderTFTPConsolePage(container) {
 
   function renderLayout() {
     container.innerHTML = `
-      <div class="h-screen w-full flex flex-col bg-slate-100 overflow-hidden">
-        <header class="shrink-0 bg-sky-800 text-white">
-          <div class="px-4 py-3 flex items-center justify-between gap-3">
-            <div class="min-w-0 flex flex-col">
-              <div class="text-xs text-sky-100">TFTP ファイル + コンソール</div>
-              <div class="text-sm font-semibold truncate">${escapeHtml(targetName || '')}</div>
-            </div>
-            <div class="flex items-center gap-3">
-              <div class="flex items-center gap-2 text-xs">
-                <span class="opacity-80">TFTP サーバー:</span>
-                <span id="tftp-server-addr" class="font-mono text-[11px] bg-sky-900/40 rounded px-2 py-0.5">${escapeHtml(tftpServerAddr || '(不明)')}</span>
-                <button type="button" id="tftp-copy-addr" class="rounded border border-white/40 bg-white/10 px-2 py-0.5 text-[11px] hover:bg-white/20">コピー</button>
+      <div class="h-screen w-full flex flex-col overflow-hidden">
+        <header class="shrink-0 text-white">
+          <div class="vantyx-header-inner">
+            <div class="vantyx-header-start">
+              <h1 class="vantyx-brand">Vantyx</h1>
+              <div class="vantyx-page-context">
+                <span class="vantyx-page-context-label">TFTP ファイル + コンソール</span>
+                <span class="vantyx-page-context-target">${escapeHtml(targetName || '')}</span>
               </div>
-              <button type="button" id="tftp-back" class="rounded border border-white/30 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 shadow-sm">戻る</button>
-              <button type="button" id="tftp-disconnect" class="rounded border border-red-300 bg-red-500/90 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 shadow-sm">切断</button>
+            </div>
+            <div class="vantyx-header-end">
+              <div class="flex items-center gap-2 text-xs">
+                <span class="opacity-70">TFTP サーバー:</span>
+                <span id="tftp-server-addr" class="font-mono text-[11px] bg-white/10 rounded px-2 py-0.5">${escapeHtml(tftpServerAddr || '(不明)')}</span>
+                <button type="button" id="tftp-copy-addr" class="vantyx-page-btn">コピー</button>
+              </div>
+              <button type="button" id="tftp-back" class="vantyx-page-btn">戻る</button>
+              <button type="button" id="tftp-disconnect" class="vantyx-page-btn vantyx-page-btn-danger">切断</button>
             </div>
           </div>
         </header>

@@ -35,10 +35,24 @@ func newTestAppForTerminal(t *testing.T) *App {
 	app := NewApp()
 	t.Cleanup(func() {
 		_ = closeAuditSink()
-		// Ensure SQLite closes before TempDir cleanup (WAL/shm files, etc.).
+		// Give in-flight WebSocket / bridge goroutines a brief moment to
+		// flush their writes before we tear down SQLite. Without this we
+		// occasionally see "TempDir RemoveAll: directory not empty"
+		// because WAL/SHM files are still being touched after the test
+		// body returns.
+		time.Sleep(50 * time.Millisecond)
 		if app != nil && app.DB != nil {
+			// Truncate the WAL so the -wal and -shm sidecar files are
+			// released before TempDir cleanup; otherwise SQLite may
+			// leave them behind for a few milliseconds.
+			_, _ = app.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 			_ = app.DB.Close()
 		}
+		// Wipe any leftover sidecar files (best-effort) so TempDir
+		// cleanup never trips on a -wal/-shm file that SQLite was slow
+		// to release.
+		_ = os.Remove(dbPath + "-wal")
+		_ = os.Remove(dbPath + "-shm")
 		_ = os.Unsetenv("VANTYX_SQLITE_PATH")
 	})
 	return app

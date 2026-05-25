@@ -62,7 +62,7 @@ graph LR
     SSHD --> Bridges
     SSHD --> Sessions
     SSHD --> DB
-    Bridges --> Targets[(("Remote SSH /<br/>Telnet / VNC /<br/>SFTP / FTP / TFTP"))]
+    Bridges --> Targets(("Remote SSH /<br/>Telnet / VNC /<br/>SFTP / FTP / TFTP"))
 ```
 
 詳細は [docs/ARCHITECTURE.ja.md](docs/ARCHITECTURE.ja.md) を参照してください。

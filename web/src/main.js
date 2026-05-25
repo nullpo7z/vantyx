@@ -1,3 +1,4 @@
+import { applyStoredTheme } from './theme.js'
 import API from './api.js'
 import { initFileTransferManager } from './file_transfer_manager.js'
 import { renderLogin } from './login.js'
@@ -7,6 +8,8 @@ import { renderFilesPage } from './files_page.js'
 import { renderTFTPConsolePage } from './tftp_console_page.js'
 import { renderVncPage } from './vnc_page.js'
 import { renderRdpPage } from './rdp_page.js'
+
+applyStoredTheme()
 
 const appEl = document.getElementById('app')
 

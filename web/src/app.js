@@ -1,5 +1,6 @@
 import API from './api.js'
 import { renderLogin } from './login.js'
+import { applyStoredTheme, toggleStoredTheme } from './theme.js'
 import { initNav, setActiveNav, showAuthenticatedNav } from './nav.js'
 import { renderUsersPage } from './users_page.js'
 import { renderRecordingsPage } from './recordings_page.js'
@@ -31,6 +32,8 @@ function validateOptionalUserId(rawId) {
 }
 
 export function renderApp(container) {
+  // 画面遷移（renderApp 再呼び出し）時にも保存済みテーマを必ず適用し直す。
+  applyStoredTheme()
   container.innerHTML = `
     <div class="flex-1 flex flex-col">
       <header class="text-white shadow z-10 shrink-0">
@@ -2502,17 +2505,13 @@ export function renderApp(container) {
     renderLogin(container)
   })
 
-  // テーマ切替（ライト/ダーク）。設定は localStorage に保存し、main.js でも
-  // 初期化済みなのでここではトグル動作だけを担当する。
+  // テーマ切替（ライト/ダーク）。実体は theme.js に集約しており、ここでは
+  // クリック時にトグルを呼ぶだけ。renderApp 再呼出時にも先頭で applyStoredTheme
+  // を実行しているため、画面遷移後でも保存済みテーマが必ず反映される。
   const themeToggleBtn = document.getElementById('theme-toggle')
   if (themeToggleBtn) {
     themeToggleBtn.addEventListener('click', () => {
-      const isDark = document.documentElement.classList.toggle('dark')
-      try {
-        localStorage.setItem('vantyx_theme', isDark ? 'dark' : 'light')
-      } catch {
-        /* localStorage 不可（プライベートブラウジング等）でも動作は継続 */
-      }
+      toggleStoredTheme()
     })
   }
 }

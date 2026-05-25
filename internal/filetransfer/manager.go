@@ -208,6 +208,28 @@ func (m *Manager) ListByUser(userID string) []*Job {
 	return out
 }
 
+// ListByUserFiltered returns jobs matching filter, newest first (by updated_at).
+// The caller is responsible for setting filter.UserID and (optionally) filter.Limit.
+func (m *Manager) ListByUserFiltered(ctx context.Context, filter ListFilter) ([]*Job, error) {
+	if m.store == nil {
+		return nil, nil
+	}
+	if filter.Limit <= 0 {
+		m.mu.RLock()
+		filter.Limit = m.maxHistory
+		m.mu.RUnlock()
+	}
+	recs, err := m.store.ListByUserFiltered(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Job, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, m.recordToJob(rec))
+	}
+	return out, nil
+}
+
 // Remove deletes a job from the manager and DB, dropping any live handle too.
 // Caller is responsible for removing staging files on disk.
 func (m *Manager) Remove(id string) {
@@ -342,6 +364,7 @@ func (j *Job) Snapshot() JobSnapshot {
 	defer j.mu.Unlock()
 	return JobSnapshot{
 		ID:         j.ID,
+		UserID:     j.UserID,
 		TargetID:   j.TargetID,
 		TargetName: j.TargetName,
 		Backend:    string(j.Backend),
@@ -360,6 +383,7 @@ func (j *Job) Snapshot() JobSnapshot {
 // JobSnapshot is the JSON representation of a job.
 type JobSnapshot struct {
 	ID         string `json:"id"`
+	UserID     string `json:"user_id,omitempty"`
 	TargetID   string `json:"target_id"`
 	TargetName string `json:"target_name,omitempty"`
 	Backend    string `json:"backend"`

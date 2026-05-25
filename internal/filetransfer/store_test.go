@@ -242,6 +242,190 @@ func TestStore_TrimUserHistoryZeroMaxNoop(t *testing.T) {
 	}
 }
 
+func insertJob(t *testing.T, store *Store, rec JobRecord) {
+	t.Helper()
+	if err := store.Insert(context.Background(), rec); err != nil {
+		t.Fatalf("insert %s: %v", rec.ID, err)
+	}
+}
+
+func TestStore_ListByUserFiltered_RequiresUserID(t *testing.T) {
+	store, _ := newTestStore(t)
+	if _, err := store.ListByUserFiltered(context.Background(), ListFilter{}); err == nil {
+		t.Fatal("expected error when UserID is empty")
+	}
+}
+
+func TestStore_ListByUserFiltered_State(t *testing.T) {
+	store, _ := newTestStore(t)
+	insertJob(t, store, sampleRecord("r-run", "u1", StateRunning))
+	insertJob(t, store, sampleRecord("r-fail", "u1", StateFailed))
+	insertJob(t, store, sampleRecord("r-done", "u1", StateCompleted))
+
+	got, err := store.ListByUserFiltered(context.Background(), ListFilter{
+		UserID: "u1",
+		States: []State{StateFailed, StateCompleted},
+		Limit:  10,
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 rows, got %d (%v)", len(got), got)
+	}
+	for _, r := range got {
+		if r.State == StateRunning {
+			t.Fatalf("running should be filtered out: %+v", r)
+		}
+	}
+}
+
+func TestStore_ListByUserFiltered_Direction(t *testing.T) {
+	store, _ := newTestStore(t)
+	up := sampleRecord("up", "u1", StateCompleted)
+	up.Direction = DirectionUpload
+	dl := sampleRecord("dl", "u1", StateCompleted)
+	dl.Direction = DirectionDownload
+	insertJob(t, store, up)
+	insertJob(t, store, dl)
+
+	got, err := store.ListByUserFiltered(context.Background(), ListFilter{
+		UserID:    "u1",
+		Direction: DirectionUpload,
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "up" {
+		t.Fatalf("expected only up, got %+v", got)
+	}
+}
+
+func TestStore_ListByUserFiltered_BackendAndTarget(t *testing.T) {
+	store, _ := newTestStore(t)
+	a := sampleRecord("a", "u1", StateCompleted)
+	a.Backend = BackendRemote
+	a.TargetID = "tA"
+	b := sampleRecord("b", "u1", StateCompleted)
+	b.Backend = BackendTFTPServer
+	b.TargetID = "tB"
+	insertJob(t, store, a)
+	insertJob(t, store, b)
+
+	got, _ := store.ListByUserFiltered(context.Background(), ListFilter{
+		UserID:  "u1",
+		Backend: BackendTFTPServer,
+	})
+	if len(got) != 1 || got[0].ID != "b" {
+		t.Fatalf("backend filter wrong: %+v", got)
+	}
+
+	got, _ = store.ListByUserFiltered(context.Background(), ListFilter{
+		UserID:   "u1",
+		TargetID: "tA",
+	})
+	if len(got) != 1 || got[0].ID != "a" {
+		t.Fatalf("target filter wrong: %+v", got)
+	}
+}
+
+func TestStore_ListByUserFiltered_Query(t *testing.T) {
+	store, _ := newTestStore(t)
+	r1 := sampleRecord("by-name", "u1", StateCompleted)
+	r1.FileName = "report.pdf"
+	r1.RemotePath = "/tmp/report.pdf"
+	r1.TargetName = "tokyo-server"
+	r2 := sampleRecord("by-path", "u1", StateCompleted)
+	r2.FileName = "data.bin"
+	r2.RemotePath = "/var/log/syslog"
+	r2.TargetName = "log-collector"
+	r3 := sampleRecord("by-target", "u1", StateCompleted)
+	r3.FileName = "n.txt"
+	r3.RemotePath = "/x"
+	r3.TargetName = "production-db"
+	insertJob(t, store, r1)
+	insertJob(t, store, r2)
+	insertJob(t, store, r3)
+
+	// file_name match
+	got, _ := store.ListByUserFiltered(context.Background(), ListFilter{UserID: "u1", Query: "report"})
+	if len(got) != 1 || got[0].ID != "by-name" {
+		t.Fatalf("file_name search wrong: %+v", got)
+	}
+	// remote_path match
+	got, _ = store.ListByUserFiltered(context.Background(), ListFilter{UserID: "u1", Query: "syslog"})
+	if len(got) != 1 || got[0].ID != "by-path" {
+		t.Fatalf("remote_path search wrong: %+v", got)
+	}
+	// target_name match
+	got, _ = store.ListByUserFiltered(context.Background(), ListFilter{UserID: "u1", Query: "production"})
+	if len(got) != 1 || got[0].ID != "by-target" {
+		t.Fatalf("target_name search wrong: %+v", got)
+	}
+}
+
+func TestStore_ListByUserFiltered_TimeRange(t *testing.T) {
+	store, _ := newTestStore(t)
+	base := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
+	for i, id := range []string{"a", "b", "c"} {
+		rec := sampleRecord(id, "u1", StateCompleted)
+		rec.UpdatedAt = base.Add(time.Duration(i) * 24 * time.Hour)
+		insertJob(t, store, rec)
+	}
+	// Only the middle day
+	got, _ := store.ListByUserFiltered(context.Background(), ListFilter{
+		UserID: "u1",
+		From:   base.Add(24 * time.Hour),
+		To:     base.Add(48 * time.Hour),
+	})
+	if len(got) != 1 || got[0].ID != "b" {
+		t.Fatalf("range filter wrong: %+v", got)
+	}
+}
+
+func TestStore_ListByUserFiltered_CompositeCursor(t *testing.T) {
+	store, _ := newTestStore(t)
+	t0 := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	// Three rows with identical updated_at to force the id tiebreaker.
+	for _, id := range []string{"id-a", "id-b", "id-c"} {
+		rec := sampleRecord(id, "u1", StateCompleted)
+		rec.UpdatedAt = t0
+		insertJob(t, store, rec)
+	}
+	// Page 1: limit 2 → should return id-c, id-b (descending by id).
+	page1, err := store.ListByUserFiltered(context.Background(), ListFilter{UserID: "u1", Limit: 2})
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if len(page1) != 2 || page1[0].ID != "id-c" || page1[1].ID != "id-b" {
+		t.Fatalf("page1 wrong: %+v", page1)
+	}
+	last := page1[len(page1)-1]
+	// Page 2: cursor at last row, limit 2 → should return id-a only.
+	page2, err := store.ListByUserFiltered(context.Background(), ListFilter{
+		UserID:       "u1",
+		Limit:        2,
+		AfterUpdated: last.UpdatedAt,
+		AfterID:      last.ID,
+	})
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if len(page2) != 1 || page2[0].ID != "id-a" {
+		t.Fatalf("page2 wrong: %+v", page2)
+	}
+}
+
+func TestStore_ListByUserFiltered_UserIsolation(t *testing.T) {
+	store, _ := newTestStore(t)
+	insertJob(t, store, sampleRecord("mine", "u1", StateCompleted))
+	insertJob(t, store, sampleRecord("yours", "u2", StateCompleted))
+	got, _ := store.ListByUserFiltered(context.Background(), ListFilter{UserID: "u1"})
+	if len(got) != 1 || got[0].ID != "mine" {
+		t.Fatalf("user isolation broken: %+v", got)
+	}
+}
+
 func TestStore_NilStoreMethods(t *testing.T) {
 	var s *Store
 	if err := s.Insert(context.Background(), JobRecord{}); err == nil {
@@ -270,6 +454,9 @@ func TestStore_NilStoreMethods(t *testing.T) {
 	}
 	if _, err := s.TrimUserHistory(context.Background(), "u", 1); err == nil {
 		t.Fatal("expected error on nil store trim")
+	}
+	if _, err := s.ListByUserFiltered(context.Background(), ListFilter{UserID: "u"}); err == nil {
+		t.Fatal("expected error on nil store filtered list")
 	}
 	if got := NewStore(nil); got != nil {
 		t.Fatal("NewStore(nil) should return nil")

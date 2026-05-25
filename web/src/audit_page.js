@@ -159,6 +159,10 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
           class="px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${TAB_BTN_INACTIVE}">
           コマンドログ
         </button>
+        <button type="button" id="audit-tab-btn-ft" role="tab" aria-selected="false" aria-controls="audit-panel-ft" data-tab="ft"
+          class="px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${TAB_BTN_INACTIVE}">
+          ファイル転送
+        </button>
       </div>
 
       <div id="audit-panel-audit" role="tabpanel" aria-labelledby="audit-tab-btn-audit" class="bg-white rounded-b-lg rounded-tr-lg border border-t-0 border-slate-200 shadow-sm overflow-hidden">
@@ -279,27 +283,125 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
         </div>
       </div>
 
+      <div id="audit-panel-ft" role="tabpanel" aria-labelledby="audit-tab-btn-ft" class="hidden bg-white rounded-b-lg rounded-tr-lg border border-t-0 border-slate-200 shadow-sm overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
+          <p class="text-xs text-slate-500">全ユーザーのファイル転送履歴（最大 90 日間）</p>
+          <button id="ft-refresh" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">再検索</button>
+        </div>
+        <div class="p-4 border-b border-slate-200 flex gap-3 flex-wrap items-end">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">開始日</label>
+            <input id="ft-filter-from" type="date" value="${escapeHtml(dates.from)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">終了日</label>
+            <input id="ft-filter-to" type="date" value="${escapeHtml(dates.to)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">状態</label>
+            <select id="ft-filter-state" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="">(すべて)</option>
+              <option value="completed">完了</option>
+              <option value="failed">失敗</option>
+              <option value="cancelled">キャンセル</option>
+              <option value="running">実行中</option>
+              <option value="receiving">受信中</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">方向</label>
+            <select id="ft-filter-direction" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="">(すべて)</option>
+              <option value="upload">アップロード</option>
+              <option value="download">ダウンロード</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">バックエンド</label>
+            <select id="ft-filter-backend" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="">(すべて)</option>
+              <option value="remote">remote</option>
+              <option value="tftp_server">tftp_server</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">ユーザー</label>
+            <select id="ft-filter-user" class="w-40 rounded border border-slate-300 px-3 py-2 text-sm bg-white">${userOptions}</select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">ターゲット</label>
+            <select id="ft-filter-target" class="w-56 rounded border border-slate-300 px-3 py-2 text-sm bg-white">${targetOptions}</select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">検索（ファイル名・パス・ターゲット名）</label>
+            <input id="ft-filter-query" class="w-56 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: report.pdf" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">limit</label>
+            <input id="ft-filter-limit" type="number" min="1" max="500" value="100" class="w-24 rounded border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <button id="ft-apply" type="button" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">適用</button>
+        </div>
+        <div id="ft-error" class="px-4 py-3 text-sm text-red-600 hidden"></div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-left text-sm">
+            <thead class="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">時刻</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザー</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">方向</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">バックエンド</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ターゲット</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ファイル</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">状態</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">進捗</th>
+              </tr>
+            </thead>
+            <tbody id="ft-rows">
+              <tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">検索条件を入力して「適用」を押してください。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="ft-footer" class="px-4 py-3 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
+          <span id="ft-count" class="text-xs text-slate-500"></span>
+          <button type="button" id="ft-load-more" class="hidden rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">さらに読み込む</button>
+        </div>
+      </div>
+
       <p class="text-xs text-slate-500 mt-3">注意: コマンドログは Enter 時に PTY の表示行（Tab 補完を含む）を優先して記録します。シェルや端末設定によっては完全一致しない場合があります。</p>
     </div>
   `
 
   const tabBtnAudit = mainContent.querySelector('#audit-tab-btn-audit')
   const tabBtnCmd = mainContent.querySelector('#audit-tab-btn-cmd')
+  const tabBtnFt = mainContent.querySelector('#audit-tab-btn-ft')
   const panelAudit = mainContent.querySelector('#audit-panel-audit')
   const panelCmd = mainContent.querySelector('#audit-panel-cmd')
+  const panelFt = mainContent.querySelector('#audit-panel-ft')
+
+  let ftLoadedOnce = false
 
   function setActiveTab(tab) {
-    const isAudit = tab === 'audit'
-    panelAudit.classList.toggle('hidden', !isAudit)
-    panelCmd.classList.toggle('hidden', isAudit)
-    tabBtnAudit.setAttribute('aria-selected', isAudit ? 'true' : 'false')
-    tabBtnCmd.setAttribute('aria-selected', isAudit ? 'false' : 'true')
-    tabBtnAudit.className = `px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${isAudit ? TAB_BTN_ACTIVE : TAB_BTN_INACTIVE}`
-    tabBtnCmd.className = `px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${isAudit ? TAB_BTN_INACTIVE : TAB_BTN_ACTIVE}`
+    const tabs = [
+      { name: 'audit', btn: tabBtnAudit, panel: panelAudit },
+      { name: 'cmd', btn: tabBtnCmd, panel: panelCmd },
+      { name: 'ft', btn: tabBtnFt, panel: panelFt },
+    ]
+    for (const t of tabs) {
+      const active = t.name === tab
+      t.panel.classList.toggle('hidden', !active)
+      t.btn.setAttribute('aria-selected', active ? 'true' : 'false')
+      t.btn.className = `px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${active ? TAB_BTN_ACTIVE : TAB_BTN_INACTIVE}`
+    }
+    if (tab === 'ft' && !ftLoadedOnce) {
+      ftLoadedOnce = true
+      loadFt(false)
+    }
   }
 
   tabBtnAudit.addEventListener('click', () => setActiveTab('audit'))
   tabBtnCmd.addEventListener('click', () => setActiveTab('cmd'))
+  tabBtnFt.addEventListener('click', () => setActiveTab('ft'))
 
   const errEl = mainContent.querySelector('#audit-error')
   const rowsEl = mainContent.querySelector('#audit-rows')
@@ -503,4 +605,151 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
   mainContent.querySelector('#cmd-refresh').addEventListener('click', () => loadCmd(false))
   mainContent.querySelector('#cmd-apply').addEventListener('click', () => loadCmd(false))
   cmdLoadMoreEl.addEventListener('click', () => loadCmd(true))
+
+  const ftErrEl = mainContent.querySelector('#ft-error')
+  const ftRowsEl = mainContent.querySelector('#ft-rows')
+  const ftFromEl = mainContent.querySelector('#ft-filter-from')
+  const ftToEl = mainContent.querySelector('#ft-filter-to')
+  const ftStateEl = mainContent.querySelector('#ft-filter-state')
+  const ftDirectionEl = mainContent.querySelector('#ft-filter-direction')
+  const ftBackendEl = mainContent.querySelector('#ft-filter-backend')
+  const ftUserEl = mainContent.querySelector('#ft-filter-user')
+  const ftTargetEl = mainContent.querySelector('#ft-filter-target')
+  const ftQueryEl = mainContent.querySelector('#ft-filter-query')
+  const ftLimitEl = mainContent.querySelector('#ft-filter-limit')
+  const ftCountEl = mainContent.querySelector('#ft-count')
+  const ftLoadMoreEl = mainContent.querySelector('#ft-load-more')
+
+  let ftNextCursor = ''
+  let ftRowCount = 0
+
+  const FT_STATE_LABELS = {
+    completed: '完了',
+    failed: '失敗',
+    cancelled: 'キャンセル',
+    running: '実行中',
+    receiving: '受信中',
+  }
+  const FT_DIRECTION_LABELS = {
+    upload: 'アップロード',
+    download: 'ダウンロード',
+  }
+
+  function ftStateBadge(state) {
+    const label = FT_STATE_LABELS[state] || state || '—'
+    let cls = 'text-slate-700 bg-slate-100'
+    if (state === 'completed') cls = 'text-emerald-800 bg-emerald-50'
+    else if (state === 'failed') cls = 'text-red-700 bg-red-50'
+    else if (state === 'cancelled') cls = 'text-amber-800 bg-amber-50'
+    else if (state === 'running' || state === 'receiving') cls = 'text-sky-700 bg-sky-50'
+    return `<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${cls}">${escapeHtml(label)}</span>`
+  }
+
+  function ftProgress(it) {
+    const total = Number(it.total || 0)
+    const prog = Number(it.progress || 0)
+    if (total > 0) {
+      const pct = Math.min(100, Math.round((prog / total) * 100))
+      return `${pct}%（${prog}/${total}）`
+    }
+    return prog > 0 ? `${prog} B` : '—'
+  }
+
+  function ftQueryParams() {
+    return {
+      from: String(ftFromEl.value || '').trim(),
+      to: String(ftToEl.value || '').trim(),
+      state: String(ftStateEl.value || '').trim(),
+      direction: String(ftDirectionEl.value || '').trim(),
+      backend: String(ftBackendEl.value || '').trim(),
+      userId: String(ftUserEl.value || '').trim(),
+      targetId: String(ftTargetEl.value || '').trim(),
+      query: String(ftQueryEl.value || '').trim(),
+      limit: Number(ftLimitEl.value || 100) || 100,
+    }
+  }
+
+  function renderFtRow(it) {
+    const time = fmtTime(it.updated_at || it.created_at)
+    const dirLabel = FT_DIRECTION_LABELS[it.direction] || it.direction || ''
+    const file = it.file_name || (it.remote_path ? it.remote_path.split('/').pop() : '—')
+    const path = it.remote_path || ''
+    const targetCell = it.target_name
+      ? `<span title="${escapeHtml(it.target_id || '')}">${escapeHtml(it.target_name)}</span>`
+      : escapeHtml(it.target_id || '')
+    const err = it.error ? `<div class="text-[11px] text-red-600 mt-0.5">${escapeHtml(it.error)}</div>` : ''
+    return `<tr class="border-b border-slate-200 hover:bg-slate-50">
+      <td class="px-4 py-2 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(time)}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap font-mono">${escapeHtml(it.user_id || '—')}</td>
+      <td class="px-4 py-2 text-xs text-slate-800 whitespace-nowrap">${escapeHtml(dirLabel)}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap font-mono">${escapeHtml(it.backend || '')}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap">${targetCell}</td>
+      <td class="px-4 py-2 text-xs text-slate-800">
+        <div class="font-mono text-[11px] break-all">${escapeHtml(file)}</div>
+        <div class="text-[11px] text-slate-500 break-all">${escapeHtml(path)}</div>
+        ${err}
+      </td>
+      <td class="px-4 py-2 text-xs whitespace-nowrap">${ftStateBadge(it.state)}</td>
+      <td class="px-4 py-2 text-xs text-slate-700 whitespace-nowrap font-mono">${escapeHtml(ftProgress(it))}</td>
+    </tr>`
+  }
+
+  function updateFtFooter() {
+    const hasMore = Boolean(ftNextCursor)
+    ftCountEl.textContent = hasMore
+      ? `表示中 ${ftRowCount} 件（続きがあります）`
+      : ftRowCount > 0
+        ? `表示中 ${ftRowCount} 件`
+        : ''
+    ftLoadMoreEl.classList.toggle('hidden', !hasMore)
+  }
+
+  async function loadFt(append) {
+    ftErrEl.classList.add('hidden')
+    if (!append) {
+      ftNextCursor = ''
+      ftRowCount = 0
+      ftRowsEl.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">読み込み中…</td></tr>`
+      ftLoadMoreEl.classList.add('hidden')
+      ftCountEl.textContent = ''
+    } else {
+      ftLoadMoreEl.disabled = true
+      ftLoadMoreEl.textContent = '読み込み中…'
+    }
+    const params = ftQueryParams()
+    try {
+      const res = await API.fileTransfers({ ...params, afterCursor: append ? ftNextCursor : '' })
+      const items = (res && res.items) || []
+      ftNextCursor = (res && res.next_cursor) || ''
+      if (!append && !items.length) {
+        ftRowsEl.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">該当する転送はありません。</td></tr>`
+        ftCountEl.textContent = ''
+        ftLoadMoreEl.classList.add('hidden')
+        return
+      }
+      const html = items.map(renderFtRow).join('')
+      if (append) {
+        ftRowsEl.insertAdjacentHTML('beforeend', html)
+      } else {
+        ftRowsEl.innerHTML = html
+      }
+      ftRowCount += items.length
+      updateFtFooter()
+    } catch (e) {
+      ftErrEl.textContent = e.message || '取得に失敗しました'
+      ftErrEl.classList.remove('hidden')
+      if (!append) {
+        ftRowsEl.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+        ftCountEl.textContent = ''
+      }
+      ftLoadMoreEl.classList.add('hidden')
+    } finally {
+      ftLoadMoreEl.disabled = false
+      ftLoadMoreEl.textContent = 'さらに読み込む'
+    }
+  }
+
+  mainContent.querySelector('#ft-refresh').addEventListener('click', () => loadFt(false))
+  mainContent.querySelector('#ft-apply').addEventListener('click', () => loadFt(false))
+  ftLoadMoreEl.addEventListener('click', () => loadFt(true))
 }

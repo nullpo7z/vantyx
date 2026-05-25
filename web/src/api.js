@@ -627,8 +627,26 @@ const API = {
   },
 
   /** バックグラウンド転送一覧 */
-  async fileTransfers() {
-    const res = await fetch('/api/file-transfers', { credentials: 'include' })
+  async fileTransfers(options = {}) {
+    const params = new URLSearchParams()
+    const opts = options || {}
+    if (opts.limit != null) params.set('limit', String(opts.limit))
+    if (opts.query) params.set('query', opts.query)
+    if (opts.targetId) params.set('target_id', opts.targetId)
+    if (opts.direction) params.set('direction', opts.direction)
+    if (opts.backend) params.set('backend', opts.backend)
+    if (opts.userId) params.set('user_id', opts.userId)
+    if (opts.from) params.set('from', opts.from)
+    if (opts.to) params.set('to', opts.to)
+    if (opts.afterCursor) params.set('after_cursor', opts.afterCursor)
+    if (Array.isArray(opts.states)) {
+      for (const s of opts.states) params.append('state', s)
+    } else if (typeof opts.state === 'string' && opts.state) {
+      params.set('state', opts.state)
+    }
+    const qs = params.toString()
+    const url = qs ? `/api/file-transfers?${qs}` : '/api/file-transfers'
+    const res = await fetch(url, { credentials: 'include' })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
       throw new Error(err.message || 'Failed to load file transfers')

@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,10 +14,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/auth"
 	"github.com/nullpo7z/vantyx/internal/filetransfer"
 	"github.com/nullpo7z/vantyx/internal/protocols"
 )
@@ -48,6 +52,96 @@ func progressCopy(job *filetransfer.Job, dst io.Writer, src io.Reader, total int
 	}
 }
 
+// fileTransferCursorSeparator separates the RFC3339Nano timestamp and the job id
+// inside an opaque (base64) cursor. The dot/space pair is unlikely to appear in
+// either part.
+const fileTransferCursorSeparator = " | "
+
+// encodeFileTransferCursor returns a base64-encoded "updated_at|id" cursor.
+func encodeFileTransferCursor(updated time.Time, id string) string {
+	if id == "" {
+		return ""
+	}
+	raw := updated.UTC().Format(time.RFC3339Nano) + fileTransferCursorSeparator + id
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// decodeFileTransferCursor parses a cursor produced by encodeFileTransferCursor.
+func decodeFileTransferCursor(s string) (time.Time, string, error) {
+	if s == "" {
+		return time.Time{}, "", nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("invalid after_cursor")
+	}
+	parts := strings.SplitN(string(raw), fileTransferCursorSeparator, 2)
+	if len(parts) != 2 {
+		return time.Time{}, "", fmt.Errorf("invalid after_cursor")
+	}
+	t, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("invalid after_cursor")
+	}
+	return t.UTC(), parts[1], nil
+}
+
+// parseFileTransferStates parses repeated state query values into typed States.
+func parseFileTransferStates(raw []string) ([]filetransfer.State, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]filetransfer.State, 0, len(raw))
+	for _, v := range raw {
+		for _, part := range strings.Split(v, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			switch filetransfer.State(part) {
+			case filetransfer.StateReceiving, filetransfer.StateRunning,
+				filetransfer.StateCompleted, filetransfer.StateFailed, filetransfer.StateCancelled:
+				out = append(out, filetransfer.State(part))
+			default:
+				return nil, fmt.Errorf("invalid state: %s", part)
+			}
+		}
+	}
+	return out, nil
+}
+
+// parseFileTransferDirection returns the typed direction or "" for empty input.
+func parseFileTransferDirection(s string) (filetransfer.Direction, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	switch filetransfer.Direction(s) {
+	case filetransfer.DirectionUpload, filetransfer.DirectionDownload:
+		return filetransfer.Direction(s), nil
+	}
+	return "", fmt.Errorf("invalid direction: %s", s)
+}
+
+// parseFileTransferBackend returns the typed backend or "" for empty input.
+func parseFileTransferBackend(s string) (filetransfer.Backend, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	switch filetransfer.Backend(s) {
+	case filetransfer.BackendRemote, filetransfer.BackendTFTPServer:
+		return filetransfer.Backend(s), nil
+	}
+	return "", fmt.Errorf("invalid backend: %s", s)
+}
+
+// fileTransfersListResponse is the GET /api/file-transfers payload.
+type fileTransfersListResponse struct {
+	Items      []filetransfer.JobSnapshot `json:"items"`
+	NextCursor string                     `json:"next_cursor,omitempty"`
+}
+
 func (a *App) handleFileTransfersList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -58,12 +152,111 @@ func (a *App) handleFileTransfersList(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	jobs := a.FileTransferManager.ListByUser(userID)
+
+	q := r.URL.Query()
+
+	// Detect admin to allow user_id override / "all users" listing.
+	isAdmin := false
+	if u, err := a.UserStore.GetByID(userID); err == nil && u != nil && u.Role == auth.RoleAdmin {
+		isAdmin = true
+	}
+
+	// Determine target user filter. Non-admins are always pinned to themselves.
+	targetUserID := userID
+	if isAdmin {
+		if v := strings.TrimSpace(q.Get("user_id")); v != "" {
+			targetUserID = v
+		}
+	}
+
+	// If no filtering parameters are supplied, keep backwards-compatible
+	// behaviour: return the user's recent jobs (no pagination).
+	hasFilterParams := false
+	for _, k := range []string{
+		"limit", "query", "target_id", "direction", "backend", "state",
+		"from", "to", "after_cursor", "user_id",
+	} {
+		if _, ok := q[k]; ok {
+			hasFilterParams = true
+			break
+		}
+	}
+	if !hasFilterParams {
+		jobs := a.FileTransferManager.ListByUser(targetUserID)
+		items := make([]filetransfer.JobSnapshot, 0, len(jobs))
+		for _, j := range jobs {
+			items = append(items, j.Snapshot())
+		}
+		writeJSON(w, fileTransfersListResponse{Items: items})
+		return
+	}
+
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	pageLimit := limit
+	if pageLimit <= 0 || pageLimit > 500 {
+		pageLimit = 100
+	}
+
+	states, err := parseFileTransferStates(q["state"])
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	dir, err := parseFileTransferDirection(q.Get("direction"))
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	backend, err := parseFileTransferBackend(q.Get("backend"))
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	afterUpdated, afterID, err := decodeFileTransferCursor(q.Get("after_cursor"))
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	from, to, err := parseTimeRange(q.Get("from"), q.Get("to"), time.Now().UTC())
+	if err != nil {
+		writeTimeRangeError(w, err)
+		return
+	}
+
+	filter := filetransfer.ListFilter{
+		UserID:       targetUserID,
+		Query:        strings.TrimSpace(q.Get("query")),
+		TargetID:     strings.TrimSpace(q.Get("target_id")),
+		Direction:    dir,
+		Backend:      backend,
+		States:       states,
+		From:         from,
+		To:           to,
+		AfterUpdated: afterUpdated,
+		AfterID:      afterID,
+		Limit:        pageLimit + 1,
+	}
+
+	jobs, err := a.FileTransferManager.ListByUserFiltered(r.Context(), filter)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+
 	items := make([]filetransfer.JobSnapshot, 0, len(jobs))
 	for _, j := range jobs {
 		items = append(items, j.Snapshot())
 	}
-	writeJSON(w, map[string]interface{}{"items": items})
+	var nextCursor string
+	if len(items) > pageLimit {
+		last := items[pageLimit-1]
+		// last.UpdatedAt is RFC3339; parse back to time for the cursor.
+		if t, perr := time.Parse(time.RFC3339, last.UpdatedAt); perr == nil {
+			nextCursor = encodeFileTransferCursor(t, last.ID)
+		}
+		items = items[:pageLimit]
+	}
+	writeJSON(w, fileTransfersListResponse{Items: items, NextCursor: nextCursor})
 }
 
 func (a *App) handleFileTransferGet(w http.ResponseWriter, r *http.Request) {

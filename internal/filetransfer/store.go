@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -153,6 +154,107 @@ func (s *Store) ListByUser(ctx context.Context, userID string, limit int) ([]Job
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+// ListFilter parameterises ListByUserFiltered. Zero-valued fields are treated as
+// "no constraint" except for UserID which is required.
+type ListFilter struct {
+	UserID       string
+	Query        string    // LIKE match against file_name OR remote_path OR target_name
+	TargetID     string    // exact match
+	Direction    Direction // "" = any
+	Backend      Backend   // "" = any
+	States       []State   // OR of given states; empty = any
+	From, To     time.Time // updated_at range (zero = unbounded on that side)
+	AfterUpdated time.Time // composite cursor; zero = first page
+	AfterID      string
+	Limit        int // caller may pass pageLimit+1 to detect more pages
+}
+
+// ListByUserFiltered returns jobs matching filter, newest updated_at first.
+// The composite cursor (AfterUpdated, AfterID) lets callers paginate through
+// jobs that share the same updated_at timestamp.
+func (s *Store) ListByUserFiltered(ctx context.Context, filter ListFilter) ([]JobRecord, error) {
+	if s == nil {
+		return nil, errors.New("filetransfer: nil store")
+	}
+	if strings.TrimSpace(filter.UserID) == "" {
+		return nil, errors.New("filetransfer: ListFilter.UserID is required")
+	}
+	sqlStr, args := buildFileTransferJobQuery(filter)
+	ctx, cancel := context.WithTimeout(ctx, storeQueryTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, sqlStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []JobRecord
+	for rows.Next() {
+		rec, err := scanJobRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+// buildFileTransferJobQuery assembles the SELECT used by ListByUserFiltered.
+// It mirrors the style of buildCommandLogQuery / buildAuditLogQuery.
+func buildFileTransferJobQuery(filter ListFilter) (string, []interface{}) {
+	var conds []string
+	var args []interface{}
+
+	conds = append(conds, "user_id = ?")
+	args = append(args, filter.UserID)
+
+	if !filter.From.IsZero() {
+		conds = append(conds, "updated_at >= ?")
+		args = append(args, filter.From.UTC())
+	}
+	if !filter.To.IsZero() {
+		conds = append(conds, "updated_at < ?")
+		args = append(args, filter.To.UTC())
+	}
+	if filter.TargetID != "" {
+		conds = append(conds, "target_id = ?")
+		args = append(args, filter.TargetID)
+	}
+	if filter.Direction != "" {
+		conds = append(conds, "direction = ?")
+		args = append(args, string(filter.Direction))
+	}
+	if filter.Backend != "" {
+		conds = append(conds, "backend = ?")
+		args = append(args, string(filter.Backend))
+	}
+	if len(filter.States) > 0 {
+		placeholders := make([]string, len(filter.States))
+		for i, st := range filter.States {
+			placeholders[i] = "?"
+			args = append(args, string(st))
+		}
+		conds = append(conds, "state IN ("+strings.Join(placeholders, ",")+")")
+	}
+	if q := strings.TrimSpace(filter.Query); q != "" {
+		conds = append(conds, "(file_name LIKE ? OR remote_path LIKE ? OR target_name LIKE ?)")
+		pat := "%" + q + "%"
+		args = append(args, pat, pat, pat)
+	}
+	if !filter.AfterUpdated.IsZero() {
+		conds = append(conds, "(updated_at < ? OR (updated_at = ? AND id < ?))")
+		args = append(args, filter.AfterUpdated.UTC(), filter.AfterUpdated.UTC(), filter.AfterID)
+	}
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	sqlStr := selectColumns + " FROM file_transfer_jobs WHERE " + strings.Join(conds, " AND ") +
+		" ORDER BY updated_at DESC, id DESC LIMIT ?"
+	args = append(args, limit)
+	return sqlStr, args
 }
 
 // Delete removes a single row. Returns the previous record and whether anything was deleted.

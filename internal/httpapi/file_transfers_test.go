@@ -562,6 +562,235 @@ func TestFileTransferHistoryPersistsAfterCompletion(t *testing.T) {
 	}
 }
 
+// seedFileTransferJob inserts a finished/historic job row directly into the DB.
+// This avoids the cost (and ordering noise) of going through the HTTP upload/download flow.
+func seedFileTransferJob(t *testing.T, app *App, rec filetransfer.JobRecord) {
+	t.Helper()
+	if rec.CreatedAt.IsZero() {
+		rec.CreatedAt = time.Now().UTC()
+	}
+	if rec.UpdatedAt.IsZero() {
+		rec.UpdatedAt = rec.CreatedAt
+	}
+	if rec.Backend == "" {
+		rec.Backend = filetransfer.BackendRemote
+	}
+	if rec.Direction == "" {
+		rec.Direction = filetransfer.DirectionDownload
+	}
+	if rec.State == "" {
+		rec.State = filetransfer.StateCompleted
+	}
+	if _, err := app.DB.Exec(`
+		INSERT INTO file_transfer_jobs
+			(id, user_id, target_id, target_name, backend, direction, remote_path, file_name,
+			 state, progress, total, error, temp_path, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	`, rec.ID, rec.UserID, rec.TargetID, rec.TargetName, string(rec.Backend), string(rec.Direction),
+		rec.RemotePath, rec.FileName, string(rec.State), rec.Progress, rec.Total, rec.Error,
+		rec.TempPath, rec.CreatedAt, rec.UpdatedAt,
+	); err != nil {
+		t.Fatalf("seed job %s: %v", rec.ID, err)
+	}
+}
+
+func TestFileTransfersList_FiltersByStateAndQuery(t *testing.T) {
+	app, _, _ := setupAppWithTargetAndSFTPMock(t)
+	now := time.Now().UTC()
+	seedFileTransferJob(t, app, filetransfer.JobRecord{
+		ID: "j-completed", UserID: "admin", TargetID: "t1", TargetName: "Tokyo",
+		Backend: filetransfer.BackendRemote, Direction: filetransfer.DirectionDownload,
+		RemotePath: "/data/report.pdf", FileName: "report.pdf",
+		State:     filetransfer.StateCompleted,
+		CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: now.Add(-2 * time.Hour),
+	})
+	seedFileTransferJob(t, app, filetransfer.JobRecord{
+		ID: "j-failed", UserID: "admin", TargetID: "t1", TargetName: "Tokyo",
+		Backend: filetransfer.BackendRemote, Direction: filetransfer.DirectionUpload,
+		RemotePath: "/logs/error.log", FileName: "error.log",
+		State:     filetransfer.StateFailed,
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
+	})
+	seedFileTransferJob(t, app, filetransfer.JobRecord{
+		ID: "j-other", UserID: "admin", TargetID: "t1", TargetName: "Osaka",
+		Backend: filetransfer.BackendTFTPServer, Direction: filetransfer.DirectionDownload,
+		RemotePath: "/notes.txt", FileName: "notes.txt",
+		State:     filetransfer.StateCompleted,
+		CreatedAt: now.Add(-30 * time.Minute), UpdatedAt: now.Add(-30 * time.Minute),
+	})
+
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	// state=failed → only j-failed
+	req := httptest.NewRequest(http.MethodGet, "/api/file-transfers?state=failed", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("state filter: %d %s", w.Result().StatusCode, w.Body.String())
+	}
+	var resp struct {
+		Items      []filetransfer.JobSnapshot `json:"items"`
+		NextCursor string                     `json:"next_cursor"`
+	}
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if len(resp.Items) != 1 || resp.Items[0].ID != "j-failed" {
+		t.Fatalf("state=failed expected only j-failed, got %+v", resp.Items)
+	}
+
+	// query=report → only j-completed (file_name match)
+	req = httptest.NewRequest(http.MethodGet, "/api/file-transfers?query=report", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	resp.Items = nil
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if len(resp.Items) != 1 || resp.Items[0].ID != "j-completed" {
+		t.Fatalf("query=report wrong: %+v", resp.Items)
+	}
+
+	// direction=upload + backend=remote → only j-failed
+	req = httptest.NewRequest(http.MethodGet, "/api/file-transfers?direction=upload&backend=remote", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	resp.Items = nil
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if len(resp.Items) != 1 || resp.Items[0].ID != "j-failed" {
+		t.Fatalf("direction+backend wrong: %+v", resp.Items)
+	}
+}
+
+func TestFileTransfersList_CursorPagination(t *testing.T) {
+	app, _, _ := setupAppWithTargetAndSFTPMock(t)
+	now := time.Now().UTC()
+	// Three rows with distinct updated_at in the past so the default
+	// [now-30d, now) range filter includes them. Index 0 = oldest, 2 = newest.
+	for i, id := range []string{"oldest", "middle", "newest"} {
+		ts := now.Add(-time.Duration(3-i) * time.Hour)
+		seedFileTransferJob(t, app, filetransfer.JobRecord{
+			ID: id, UserID: "admin", TargetID: "t1", TargetName: "T",
+			RemotePath: "/" + id + ".bin", FileName: id + ".bin",
+			State:     filetransfer.StateCompleted,
+			CreatedAt: ts, UpdatedAt: ts,
+		})
+	}
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	// Page 1 (limit=2): should be newest, middle
+	req := httptest.NewRequest(http.MethodGet, "/api/file-transfers?limit=2", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var page1 struct {
+		Items      []filetransfer.JobSnapshot `json:"items"`
+		NextCursor string                     `json:"next_cursor"`
+	}
+	_ = json.NewDecoder(w.Body).Decode(&page1)
+	if len(page1.Items) != 2 || page1.Items[0].ID != "newest" || page1.Items[1].ID != "middle" {
+		t.Fatalf("page1 wrong: %+v", page1.Items)
+	}
+	if page1.NextCursor == "" {
+		t.Fatal("expected next_cursor on page1")
+	}
+
+	// Page 2 using cursor: should be oldest, no further cursor
+	req = httptest.NewRequest(http.MethodGet, "/api/file-transfers?limit=2&after_cursor="+page1.NextCursor, nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var page2 struct {
+		Items      []filetransfer.JobSnapshot `json:"items"`
+		NextCursor string                     `json:"next_cursor"`
+	}
+	_ = json.NewDecoder(w.Body).Decode(&page2)
+	if len(page2.Items) != 1 || page2.Items[0].ID != "oldest" {
+		t.Fatalf("page2 wrong: %+v", page2.Items)
+	}
+	if page2.NextCursor != "" {
+		t.Fatalf("expected no next_cursor on last page, got %q", page2.NextCursor)
+	}
+}
+
+func TestFileTransfersList_AdminUserOverride(t *testing.T) {
+	app, _, _ := setupAppWithTargetAndSFTPMock(t)
+	_, _ = app.UserStore.CreateUser("u2", "user2", "User123!", "")
+	now := time.Now().UTC()
+	seedFileTransferJob(t, app, filetransfer.JobRecord{
+		ID: "ad-job", UserID: "admin", TargetID: "t1", FileName: "a.bin",
+		State: filetransfer.StateCompleted, CreatedAt: now, UpdatedAt: now,
+	})
+	seedFileTransferJob(t, app, filetransfer.JobRecord{
+		ID: "u2-job", UserID: "u2", TargetID: "t1", FileName: "b.bin",
+		State: filetransfer.StateCompleted, CreatedAt: now, UpdatedAt: now,
+	})
+
+	router := app.NewRouter()
+	adminSess, _ := app.SessionStore.Create("admin")
+	u2Sess, _ := app.SessionStore.Create("u2")
+
+	// Admin requests user_id=u2 → should see u2's jobs.
+	req := httptest.NewRequest(http.MethodGet, "/api/file-transfers?user_id=u2", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: adminSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var adminResp struct {
+		Items []filetransfer.JobSnapshot `json:"items"`
+	}
+	_ = json.NewDecoder(w.Body).Decode(&adminResp)
+	if len(adminResp.Items) != 1 || adminResp.Items[0].ID != "u2-job" {
+		t.Fatalf("admin override failed: %+v", adminResp.Items)
+	}
+
+	// Non-admin requests user_id=admin → override is silently ignored; they only see their own.
+	req = httptest.NewRequest(http.MethodGet, "/api/file-transfers?user_id=admin", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: u2Sess.ID, Path: "/"})
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var u2Resp struct {
+		Items []filetransfer.JobSnapshot `json:"items"`
+	}
+	_ = json.NewDecoder(w.Body).Decode(&u2Resp)
+	for _, it := range u2Resp.Items {
+		if it.ID == "ad-job" {
+			t.Fatalf("non-admin must not see admin's jobs via user_id override: %+v", u2Resp.Items)
+		}
+	}
+}
+
+func TestFileTransfersList_RejectsInvalidInputs(t *testing.T) {
+	app, _, _ := setupAppWithTargetAndSFTPMock(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"bad state", "/api/file-transfers?state=bogus"},
+		{"bad direction", "/api/file-transfers?direction=sideways"},
+		{"bad backend", "/api/file-transfers?backend=carrierpigeon"},
+		{"bad cursor", "/api/file-transfers?after_cursor=%21%21%21not%20base64%21%21%21"},
+		{"bad from", "/api/file-transfers?from=not-a-date"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			req.AddCookie(cookie)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Result().StatusCode != http.StatusBadRequest {
+				t.Fatalf("expected 400 for %s, got %d (%s)", tc.name, w.Result().StatusCode, w.Body.String())
+			}
+		})
+	}
+}
+
 func waitTransferDone(t *testing.T, router http.Handler, cookie *http.Cookie, snap *filetransfer.JobSnapshot) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

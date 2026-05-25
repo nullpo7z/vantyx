@@ -137,6 +137,25 @@ func (l *limitWriter) Write(p []byte) (n int, err error) {
 	return n, nil
 }
 
+// nthCallErrWriter delegates to w until the failOn-th Write (1-indexed)
+// where it returns errAfter without writing. Used by tests that need to
+// distinguish "first Write succeeds" from "second Write fails" without
+// relying on byte counts (which are timestamp-dependent in JSON output).
+type nthCallErrWriter struct {
+	w        io.Writer
+	failOn   int
+	count    int
+	errAfter error
+}
+
+func (n *nthCallErrWriter) Write(p []byte) (int, error) {
+	n.count++
+	if n.count >= n.failOn {
+		return 0, n.errAfter
+	}
+	return n.w.Write(p)
+}
+
 func TestAsciinemaWriter_WriteHeaderWriteError(t *testing.T) {
 	wantErr := errors.New("header write failed")
 	w := NewAsciinemaWriter(&errWriter{err: wantErr}, 80, 24)
@@ -149,9 +168,11 @@ func TestAsciinemaWriter_WriteHeaderWriteError(t *testing.T) {
 func TestAsciinemaWriter_WriteEventWriteError(t *testing.T) {
 	wantErr := errors.New("event write failed")
 	var buf bytes.Buffer
-	// Allow only header (~80 bytes); event line write should fail.
-	lw := &limitWriter{w: &buf, limit: 85, errAfter: wantErr}
-	w := NewAsciinemaWriter(lw, 80, 24)
+	// First Write call writes the header (succeeds); the second Write
+	// call would write the event line and must fail. Counting calls
+	// rather than bytes avoids flakiness when the JSON length of the
+	// event line varies with the floating-point timestamp.
+	w := NewAsciinemaWriter(&nthCallErrWriter{w: &buf, failOn: 2, errAfter: wantErr}, 80, 24)
 	_, err := w.Write([]byte("event"))
 	if err != wantErr {
 		t.Fatalf("Write: got err %v", err)

@@ -32,9 +32,15 @@ func newTestApp(t *testing.T) *App {
 	app := NewApp()
 	t.Cleanup(func() {
 		_ = closeAuditSink()
+		// Give in-flight goroutines a moment to release SQLite handles
+		// before TempDir cleanup (avoids flaky -wal/-shm leftovers).
+		time.Sleep(50 * time.Millisecond)
 		if app != nil && app.DB != nil {
+			_, _ = app.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 			_ = app.DB.Close()
 		}
+		_ = os.Remove(dbPath + "-wal")
+		_ = os.Remove(dbPath + "-shm")
 		_ = os.Unsetenv("VANTYX_SQLITE_PATH")
 	})
 	return app

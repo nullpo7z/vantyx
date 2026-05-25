@@ -9,6 +9,42 @@ function isEmbeddedTftpCompanionTarget(t, targets) {
   )
 }
 
+function renderHomeConnectButton(t, escapeHtml) {
+  const disabledBtnClass =
+    'connect-btn-in-group rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors opacity-40 cursor-default w-[96px] text-center whitespace-nowrap'
+  if (t.protocol === 'ssh' || t.protocol === 'telnet') {
+    return `<button type="button" data-terminal-target-id="${escapeHtml(
+      t.id,
+    )}" data-terminal-protocol="${escapeHtml(t.protocol)}" data-terminal-target-name="${escapeHtml(t.name || '')}" data-has-stored-credentials="${
+      t.has_stored_credentials ? '1' : ''
+    }" data-needs-password="${t.needs_password ? '1' : ''}" data-needs-passphrase="${
+      t.protocol === 'ssh' && t.needs_passphrase ? '1' : ''
+    }"
+              class="connect-btn-in-group terminal-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50 w-[96px] text-center whitespace-nowrap">
+              接続
+            </button>`
+  }
+  if (t.protocol === 'vnc') {
+    return `<button type="button" data-popup-protocol="vnc" data-popup-target-id="${escapeHtml(
+      t.id,
+    )}" data-popup-target-name="${escapeHtml(t.name || '')}"
+              class="connect-btn-in-group vnc-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block w-[96px] text-center whitespace-nowrap">
+              接続
+            </button>`
+  }
+  if (t.protocol === 'rdp') {
+    return `<a href="/rdp?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(
+      t.name || '',
+    )}"
+              target="_blank" rel="noopener noreferrer"
+              data-rdp-target-id="${escapeHtml(t.id)}" data-rdp-target-name="${escapeHtml(t.name || '')}"
+              class="connect-btn-in-group rdp-open-link rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block w-[96px] text-center whitespace-nowrap">
+              接続
+            </a>`
+  }
+  return `<button type="button" disabled class="${disabledBtnClass}">接続</button>`
+}
+
 export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, renderTagPills) {
   const isManageMode = mode === 'manage'
   if (!targets || targets.length === 0) {
@@ -109,22 +145,7 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
               </button>
             </div>
             `
-                : t.protocol === 'tftp'
-                  ? `
-            <div class="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                class="files-open-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors w-[104px] text-center whitespace-nowrap"
-                data-files-target-id="${escapeHtml(t.id)}"
-                data-files-target-name="${escapeHtml(t.name || '')}"
-                data-files-protocol="tftp"
-                data-files-host="${escapeHtml(t.host)}"
-                data-files-sftp-enabled="0"
-                data-files-disabled="0"
-              >ファイル</button>
-            </div>
-            `
-                  : `
+                : `
             <div class="flex items-center justify-end gap-2">
               ${tftpToggleHtml}
               <button
@@ -140,36 +161,7 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
                 data-files-sftp-enabled="${hasSftpEnabled ? '1' : '0'}"
                 data-files-disabled="${showFileBtn ? '0' : '1'}"
               >ファイル</button>
-              ${
-                t.protocol === 'ssh' || t.protocol === 'telnet'
-                  ? `<button type="button" data-terminal-target-id="${escapeHtml(
-                      t.id,
-                    )}" data-terminal-protocol="${escapeHtml(t.protocol)}" data-terminal-target-name="${escapeHtml(t.name || '')}" data-has-stored-credentials="${
-                      t.has_stored_credentials ? '1' : ''
-                    }" data-needs-password="${t.needs_password ? '1' : ''}" data-needs-passphrase="${
-                      t.protocol === 'ssh' && t.needs_passphrase ? '1' : ''
-                    }"
-              class="connect-btn-in-group terminal-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50 w-[96px] text-center whitespace-nowrap">
-              接続
-            </button>`
-                  : t.protocol === 'vnc'
-                    ? `<button type="button" data-popup-protocol="vnc" data-popup-target-id="${escapeHtml(
-                        t.id,
-                      )}" data-popup-target-name="${escapeHtml(t.name || '')}"
-              class="connect-btn-in-group vnc-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block w-[96px] text-center whitespace-nowrap">
-              接続
-            </button>`
-                    : t.protocol === 'rdp'
-                      ? `<a href="/rdp?target_id=${encodeURIComponent(t.id)}&target_name=${encodeURIComponent(
-                          t.name || '',
-                        )}"
-              target="_blank" rel="noopener noreferrer"
-              data-rdp-target-id="${escapeHtml(t.id)}" data-rdp-target-name="${escapeHtml(t.name || '')}"
-              class="connect-btn-in-group rdp-open-link rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block w-[96px] text-center whitespace-nowrap">
-              接続
-            </a>`
-                      : ''
-              }
+              ${renderHomeConnectButton(t, escapeHtml)}
               <button type="button" class="active-sessions-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors w-[200px] text-center whitespace-nowrap" data-target-id="${escapeHtml(
                 t.id,
               )}" data-target-name="${escapeHtml(t.name || '')}">アクティブなセッション (0)</button>

@@ -256,6 +256,34 @@ const API = {
     }
   },
 
+  /**
+   * バックグラウンドファイル転送の状態変化を SSE で購読する。
+   * イベントは個別のジョブ snapshot を返す。
+   * @param {function(object): void} onSnapshot - スナップショット受信時
+   * @param {function(): void} [onError] - 切断時
+   */
+  subscribeFileTransferEvents(onSnapshot, onError) {
+    const url = new URL('/api/events/file-transfers', window.location.origin).toString()
+    const es = new window.EventSource(url)
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data || '{}')
+        if (data && typeof onSnapshot === 'function') onSnapshot(data)
+      } catch {
+        /* ignore */
+      }
+    }
+    es.onerror = () => {
+      es.close()
+      if (typeof onError === 'function') onError()
+    }
+    return {
+      close() {
+        es.close()
+      },
+    }
+  },
+
   /** 監査ログ（管理者のみ） */
   async auditLogs({ limit = 200, event = '', user_id = '', from = '', to = '', exclude_event = '', after_id = '' } = {}) {
     const q = new URLSearchParams()

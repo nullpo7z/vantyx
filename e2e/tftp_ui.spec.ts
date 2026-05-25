@@ -15,6 +15,8 @@ test.describe('TFTP UI（スモーク）', () => {
     await expect(page.locator('#files-tftp-box')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('#files-tftp-path')).toBeVisible();
     await expect(page.locator('#files-tftp-download')).toBeVisible();
+    await expect(page.locator('#files-back')).toBeVisible();
+    await expect(page.locator('#files-back-header')).toBeVisible();
   });
 
   test('tftp-console ルートが主要 UI を表示する', async ({ page }) => {

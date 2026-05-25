@@ -19,7 +19,8 @@ info:
     - ターミナル WebSocket (GET /ws/ssh)。認証後、ターゲットへの SSH または Telnet をブリッジ。セッション永続化・レジューム対応（GET /api/terminal/sessions で一覧、session_id で再接続）。
     - VNC WebSocket (GET /ws/vnc)。認証後、protocol=vnc のターゲットへ noVNC 用に RFB をブリッジ。クエリ target_id 必須。
     - ファイル転送: GET /api/targets/{target_id}/files（一覧・クエリ path）、GET /api/targets/{target_id}/files/download（ダウンロード・クエリ path）、POST /api/targets/{target_id}/files/upload（multipart: path, file）、DELETE /api/targets/{target_id}/files（削除・クエリ path）。SSH ターゲットは SFTP（保存済み認証必須）、リモート TFTP ターゲットは TFTP クライアント（認証不要・一覧・削除未対応）。
-    - 組み込み TFTP サーバー（Vantyx 内蔵）: GET/POST/DELETE /api/tftp/targets/{target_id}/files/*。protocol=tftp のターゲット向け。ローカルディスク（VANTYX_TFTP_ROOT）上のファイルを操作。
+    - 組み込み TFTP サーバー（Vantyx 内蔵）: GET /api/tftp/targets/{target_id}/files/*。protocol=tftp のターゲット向け。ローカルディスク（VANTYX_TFTP_ROOT）上のファイルを操作。
+    - バックグラウンドファイル転送: GET /api/file-transfers（自分のジョブ一覧）、GET /api/file-transfers/{transfer_id}（状態）、DELETE /api/file-transfers/{transfer_id}（キャンセル）、GET /api/file-transfers/{transfer_id}/content（完了したダウンロードの取得）、POST /api/file-transfers/download（JSON: backend, target_id, path → 202）、POST /api/file-transfers/upload（multipart: backend, target_id, path, file → 202）。backend は remote（SFTP/FTP/リモート TFTP）または tftp_server（組み込み TFTP）。ジョブはプロセス内メモリのみ（再起動で消失）。単一ファイル上限 64MB。アップロードは receiving（ブラウザ→Vantyx 受信）中に離脱すると失敗しうる。
     - 録画: GET /api/recordings（メタデータ一覧。クエリ target_id でフィルタ可）。GET /api/recordings/{recording_id}/file でファイル取得。クエリ format=cast|gif|webm（省略時 cast）。cast=Asciinema 形式。gif/webm は agg（および WebM は ffmpeg）必要、未導入時 503。ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象。
     - CLI SSH ゲートウェイ: VANTYX_SSH_LISTEN で有効化。ssh user@vantyx でログイン後、メニューからターゲット選択してプロキシ接続。VANTYX_RECORDINGS_DIR 設定時は CLI 接続も録画対象。
     - OpenAPI 仕様 (GET /api/spec) と Swagger UI (GET /docs) は admin のみアクセス可。
@@ -455,6 +456,79 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TerminalSessionItem'
+    FileTransferJob:
+      type: object
+      description: バックグラウンドファイル転送ジョブのスナップショット。
+      properties:
+        id:
+          type: string
+        target_id:
+          type: string
+        target_name:
+          type: string
+        backend:
+          type: string
+          description: remote（SFTP/FTP/リモート TFTP）または tftp_server（組み込み TFTP）
+          enum: [remote, tftp_server]
+        direction:
+          type: string
+          enum: [upload, download]
+        remote_path:
+          type: string
+        file_name:
+          type: string
+        state:
+          type: string
+          description: receiving（アップロード受信中）, running, completed, failed, cancelled
+          enum: [receiving, running, completed, failed, cancelled]
+        progress:
+          type: integer
+          format: int64
+        total:
+          type: integer
+          format: int64
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - target_id
+        - backend
+        - direction
+        - remote_path
+        - file_name
+        - state
+        - progress
+        - total
+        - created_at
+        - updated_at
+    FileTransferListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileTransferJob'
+    FileTransferDownloadRequest:
+      type: object
+      required:
+        - backend
+        - target_id
+        - path
+      properties:
+        backend:
+          type: string
+          enum: [remote, tftp_server]
+        target_id:
+          type: string
+        path:
+          type: string
+          description: リモート上の絶対パス（先頭 / 推奨）
 
 paths:
   /healthz:
@@ -2289,6 +2363,241 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: セッションが存在しない、または自分のセッションでない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/file-transfers:
+    get:
+      summary: バックグラウンドファイル転送ジョブ一覧
+      description: ログイン中のユーザーが開始した転送ジョブの一覧を返します（新しい順）。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: ジョブ一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileTransferListResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/file-transfers/download:
+    post:
+      summary: バックグラウンドダウンロードの開始
+      description: |
+        指定パスのファイルをバックグラウンドで取得します。202 でジョブを返し、完了後は GET /api/file-transfers/{transfer_id}/content でダウンロードできます。
+        画面を離脱しても running フェーズはサーバー側で継続します。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileTransferDownloadRequest'
+      responses:
+        '202':
+          description: ジョブ受付
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileTransferJob'
+        '400':
+          description: リクエスト不正
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: ターゲットへのアクセス権なし
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ターゲットが見つからない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/file-transfers/upload:
+    post:
+      summary: バックグラウンドアップロードの開始
+      description: |
+        multipart でファイルを Vantyx に受信（receiving）した後、バックグラウンドでリモートへ転送（running）します。
+        receiving 中にブラウザが切断すると失敗しうる点に注意。単一ファイル上限 64MB。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - backend
+                - target_id
+                - path
+                - file
+              properties:
+                backend:
+                  type: string
+                  enum: [remote, tftp_server]
+                target_id:
+                  type: string
+                path:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '202':
+          description: ジョブ受付（受信完了後 running へ）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileTransferJob'
+        '400':
+          description: リクエスト不正
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: ターゲットへのアクセス権なし
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: ステージング失敗
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/file-transfers/{transfer_id}:
+    get:
+      summary: 転送ジョブの状態取得
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: transfer_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ジョブ状態
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileTransferJob'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ジョブが見つからない、または自分のジョブでない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: 転送ジョブのキャンセル
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: transfer_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: キャンセル完了
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 権限なし
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ジョブが見つからない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/file-transfers/{transfer_id}/content:
+    get:
+      summary: 完了したダウンロードのファイル取得
+      description: direction=download かつ state=completed のジョブのみ。取得後はクライアント側でジョブ削除を推奨。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: transfer_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ファイル本体
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: アップロードジョブなどダウンロード以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ジョブが見つからない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 転送未完了
           content:
             application/json:
               schema:

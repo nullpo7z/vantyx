@@ -55,6 +55,7 @@ type Job struct {
 
 	cancel func()
 	mu     sync.Mutex
+	notify func(JobSnapshot, string)
 }
 
 // Manager tracks in-memory transfer jobs per process.
@@ -63,6 +64,16 @@ type Manager struct {
 	jobs    map[string]*Job
 	now     func() time.Time
 	tempDir string
+	notify  func(JobSnapshot, string)
+}
+
+// SetNotifier registers a callback invoked when a job state or progress changes.
+// The callback receives a snapshot and the owning userID. The callback should be
+// non-blocking; perform any I/O in a goroutine.
+func (m *Manager) SetNotifier(fn func(JobSnapshot, string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.notify = fn
 }
 
 // NewManager creates a Manager. tempDir must exist and be writable.
@@ -93,6 +104,9 @@ func (m *Manager) Create(opts CreateOpts, cancel func()) (*Job, error) {
 		return nil, err
 	}
 	now := m.now()
+	m.mu.Lock()
+	notify := m.notify
+	m.mu.Unlock()
 	j := &Job{
 		ID:         id,
 		UserID:     opts.UserID,
@@ -107,6 +121,7 @@ func (m *Manager) Create(opts CreateOpts, cancel func()) (*Job, error) {
 		CreatedAt:  now,
 		UpdatedAt:  now,
 		cancel:     cancel,
+		notify:     notify,
 	}
 	if j.State == "" {
 		j.State = StateRunning
@@ -114,6 +129,7 @@ func (m *Manager) Create(opts CreateOpts, cancel func()) (*Job, error) {
 	m.mu.Lock()
 	m.jobs[id] = j
 	m.mu.Unlock()
+	j.emit()
 	return j, nil
 }
 
@@ -176,9 +192,9 @@ func (m *Manager) Cancel(id, userID string) error {
 		return ErrForbidden
 	}
 	j.mu.Lock()
-	defer j.mu.Unlock()
 	switch j.State {
 	case StateCompleted, StateFailed, StateCancelled:
+		j.mu.Unlock()
 		return nil
 	}
 	if j.cancel != nil {
@@ -186,16 +202,19 @@ func (m *Manager) Cancel(id, userID string) error {
 	}
 	j.State = StateCancelled
 	j.UpdatedAt = m.now()
+	j.mu.Unlock()
+	j.emit()
 	return nil
 }
 
 // SetState updates job state and optional error message.
 func (j *Job) SetState(state State, errMsg string) {
 	j.mu.Lock()
-	defer j.mu.Unlock()
 	j.State = state
 	j.Error = errMsg
 	j.UpdatedAt = time.Now()
+	j.mu.Unlock()
+	j.emit()
 }
 
 // SetTempPath records the staging file path.
@@ -208,12 +227,22 @@ func (j *Job) SetTempPath(path string) {
 // SetProgress updates progress bytes (and optionally total).
 func (j *Job) SetProgress(done, total int64) {
 	j.mu.Lock()
-	defer j.mu.Unlock()
 	j.Progress = done
 	if total > 0 {
 		j.Total = total
 	}
 	j.UpdatedAt = time.Now()
+	j.mu.Unlock()
+	j.emit()
+}
+
+// emit invokes the notifier with the current snapshot. Safe to call after unlock.
+func (j *Job) emit() {
+	if j.notify == nil {
+		return
+	}
+	snap := j.Snapshot()
+	j.notify(snap, j.UserID)
 }
 
 // GetTempPath returns the staging file path.

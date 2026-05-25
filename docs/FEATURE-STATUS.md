@@ -50,6 +50,10 @@
 - **TFTP（リモートクライアント）**: サーバー管理で `protocol=tftp` を登録（プロトコルが TFTP のため SFTP/FTP 等の併用選択はなし）。**ホーム**の当該行「ファイル」→ `/files?protocol=tftp`（外部 TFTP へ Get/Put）
 - **TFTP（Vantyx 組み込みサーバー）**: SSH/Telnet で「TFTP を有効」にしホームでトグル ON。内部用 `protocol=tftp` レコードは一覧非表示。**ホーム**の SSH 行「ファイル」→ TFTP + コンソール（`/tftp-console`）。REST: `/api/tftp/targets/{id}/files/*`
 - ファイルマネージャー UI（`/files`）: SFTP/FTP はディレクトリツリー・一覧・転送・削除。TFTP クライアントはパス指定転送のみ
+- **バックグラウンドファイル転送**: `GET/POST/DELETE /api/file-transfers/*`（SFTP/FTP/リモート TFTP/組み込み TFTP サーバー）。画面離脱後も `running` フェーズはサーバー側で継続
+- **フロント**: 画面下部グローバルバー、ナビ「セッション」一覧での転送確認・中止、`files_page` / `tftp_console_page` からの非同期転送
+- **制限**: 転送ジョブはプロセス内メモリのみ（再起動で消失）。アップロードは `receiving`（ブラウザ→Vantyx 受信）中に離脱すると失敗しうる。単一ファイル上限 64MB
+- **TFTP 起動時**: 組み込み同行ターゲットのみ起動時削除。外部 TFTP ターゲットは永続化
 
 ### VNC リモートデスクトップ（Phase 5 の一部）
 - **VNC** WebSocket プロキシ（`internal/vncproxy`）: ブラウザ↔VNC サーバー間のバイトブリッジ
@@ -110,7 +114,7 @@
 | アクセス制御       | グループ・ターゲット・タグ、水平/垂直制御   | （特になし）                             |
 | ターミナル         | SSH/Telnet プロキシ、ブラウザ+CLI、永続化・レジューム、Telnet NAWS/自動ログイン | —                                        |
 | 録画・証跡         | Asciinema 録画、一覧・再生、期間/ユーザー/ターゲット検索、監査・コマンドログ DB・ページング | 完全シェル履歴保証                       |
-| ファイル転送       | SFTP/FTP、TFTP クライアント・組み込みサーバー、ファイル UI | リモート TFTP の一覧・削除（プロトコル制約） |
+| ファイル転送       | SFTP/FTP、TFTP、ファイル UI、バックグラウンド転送 API・セッション一覧 UI | リモート TFTP の一覧・削除（プロトコル制約）、転送ジョブの DB 永続化 |
 | リモートデスクトップ | VNC（noVNC + WebSocket プロキシ）          | RDP ブリッジ                             |
 | セキュリティ       | ASVS L2 対応、暗号化、監査ログ DB・転送設定 | （特になし）                             |
 | インフラ           | Docker 1 コンテナ、SQLite、自己署名 TLS    | PostgreSQL、オブジェクトストレージ、K8s   |

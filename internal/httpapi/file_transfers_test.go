@@ -245,6 +245,68 @@ func TestFileTransferTFTPServerBackgroundUploadDownload(t *testing.T) {
 	}
 }
 
+func TestFileTransferDelete_ForbiddenOtherUser(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	mock.AddFile("/other.txt", []byte("x"))
+	router := app.NewRouter()
+	_, _ = app.UserStore.CreateUser("u2", "user2", "User123!", "")
+	adminSess, _ := app.SessionStore.Create("admin")
+	user2Sess, err := app.SessionStore.Create("u2")
+	if err != nil || user2Sess == nil {
+		t.Fatalf("user2 session: %v", err)
+	}
+
+	startBody := []byte(`{"backend":"remote","target_id":"` + targetID + `","path":"/other.txt"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/file-transfers/download", bytes.NewReader(startBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: adminSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var snap filetransfer.JobSnapshot
+	_ = json.NewDecoder(w.Body).Decode(&snap)
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/file-transfers/"+snap.ID, nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: user2Sess.ID, Path: "/"})
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d %s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestFileTransfersList_UserIsolation(t *testing.T) {
+	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
+	mock.AddFile("/iso.txt", []byte("x"))
+	router := app.NewRouter()
+	_, _ = app.UserStore.CreateUser("u2", "user2", "User123!", "")
+	adminSess, _ := app.SessionStore.Create("admin")
+	user2Sess, err := app.SessionStore.Create("u2")
+	if err != nil || user2Sess == nil {
+		t.Fatalf("user2 session: %v", err)
+	}
+
+	startBody := []byte(`{"backend":"remote","target_id":"` + targetID + `","path":"/iso.txt"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/file-transfers/download", bytes.NewReader(startBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: adminSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/file-transfers", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: user2Sess.ID, Path: "/"})
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var out struct {
+		Items []filetransfer.JobSnapshot `json:"items"`
+	}
+	_ = json.NewDecoder(w.Body).Decode(&out)
+	for _, item := range out.Items {
+		if item.TargetID == targetID {
+			t.Fatal("user2 should not see admin transfer jobs")
+		}
+	}
+}
+
 func TestFileTransferDelete_NotFound(t *testing.T) {
 	app, _, _ := setupAppWithTargetAndSFTPMock(t)
 	router := app.NewRouter()

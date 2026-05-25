@@ -237,6 +237,9 @@ type App struct {
 	// SessionEventBroker broadcasts session lifecycle events for SSE (GET /api/events/sessions).
 	SessionEventBroker *SessionEventBroker
 
+	// FileTransferEventBroker streams per-user file transfer updates for SSE (GET /api/events/file-transfers).
+	FileTransferEventBroker *FileTransferEventBroker
+
 	// CommandLogStore persists terminal stdin lines for search.
 	CommandLogStore *commandLogStore
 
@@ -324,18 +327,22 @@ func NewApp() *App {
 		panic(err)
 	}
 
+	ftManager := filetransfer.NewManager(transferDir)
+	ftBroker := NewFileTransferEventBroker()
+	ftManager.SetNotifier(ftBroker.Publish)
 	return &App{
-		UserStore:              userStore,
-		SessionStore:           sessionStore,
-		TargetStore:            targetStore,
-		AccessGroupStore:       groupStore,
-		TerminalSessionManager: terminalSessions,
-		LoginRateLimiter:       newLoginRateLimiter(),
-		DB:                     db,
-		RDPVNCManager:          rdpSessions,
-		SessionEventBroker:     NewSessionEventBroker(),
-		CommandLogStore:        newCommandLogStore(db),
-		FileTransferManager:    filetransfer.NewManager(transferDir),
+		UserStore:               userStore,
+		SessionStore:            sessionStore,
+		TargetStore:             targetStore,
+		AccessGroupStore:        groupStore,
+		TerminalSessionManager:  terminalSessions,
+		LoginRateLimiter:        newLoginRateLimiter(),
+		DB:                      db,
+		RDPVNCManager:           rdpSessions,
+		SessionEventBroker:      NewSessionEventBroker(),
+		FileTransferEventBroker: ftBroker,
+		CommandLogStore:         newCommandLogStore(db),
+		FileTransferManager:     ftManager,
 	}
 }
 
@@ -460,6 +467,8 @@ func (a *App) NewRouter() http.Handler {
 
 	// Session lifecycle events (SSE); frontend subscribes instead of polling.
 	r.Get("/api/events/sessions", a.handleSessionEvents)
+	// Background file transfer updates (SSE); used for real-time progress without polling.
+	r.Get("/api/events/file-transfers", a.handleFileTransferEvents)
 
 	// SSH/WebSocket terminal and session list (Phase 2: resume)
 	r.Route("/api/terminal/sessions", func(r chi.Router) {

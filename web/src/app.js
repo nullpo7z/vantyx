@@ -2444,7 +2444,17 @@ export function renderApp(container) {
       groupsCache = null
     }
 
-    showTreeView('home')
+    const initialView = new URLSearchParams(window.location.search).get('view')
+    if (initialView === 'sessions') {
+      try {
+        const url = new URL(window.location.href)
+        url.searchParams.delete('view')
+        window.history.replaceState({}, '', url.toString())
+      } catch { /* ignore */ }
+      showSessionsPage()
+    } else {
+      showTreeView('home')
+    }
   })()
 
   initNav({

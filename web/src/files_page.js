@@ -6,6 +6,7 @@ import {
   startBackgroundDownload,
   startBackgroundUpload,
 } from './file_transfer_manager.js'
+import { openTerminalForTarget } from './terminal_launch.js'
 
 function escapeHtml(s) {
   if (s == null) return ''
@@ -40,7 +41,10 @@ export function renderFilesPage(container) {
   const params = new URLSearchParams(window.location.search)
   const targetId = params.get('target_id') || ''
   const targetName = params.get('target_name') || targetId || 'ファイル'
-  const isTftp = params.get('protocol') === 'tftp'
+  const protocol = params.get('protocol') || ''
+  const isTftp = protocol === 'tftp'
+  const isFtp = protocol === 'ftp'
+  const showTerminalBtn = !isTftp && !isFtp
 
   let currentPath = '/'
   let loading = false
@@ -285,14 +289,33 @@ export function renderFilesPage(container) {
     }
   }
 
-  const terminalUrl = targetId ? `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName)}` : '/'
+  function goBack() {
+    if (window.opener && !window.opener.closed) {
+      try {
+        window.opener.focus()
+      } catch {
+        /* ignore */
+      }
+      try {
+        window.close()
+      } catch {
+        /* ignore */
+      }
+      return
+    }
+    window.location.href = '/'
+  }
 
   container.innerHTML = `
     <div class="min-h-screen w-full flex flex-col bg-slate-100">
       <header class="shrink-0 bg-slate-800 text-white">
         <div class="px-4 py-3 flex items-center justify-between gap-3">
           <div class="min-w-0 flex items-center gap-3">
-            <a href="/" id="files-back" class="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white" title="ホーム">${iconArrowBack}</a>
+            ${
+              isTftp
+                ? `<button type="button" id="files-back" class="flex items-center gap-1.5 shrink-0 rounded-lg border border-slate-500 bg-slate-700 px-3 py-2 text-sm font-medium text-white hover:bg-slate-600" title="ホームへ戻る">${iconArrowBack}<span>戻る</span></button>`
+                : `<a href="/" id="files-back" class="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white" title="ホーム">${iconArrowBack}</a>`
+            }
             <div class="min-w-0">
               <div class="text-xs text-slate-400">ファイル${isTftp ? ' (TFTP)' : ''}</div>
               <div class="text-sm font-semibold truncate">${escapeHtml(targetName)}</div>
@@ -300,8 +323,10 @@ export function renderFilesPage(container) {
           </div>
           ${
             isTftp
-              ? ''
-              : `<a href="${escapeHtml(terminalUrl)}" target="_blank" rel="noopener" class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm text-white" title="ターミナルで開く">${iconTerminal}<span class="hidden sm:inline">ターミナル</span></a>`
+              ? `<button type="button" id="files-back-header" class="shrink-0 rounded-lg border border-slate-500 bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-600 shadow-sm">戻る</button>`
+              : showTerminalBtn
+                ? `<button type="button" id="files-terminal-open" class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm text-white" title="ターミナルで開く">${iconTerminal}<span class="hidden sm:inline">ターミナル</span></button>`
+                : ''
           }
         </div>
         ${
@@ -317,7 +342,9 @@ export function renderFilesPage(container) {
         <p id="files-error" class="mx-4 mt-3 text-sm text-red-600 hidden"></p>
         ${isTftp ? `
         <div id="files-tftp-box" class="mx-4 mt-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
-          <p class="text-sm text-amber-800 mb-3">リモート TFTP ではパスを指定してダウンロード・アップロードします。ディレクトリ一覧と削除はプロトコル上サポートされません。</p>
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <p class="text-sm text-amber-800 flex-1 min-w-0">リモート TFTP ではパスを指定してダウンロード・アップロードします。ディレクトリ一覧と削除はプロトコル上サポートされません。</p>
+          </div>
           <div class="flex flex-wrap items-center gap-2">
             <input type="text" id="files-tftp-path" class="rounded-lg border border-slate-300 px-3 py-2 text-sm w-64 font-mono bg-white" placeholder="例: config.txt または /path/to/file" />
             <button type="button" id="files-tftp-download" class="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700">ダウンロード</button>
@@ -328,6 +355,7 @@ export function renderFilesPage(container) {
             </label>
           </div>
         </div>
+        <div id="vantyx-file-transfers-slot" class="mx-4 mt-3"></div>
         ` : ''}
         ${
           isTftp
@@ -347,17 +375,20 @@ export function renderFilesPage(container) {
           </div>
         </div>
       </main>
-
-      <div id="files-transfers" class="hidden shrink-0 border-t border-slate-200 bg-white max-h-40 overflow-auto">
-        <div class="px-3 py-2 text-xs font-medium text-slate-500 border-b border-slate-100">転送（画面を離れてもバックグラウンドで継続）</div>
-        <div id="files-transfers-list" class="px-2 pb-2"></div>
-      </div>
     </div>
   `
 
-  container.querySelector('#files-back').addEventListener('click', (e) => {
-    e.preventDefault()
-    window.location.href = '/'
+  const bindBack = (el) => {
+    el?.addEventListener('click', (e) => {
+      e.preventDefault()
+      goBack()
+    })
+  }
+  bindBack(container.querySelector('#files-back'))
+  bindBack(container.querySelector('#files-back-header'))
+
+  container.querySelector('#files-terminal-open')?.addEventListener('click', () => {
+    openTerminalForTarget(API, { targetId, targetName })
   })
 
   const refreshBtn = container.querySelector('#files-refresh')

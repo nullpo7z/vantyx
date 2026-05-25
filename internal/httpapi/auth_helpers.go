@@ -16,7 +16,8 @@ import (
 func (a *App) currentUserIDWithError(r *http.Request) (string, error) {
 	c, err := r.Cookie("vantyx_session")
 	if err != nil || c.Value == "" {
-		return "", nil
+		// No session cookie is "unauthenticated", not an error.
+		return "", nil //nolint:nilerr
 	}
 	sess, err := a.SessionStore.Get(c.Value)
 	if err != nil {
@@ -68,11 +69,14 @@ func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // requireGroupMemberOrAdmin enforces that the current user is either an
-// admin or a member of the given group. Storage errors (for example
-// "database is locked") map to HTTP 500.
-func (a *App) requireGroupMemberOrAdmin(w http.ResponseWriter, r *http.Request, groupID access.GroupID) (userID string, ok bool) {
-	var err error
-	userID, err = a.currentUserIDWithError(r)
+// admin or a member of the given group. The first return value carries
+// the resolved user ID for callers that need it (the user-management
+// audit handlers do), and is empty when ok is false. Storage errors
+// (for example "database is locked") map to HTTP 500.
+//
+//nolint:unparam // userID is part of the public helper contract.
+func (a *App) requireGroupMemberOrAdmin(w http.ResponseWriter, r *http.Request, groupID access.GroupID) (string, bool) {
+	userID, err := a.currentUserIDWithError(r)
 	if err != nil {
 		writeInternalError(w, err)
 		return "", false
@@ -106,9 +110,13 @@ func (a *App) requireGroupMemberOrAdmin(w http.ResponseWriter, r *http.Request, 
 }
 
 // requireTargetAccess enforces that the current user can access the
-// given target (via group or tag membership).
-func (a *App) requireTargetAccess(w http.ResponseWriter, r *http.Request, targetID access.TargetID) (userID string, ok bool) {
-	userID = strings.TrimSpace(a.currentUserID(r))
+// given target (via group or tag membership). The first return value
+// carries the resolved user ID for callers that need it, and is empty
+// when ok is false.
+//
+//nolint:unparam // userID is part of the public helper contract.
+func (a *App) requireTargetAccess(w http.ResponseWriter, r *http.Request, targetID access.TargetID) (string, bool) {
+	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return "", false

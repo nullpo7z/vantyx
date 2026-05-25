@@ -236,7 +236,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			pendingExtra = s.handleResumeCommand(ctx, wr, inputCh, args, activeSessionsForScope(), cliSessionMgr, screenCols, ptyRows, resizeChan)
 			continue
 		case "connect":
-			pendingExtra = s.handleConnectCommand(ctx, wr, inputCh, args, lastList, currentGroupIndex, cliSessionMgr, readLine, prompt, userID, ptyCols, ptyRows, screenCols, resizeChan)
+			pendingExtra = s.handleConnectCommand(wr, inputCh, args, lastList, currentGroupIndex, cliSessionMgr, readLine, prompt, userID, ptyCols, ptyRows, screenCols, resizeChan)
 			continue
 		default:
 			setStatus(fmt.Sprintf("Unknown command '%s'. Type 'help' for commands.", cmd))
@@ -415,7 +415,7 @@ func (s *Server) handleResumeCommand(ctx context.Context, wr io.Writer, inputCh 
 // next redraw.
 //
 //nolint:gocyclo // connect orchestrates session start, recording, and IO.
-func (s *Server) handleConnectCommand(ctx context.Context, wr io.Writer, inputCh <-chan byte, args []string, lastList []cliGroupEntry, currentGroupIndex int, cliSessionMgr *session.Manager, readLine func(bool, string) (string, error), prompt func(string, ...interface{}), userID string, ptyCols, ptyRows, screenCols int, resizeChan <-chan sshproxy.TerminalSize) []string {
+func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []string, lastList []cliGroupEntry, currentGroupIndex int, cliSessionMgr *session.Manager, readLine func(bool, string) (string, error), prompt func(string, ...interface{}), userID string, ptyCols, ptyRows, screenCols int, resizeChan <-chan sshproxy.TerminalSize) []string {
 	_ = cliSessionMgr
 	var status []string
 	add := func(s string) { status = append(status, s) }

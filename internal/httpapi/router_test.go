@@ -1365,8 +1365,8 @@ func TestApp_Files_ListWithMock(t *testing.T) {
 		return
 	}
 	mock.AddDir("/", []MockFileInfo{
-		{Name_: "a.txt", Size_: 10, IsDir_: false, Mod_: time.Now()},
-		{Name_: "dir", Size_: 0, IsDir_: true, Mod_: time.Now()},
+		{NameField: "a.txt", SizeField: 10, IsDirField: false, ModTimeField: time.Now()},
+		{NameField: "dir", SizeField: 0, IsDirField: true, ModTimeField: time.Now()},
 	})
 	router := app.NewRouter()
 	sess, _ := app.SessionStore.Create("admin")
@@ -2860,7 +2860,7 @@ func TestApp_SetGroupTags_InvalidBody(t *testing.T) {
 
 func TestApp_ListFiles_RelativePath(t *testing.T) {
 	app, mock, targetID := setupAppWithTargetAndSFTPMock(t)
-	mock.AddDir("/", []MockFileInfo{{Name_: "sub", Size_: 0, IsDir_: true, Mod_: time.Now()}})
+	mock.AddDir("/", []MockFileInfo{{NameField: "sub", SizeField: 0, IsDirField: true, ModTimeField: time.Now()}})
 	mock.AddDir("/sub", nil)
 	router := app.NewRouter()
 	sess, _ := app.SessionStore.Create("admin")

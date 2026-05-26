@@ -2,17 +2,84 @@ package httpapi
 
 import (
 	"context"
+	"crypto/hmac"
+	cryptorand "crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/i18n"
 	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 )
+
+var cryptoRandReader io.Reader = cryptorand.Reader
+
+// setAttachmentDisposition writes a Content-Disposition header that
+// safely encodes filename, preventing header injection via CR/LF
+// (CWE-93) or quote-breakouts (CWE-79) from attacker-controlled
+// filenames. Non-ASCII names are exposed via the RFC 5987 filename*
+// parameter while a sanitised ASCII fallback satisfies legacy clients.
+func setAttachmentDisposition(w http.ResponseWriter, filename string) {
+	clean := sanitiseDispositionFilename(filename)
+	if clean == "" {
+		clean = "download"
+	}
+	// quoted-string per RFC 6266 / RFC 7230 forbids CR/LF and `"`.
+	// We already strip those in sanitiseDispositionFilename; escape
+	// remaining backslashes to keep the parser happy.
+	ascii := strings.ReplaceAll(clean, `\`, `\\`)
+	encoded := url.PathEscape(clean)
+	w.Header().Set("Content-Disposition",
+		`attachment; filename="`+ascii+`"; filename*=UTF-8''`+encoded)
+}
+
+// escapeLikeOperand escapes the SQLite/PostgreSQL LIKE wildcards
+// (`%`, `_`) and the escape byte itself so caller-supplied substrings
+// can be passed through `column LIKE ? ESCAPE '\'` without smuggling
+// pattern operators or triggering full-table scans (M-12).
+func escapeLikeOperand(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '\\', '%', '_':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// sanitiseDispositionFilename removes characters that would let an
+// attacker break out of the Content-Disposition header (HTTP response
+// splitting) or smuggle quote characters into the filename parameter.
+func sanitiseDispositionFilename(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\r' || r == '\n' || r == '"' || r == 0:
+			b.WriteByte('_')
+		case r < 0x20 || r == 0x7f:
+			b.WriteByte('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // errorResponse is the JSON shape returned by [writeJSONError].
 type errorResponse struct {
@@ -150,6 +217,143 @@ func isLoopbackHost(host string) bool {
 	}
 	hostname = strings.TrimPrefix(strings.TrimSuffix(hostname, "]"), "[")
 	return hostname == "127.0.0.1" || hostname == "localhost" || hostname == "::1"
+}
+
+// auditUsernameHashKey is generated once at startup so log forging
+// attempts that leak a username into the audit table cannot be
+// reversed by external attackers (CWE-532). Operators that need to
+// correlate failed-login events can run the same HMAC offline.
+var (
+	auditUsernameHashOnce sync.Once
+	auditUsernameHashKey  []byte
+)
+
+func auditUsernameHash(username string) string {
+	auditUsernameHashOnce.Do(func() {
+		auditUsernameHashKey = make([]byte, 32)
+		_, _ = randReadFull(auditUsernameHashKey)
+	})
+	mac := hmac.New(sha256.New, auditUsernameHashKey)
+	mac.Write([]byte(strings.ToLower(strings.TrimSpace(username))))
+	return hex.EncodeToString(mac.Sum(nil))[:16]
+}
+
+// cookieSecure reports whether the Secure cookie attribute should be
+// set for the current request. The flag is on whenever the request
+// arrived over TLS *or* over a trusted reverse proxy that signals
+// HTTPS via X-Forwarded-Proto: https. Loopback is exempt so local
+// developer builds keep working over plain HTTP.
+func cookieSecure(r *http.Request) bool {
+	if isLoopbackHost(r.Host) {
+		return false
+	}
+	return effectiveScheme(r) == "https"
+}
+
+// effectiveScheme honors X-Forwarded-Proto when the remote peer is
+// within the trusted-proxy CIDR set, otherwise it falls back to the
+// transport seen on the listener.
+func effectiveScheme(r *http.Request) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	if trustForwardedFor(r) {
+		if proto := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))); proto == "https" || proto == "http" {
+			return proto
+		}
+	}
+	return "http"
+}
+
+// sameOriginRequest verifies that the Origin (or, as a fall-back,
+// Referer) of a state-changing request matches the listener's
+// effective scheme + host. Used by /api/login which is exempted from
+// the global CSRF middleware.
+func sameOriginRequest(r *http.Request) bool {
+	want := effectiveScheme(r) + "://" + r.Host
+	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+		return origin == want
+	}
+	if ref := strings.TrimSpace(r.Referer()); ref != "" {
+		u, err := url.Parse(ref)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return false
+		}
+		return u.Scheme+"://"+u.Host == want
+	}
+	// Origin and Referer both missing: refuse for browsers (sec-
+	// fetch-site presence indicates a browser caller) and allow for
+	// non-browser tooling that has neither header.
+	if strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")) != "" {
+		return false
+	}
+	return true
+}
+
+// trustForwardedFor reports whether the request arrived from a CIDR
+// listed in VANTYX_TRUSTED_PROXIES. The legacy boolean toggle
+// VANTYX_TRUST_X_FORWARDED_FOR remains supported for backwards
+// compatibility, but it is now restricted to loopback peers so a
+// misconfigured deployment cannot trust arbitrary client headers.
+func trustForwardedFor(r *http.Request) bool {
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if host == "" {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	cidrs := trustedProxyCIDRs()
+	for _, c := range cidrs {
+		if c.Contains(ip) {
+			return true
+		}
+	}
+	if os.Getenv("VANTYX_TRUST_X_FORWARDED_FOR") == "1" && ip.IsLoopback() {
+		return true
+	}
+	return false
+}
+
+var (
+	trustedProxyOnce  sync.Once
+	trustedProxyCache []*net.IPNet
+)
+
+func trustedProxyCIDRs() []*net.IPNet {
+	trustedProxyOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv("VANTYX_TRUSTED_PROXIES"))
+		if raw == "" {
+			return
+		}
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if !strings.Contains(part, "/") {
+				if ip := net.ParseIP(part); ip != nil {
+					if ip.To4() != nil {
+						part += "/32"
+					} else {
+						part += "/128"
+					}
+				}
+			}
+			if _, ipnet, err := net.ParseCIDR(part); err == nil {
+				trustedProxyCache = append(trustedProxyCache, ipnet)
+			}
+		}
+	})
+	return trustedProxyCache
+}
+
+// randReadFull reads len(buf) bytes from crypto/rand; declared here so
+// auditUsernameHash can call it without pulling crypto/rand directly
+// into the file's import set in multiple places.
+var randReadFull = func(buf []byte) (int, error) {
+	return cryptoRandReader.Read(buf)
 }
 
 // staticDirForTest overrides [staticDir] in tests; set to a temp dir

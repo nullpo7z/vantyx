@@ -113,7 +113,9 @@ func TestSQLiteSessionStore_Get_ExpiredSession(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	past := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	_, err = db.Exec(`UPDATE sessions SET expires_at = ? WHERE id = ?`, past, sess.ID)
+	// sess.ID is the raw token; the DB row is keyed by its SHA-256
+	// hash (CWE-312). Hash here so the test can target it directly.
+	_, err = db.Exec(`UPDATE sessions SET expires_at = ? WHERE id = ?`, past, hashSessionToken(sess.ID))
 	if err != nil {
 		t.Fatalf("update expires_at: %v", err)
 	}

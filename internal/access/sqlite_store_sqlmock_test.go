@@ -1042,8 +1042,8 @@ func TestSQLiteTargetStore_Update_Success(t *testing.T) {
 	mock.ExpectQuery("SELECT id, name, host, port, protocol, path").
 		WithArgs("t1").
 		WillReturnRows(
-			sqlmock.NewRows([]string{"id", "name", "host", "port", "protocol", "path", "ssh_username", "ssh_password", "ssh_private_key", "ssh_private_key_passphrase", "sftp_enabled", "ftp_enabled", "tftp_enabled"}).
-				AddRow("t1", "new", "10.0.0.2", 2222, "telnet", "path", "user", "", "", "", 1, 0, 0))
+			sqlmock.NewRows([]string{"id", "name", "host", "port", "protocol", "path", "ssh_username", "ssh_password", "ssh_private_key", "ssh_private_key_passphrase", "sftp_enabled", "ftp_enabled", "tftp_enabled", "ssh_host_key_fingerprint"}).
+				AddRow("t1", "new", "10.0.0.2", 2222, "telnet", "path", "user", "", "", "", 1, 0, 0, ""))
 
 	got, err := store.Update(ctx, "t1", "new", "10.0.0.2", 2222, ProtocolTelnet, "path", "user", "", "", "", true, false, false)
 	if err != nil {

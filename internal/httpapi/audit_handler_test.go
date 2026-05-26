@@ -87,6 +87,11 @@ func TestAuditLogs_ExcludeEvent(t *testing.T) {
 	router := app.NewRouter()
 	sess, _ := app.SessionStore.Create("admin")
 
+	// Bootstrap emits one initial_admin_password_* event before the
+	// test body runs. Drop everything so the fixtures below remain
+	// deterministic regardless of which bootstrap path was taken.
+	_, _ = app.DB.ExecContext(context.Background(), `DELETE FROM audit_logs`)
+
 	now := time.Now().UTC()
 	_, _ = app.DB.ExecContext(context.Background(),
 		`INSERT INTO audit_logs(time,event,user_id,method,path,status,remote,duration_ms,fields_json) VALUES (?,?,?,?,?,?,?,?,?)`,
@@ -119,6 +124,10 @@ func TestAuditLogs_Pagination(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 	sess, _ := app.SessionStore.Create("admin")
+
+	// Bootstrap inserts an initial_admin_password_* row; flush so the
+	// pagination cursor below only sees the five fixture entries.
+	_, _ = app.DB.ExecContext(context.Background(), `DELETE FROM audit_logs`)
 
 	now := time.Now().UTC()
 	// Higher id must correlate with newer time for ORDER BY time DESC, id DESC paging.

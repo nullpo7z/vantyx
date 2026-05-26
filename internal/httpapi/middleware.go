@@ -5,32 +5,35 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nullpo7z/vantyx/internal/logging"
 )
 
-// requestScheme returns "https" if the request was received over TLS,
-// otherwise "http". Used by the CSRF check to construct the expected
-// Origin value.
-func requestScheme(r *http.Request) string {
-	if r.TLS != nil {
-		return "https"
-	}
-	return "http"
-}
-
 // csrfOriginMiddleware mitigates CSRF for cookie-authenticated browser
 // requests by enforcing same-origin Origin / Referer on unsafe methods.
 //
-// This is intentionally lightweight (no per-session token) and can be
-// disabled via VANTYX_DISABLE_ORIGIN_CHECK for non-browser automation
-// that has no Origin header to send.
+// Notes / hardening:
+//
+//   - VANTYX_DISABLE_ORIGIN_CHECK still exists for non-browser
+//     automation, but it now logs a warning at startup so deployments
+//     that flip it as a workaround for the "TLS terminator" gotcha
+//     leave a visible footprint.
+//   - The effective scheme is taken from X-Forwarded-Proto when the
+//     request comes from a trusted proxy (VANTYX_TRUSTED_PROXIES); the
+//     legacy "r.TLS only" path that broke nginx termination is gone.
+//   - /ws/* is excluded because the WebSocket handlers run their own
+//     Origin check (see websocket.go).
 func csrfOriginMiddleware(next http.Handler) http.Handler {
 	if strings.TrimSpace(os.Getenv("VANTYX_DISABLE_ORIGIN_CHECK")) == "1" {
+		csrfDisabledOnce.Do(func() {
+			logging.WithComponent("httpapi.csrf").Warn(
+				"CSRF Origin check disabled via VANTYX_DISABLE_ORIGIN_CHECK; this is unsafe for browser-facing deployments",
+			)
+		})
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,49 +42,30 @@ func csrfOriginMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/ws/") || r.URL.Path == "/api/login" {
+		if strings.HasPrefix(r.URL.Path, "/ws/") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Only enforce when cookie auth is present.
+		// /api/login is exempt because it has no cookie yet; the
+		// handler itself calls sameOriginRequest() to keep the
+		// equivalent protection.
+		if r.URL.Path == "/api/login" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if c, err := r.Cookie("vantyx_session"); err != nil || c.Value == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
-
-		want := requestScheme(r) + "://" + r.Host
-		secFetchSite := strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))
-		if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
-			if origin != want {
-				writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
-				return
-			}
-			next.ServeHTTP(w, r)
-			return
-		}
-		ref := strings.TrimSpace(r.Referer())
-		// If browser fetch metadata is present but we don't have Origin/Referer, treat as suspicious.
-		if ref == "" && secFetchSite != "" {
-			writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
-			return
-		}
-		// Non-browser clients may not send Origin/Referer. Allow in that case.
-		if ref == "" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		u, err := url.Parse(ref)
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
-			return
-		}
-		if u.Scheme+"://"+u.Host != want {
+		if !sameOriginRequest(r) {
 			writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+var csrfDisabledOnce sync.Once
 
 // maxBodyBytesMiddleware applies a global request body cap to mitigate
 // memory-based DoS. Multipart uploads are exempted because they have
@@ -132,12 +116,18 @@ func (a *App) requestLog(next http.Handler) http.Handler {
 		start := time.Now()
 		wrap := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(wrap, r)
+		// Default to RemoteAddr (the IP we actually observe); only
+		// honour XFF when the peer is in the trusted-proxy CIDR set
+		// so audit forensics are not undermined by header spoofing
+		// (CWE-348).
 		remote := r.RemoteAddr
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			if i := strings.Index(xff, ","); i > 0 {
-				remote = strings.TrimSpace(xff[:i])
-			} else {
-				remote = strings.TrimSpace(xff)
+		if trustForwardedFor(r) {
+			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+				if i := strings.Index(xff, ","); i > 0 {
+					remote = strings.TrimSpace(xff[:i])
+				} else {
+					remote = strings.TrimSpace(xff)
+				}
 			}
 		}
 		dur := time.Since(start).Round(time.Millisecond)

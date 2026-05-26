@@ -22,6 +22,10 @@ type User struct {
 	// Locale is the user's preferred UI locale (BCP 47 short code, currently "en" or "ja").
 	// Empty means "no preference"; UI clients should fall back to their own default.
 	Locale string
+	// ForcePasswordChange indicates that the user must rotate their
+	// password before any other API call succeeds. Used for the
+	// bootstrap admin account (ASVS V2.10.4 / CWE-1188).
+	ForcePasswordChange bool
 }
 
 // UserSSHKey is a stored SSH public key for vantyx SSH server (public key auth).
@@ -46,6 +50,9 @@ type UserStore interface {
 	AddPublicKey(userID, keyLine string) (int64, error)
 	ListPublicKeys(userID string) ([]UserSSHKey, error)
 	DeletePublicKey(userID string, keyID int64) error
+	// SetForcePasswordChange flips the force-password-change flag for a
+	// user. Returns ErrUserNotFound if the row does not exist.
+	SetForcePasswordChange(userID string, force bool) error
 }
 
 // ErrInvalidLocale is returned when an UpdateLocale call receives a value

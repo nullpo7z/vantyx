@@ -32,7 +32,13 @@ func newTestAppForTerminal(t *testing.T) *App {
 	if err := os.Setenv("VANTYX_SQLITE_PATH", dbPath); err != nil {
 		t.Fatalf("set env: %v", err)
 	}
+	// Match the fixture password used by terminal_test.go cases that
+	// hard-code "Admin123!" after C-2 removed the in-source default.
+	t.Setenv(initialAdminPasswordEnv, "Admin123!")
 	app := NewApp()
+	if app != nil && app.UserStore != nil {
+		_ = app.UserStore.SetForcePasswordChange("admin", false)
+	}
 	t.Cleanup(func() {
 		_ = closeAuditSink()
 		// Give in-flight WebSocket / bridge goroutines a brief moment to
@@ -102,6 +108,8 @@ func (f *fakeWSConn) ReadMessage() (int, []byte, error) {
 func (f *fakeWSConn) SetReadDeadline(time.Time) error {
 	return nil
 }
+
+func (f *fakeWSConn) SetReadLimit(int64) {}
 
 func TestReadTerminalCredentials_UseStored(t *testing.T) {
 	target := &access.Target{

@@ -19,8 +19,10 @@ func TestEncryptDecrypt(t *testing.T) {
 	if enc == "" || enc == plain {
 		t.Fatalf("expected encrypted value different from plaintext")
 	}
-	if enc[:len(CiphertextVersionPrefix)] != CiphertextVersionPrefix {
-		t.Fatalf("expected v1 prefix, got %q", enc[:min(3, len(enc))])
+	// Encrypt now always emits the v2 (AAD-bound) format; v1 stays
+	// supported on read only.
+	if enc[:len(CiphertextVersionPrefixV2)] != CiphertextVersionPrefixV2 {
+		t.Fatalf("expected v2 prefix, got %q", enc[:min(3, len(enc))])
 	}
 	dec, err := Decrypt(key, enc)
 	if err != nil {
@@ -28,6 +30,35 @@ func TestEncryptDecrypt(t *testing.T) {
 	}
 	if dec != plain {
 		t.Fatalf("decrypted %q, want %q", dec, plain)
+	}
+}
+
+func TestEncryptDecrypt_AAD(t *testing.T) {
+	key := make([]byte, KeySize)
+	enc, err := EncryptWithAAD(key, "alpha", []byte("ctx-1"))
+	if err != nil {
+		t.Fatalf("EncryptWithAAD: %v", err)
+	}
+	if _, err := DecryptWithAAD(key, enc, []byte("ctx-2")); err == nil {
+		t.Fatal("expected error for wrong AAD")
+	}
+	dec, err := DecryptWithAAD(key, enc, []byte("ctx-1"))
+	if err != nil || dec != "alpha" {
+		t.Fatalf("matched AAD decrypt: %q err=%v", dec, err)
+	}
+}
+
+func TestKeyID_Mismatch(t *testing.T) {
+	keyA := make([]byte, KeySize)
+	keyA[0] = 1
+	keyB := make([]byte, KeySize)
+	keyB[0] = 2
+	enc, err := Encrypt(keyA, "x")
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if _, err := Decrypt(keyB, enc); err != ErrKeyMismatch {
+		t.Fatalf("expected ErrKeyMismatch, got %v", err)
 	}
 }
 
@@ -120,12 +151,14 @@ func TestDecrypt_TooShortPayload(t *testing.T) {
 func TestDecrypt_TamperedCiphertext(t *testing.T) {
 	key := make([]byte, KeySize)
 	enc, _ := Encrypt(key, "secret")
-	raw, _ := base64.RawStdEncoding.DecodeString(enc[len(CiphertextVersionPrefix):])
-	// Tamper ciphertext part (after nonce) so GCM auth fails
-	if len(raw) > NonceSize {
-		raw[NonceSize] ^= 0xff
+	body := enc[len(CiphertextVersionPrefixV2):]
+	raw, _ := base64.RawStdEncoding.DecodeString(body)
+	// Tamper ciphertext part (after keyID+nonce) so GCM auth fails.
+	tamperAt := keyIDSize + NonceSize
+	if len(raw) > tamperAt {
+		raw[tamperAt] ^= 0xff
 	}
-	tampered := CiphertextVersionPrefix + base64.RawStdEncoding.EncodeToString(raw)
+	tampered := CiphertextVersionPrefixV2 + base64.RawStdEncoding.EncodeToString(raw)
 	_, err := Decrypt(key, tampered)
 	if err != ErrDecrypt {
 		t.Fatalf("Decrypt tampered: got %v", err)

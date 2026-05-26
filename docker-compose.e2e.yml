@@ -14,9 +14,10 @@ services:
       - VANTYX_SQLITE_PATH=/app/data/e2e.db
       - VANTYX_TLS_CERT_FILE=/app/certs/tls.crt
       - VANTYX_TLS_KEY_FILE=/app/certs/tls.key
-      # E2E: SSH パスワード保存（暗号化）を有効化するため固定キーを設定
-      # 32 bytes base64 ("0123456789abcdef0123456789abcdef")
-      - VANTYX_SSH_PASSWORD_ENCRYPTION_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      # E2E: SSH パスワード暗号化キー。値は ./scripts/run-e2e-with-docker.sh が
+      # 起動前に `openssl rand -base64 32` で動的に生成し、`VANTYX_SSH_PASSWORD_ENCRYPTION_KEY`
+      # 環境変数として渡す。CI / リポジトリには静的な値を残さない（CWE-321/798）。
+      - VANTYX_SSH_PASSWORD_ENCRYPTION_KEY=${VANTYX_SSH_PASSWORD_ENCRYPTION_KEY:?VANTYX_SSH_PASSWORD_ENCRYPTION_KEY must be exported (e.g. via run-e2e-with-docker.sh)}
       # E2E は各テストでログインするためレート制限を緩和
       - VANTYX_LOGIN_RATE_LIMIT_N=200
     volumes:

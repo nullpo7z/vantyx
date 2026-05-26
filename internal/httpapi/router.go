@@ -2,8 +2,11 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,13 +31,12 @@ import (
 // component. Other files in this package can share it for consistency.
 var httpLogger = logging.WithComponent("httpapi.router")
 
-// defaultAdminPassword is the initial password for the bundled admin
-// user. The login response sets require_password_change=true while it
-// is still in use, so the SPA can force the operator to rotate it.
-const defaultAdminPassword = "Admin123!"
-
-// adminUserID is the user ID allowed to access /api/spec and /docs.
-const adminUserID = "admin"
+// initialAdminPasswordEnv lets operators supply the bootstrap admin
+// password through their secret manager. When unset, NewApp generates
+// a random one-time password and writes it to stdout.
+//
+// #nosec G101 -- this is the name of the env var, not a credential.
+const initialAdminPasswordEnv = "VANTYX_INITIAL_ADMIN_PASSWORD"
 
 // App encapsulates HTTP handlers and shared dependencies.
 //
@@ -181,7 +183,10 @@ func NewApp() *App {
 	}
 	sessionStore := auth.NewSQLiteSessionStore(db, 24*time.Hour)
 	storeCfg := accessStoreConfigFromEnv()
-	encKey := secret.LoadKeyFromEnv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY")
+	encKey, encKeyErr := secret.LoadKeyFromEnvStrict("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY")
+	if encKeyErr != nil {
+		panic(encKeyErr)
+	}
 	targetStore := access.NewSQLiteTargetStore(db, storeCfg, encKey)
 	groupStore := access.NewSQLiteAccessGroupStore(db, storeCfg)
 	terminalSessions := session.NewManager()
@@ -189,9 +194,13 @@ func NewApp() *App {
 	rdpSessions := rdpvnc.NewManager()
 	applyRDPSessionIdleWarn(rdpSessions)
 
-	// Make sure the admin user exists (password meets the policy:
-	// 8+ chars, upper, lower, digit, special).
-	if _, err := userStore.CreateUser("admin", "admin", defaultAdminPassword, auth.RoleAdmin); err != nil && !errors.Is(err, auth.ErrUserExists) {
+	// Make sure the admin user exists. The bootstrap password is taken
+	// from VANTYX_INITIAL_ADMIN_PASSWORD when set; otherwise we
+	// generate a one-time random password, print it to stdout, and
+	// require the operator to rotate it on first login. If the row
+	// already exists we leave its password untouched (no surprise
+	// re-injection from runtime restarts).
+	if err := bootstrapAdminUser(userStore); err != nil {
 		panic(err)
 	}
 
@@ -270,6 +279,7 @@ func (a *App) NewRouter() http.Handler {
 	r.Use(maxBodyBytesMiddleware(2 << 20))
 	r.Use(csrfOriginMiddleware)
 	r.Use(a.sessionMiddleware)
+	r.Use(a.forcePasswordChangeMiddleware)
 
 	// Health check.
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -387,6 +397,81 @@ func (a *App) NewRouter() http.Handler {
 	}
 
 	return r
+}
+
+// bootstrapAdminUser ensures the bundled admin account exists. The
+// resolution order is:
+//
+//  1. The user is already present in the database -> leave it alone.
+//  2. VANTYX_INITIAL_ADMIN_PASSWORD is set -> use it (validated by the
+//     password policy).
+//  3. Otherwise generate a random one-time password, print it to
+//     stdout, and store it. The login handler forces a password
+//     change before any other API call succeeds.
+//
+// The original hard-coded "Admin123!" path is gone, so an inadvertent
+// row deletion can no longer recreate the well-known credentials.
+func bootstrapAdminUser(userStore auth.UserStore) error {
+	if u, _ := userStore.GetByID("admin"); u != nil {
+		return nil
+	}
+	pw := strings.TrimSpace(os.Getenv(initialAdminPasswordEnv))
+	random := false
+	if pw == "" {
+		gen, err := generateInitialAdminPassword()
+		if err != nil {
+			return fmt.Errorf("generate initial admin password: %w", err)
+		}
+		pw = gen
+		random = true
+	}
+	if _, err := userStore.CreateUser("admin", "admin", pw, auth.RoleAdmin); err != nil {
+		if errors.Is(err, auth.ErrUserExists) {
+			return nil
+		}
+		return err
+	}
+	// Tag the freshly-created admin row so the API layer can refuse
+	// non-rotation calls until the operator changes the password.
+	if err := userStore.SetForcePasswordChange("admin", true); err != nil {
+		// Non-fatal: log instead of panicking so the server still
+		// starts; the password is unknown to attackers either way.
+		httpLogger.Warn("could not set force_password_change for admin", "error", err)
+	}
+	if random {
+		// stdout (not the structured logger) so operators see it
+		// regardless of how slog is configured. Audit also captures
+		// the event for traceability.
+		fmt.Fprintf(os.Stdout, "\n==============================================================\n"+
+			"Vantyx initial admin password (write it down – shown once):\n"+
+			"  username: admin\n"+
+			"  password: %s\n"+
+			"You must rotate it from the SPA on first login.\n"+
+			"Set VANTYX_INITIAL_ADMIN_PASSWORD to choose your own.\n"+
+			"==============================================================\n\n", pw)
+		audit("initial_admin_password_generated", auditFields{
+			"user_id": "admin",
+		})
+	} else {
+		audit("initial_admin_password_from_env", auditFields{
+			"user_id": "admin",
+		})
+	}
+	return nil
+}
+
+// generateInitialAdminPassword returns a random password that satisfies
+// auth.ValidatePassword (upper, lower, digit, special, >= 16 chars).
+func generateInitialAdminPassword() (string, error) {
+	// 18 random bytes -> 24-char URL-safe Base64. We append fixed
+	// characters from each required class so the result always meets
+	// the password policy.
+	buf := make([]byte, 18)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	body := base64.RawURLEncoding.EncodeToString(buf)
+	return body + "A1!a", nil
 }
 
 // slugID returns a lowercased, hyphenated identifier built from s. It

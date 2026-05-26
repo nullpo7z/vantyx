@@ -18,6 +18,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/sftp"
+	"github.com/nullpo7z/vantyx/internal/sshproxy"
 	"github.com/nullpo7z/vantyx/internal/tftp"
 )
 
@@ -90,7 +91,7 @@ func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, use
 			}
 			return client, true
 		}
-		client, err := sftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase)
+		client, err := sftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint))
 		if err != nil {
 			audit("files_sftp_connect_failed", auditFields{
 				"user_id":   userID,
@@ -243,7 +244,7 @@ func (a *App) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	if name == "" || name == "." {
 		name = "download"
 	}
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+	setAttachmentDisposition(w, name)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if info.Size() > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
@@ -265,8 +266,9 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	defer client.Close()
 
 	const maxUploadMB = 64
+	const memoryThresholdMB = 8 // overflow spills to disk; bounds memory pressure under parallel uploads (CWE-770).
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadMB<<20)
-	if err := r.ParseMultipartForm(maxUploadMB << 20); err != nil { // #nosec G120 -- bounded by maxUploadMB and MaxBytesReader above
+	if err := r.ParseMultipartForm(memoryThresholdMB << 20); err != nil { // #nosec G120 -- bounded by MaxBytesReader above
 		writeJSONErrorKey(w, r, "files.invalidMultipart", http.StatusBadRequest, "error", err)
 		return
 	}

@@ -103,8 +103,11 @@ func buildCommandLogQuery(query, userID, targetID string, from, to time.Time, af
 	args = append(args, from.UTC(), to.UTC())
 
 	if query != "" {
-		conds = append(conds, "line_text LIKE ?")
-		args = append(args, "%"+query+"%")
+		// Escape LIKE wildcards (% / _) so attacker-controlled query
+		// fragments can not turn a quick search into a full-table
+		// scan or smuggle pattern operators (M-12 / CWE-400).
+		conds = append(conds, `line_text LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeLikeOperand(query)+"%")
 	}
 	if userID != "" {
 		conds = append(conds, "user_id = ?")

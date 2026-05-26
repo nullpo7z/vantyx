@@ -47,16 +47,22 @@ type wsAuthMessage struct {
 type wsReadConn interface {
 	ReadMessage() (int, []byte, error)
 	SetReadDeadline(time.Time) error
+	SetReadLimit(int64)
 }
 
 // readTerminalCredentials reads the first text message and returns the
 // effective credentials.
+//
+// A short read deadline plus an explicit per-frame size cap (CWE-770)
+// stop an attacker from holding the connection open or sending a
+// multi-gigabyte JSON blob before authentication completes.
 //
 // When use_stored_credentials is true the target's stored SSH
 // username, password, and key are used; the client may still supply
 // password or private_key_passphrase to override or complete missing
 // fields.
 func readTerminalCredentials(conn wsReadConn, target *access.Target) (sshproxy.Credentials, error) {
+	conn.SetReadLimit(wsMaxInitialMessageBytes)
 	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	mt, msg, err := conn.ReadMessage()

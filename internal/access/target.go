@@ -33,6 +33,11 @@ type Target struct {
 	// SSH public key auth: PEM-encoded private key and optional passphrase. Encrypted at rest like SSHPassword.
 	SSHPrivateKey           string
 	SSHPrivateKeyPassphrase string
+	// SSHHostKeyFingerprint is the expected SHA-256 fingerprint of the
+	// upstream SSH server's host key (format: "SHA256:<base64>"). When
+	// non-empty, sshproxy / sftp connections to this target are aborted
+	// unless the server presents a matching key. ASVS V2.6 / V9.2.
+	SSHHostKeyFingerprint string
 	// File transfer protocol toggles (for SSH / Telnet targets: enable / disable SFTP / FTP / TFTP for the file transfer UI). Persisted to the DB.
 	SFTPEnabled bool
 	FTPEnabled  bool
@@ -52,10 +57,15 @@ type TargetStore interface {
 	// Tags applied to the target. Users that share any of these tags gain access.
 	TagsForTarget(ctx context.Context, targetID TargetID) ([]string, error)
 	SetTargetTags(ctx context.Context, targetID TargetID, tags []string) error
+	// SetSSHHostKeyFingerprint records the expected SHA-256 fingerprint
+	// of the upstream SSH server's host key. Pass "" to clear it (which
+	// reinstates the TOFU-prompt behavior on the next connection).
+	SetSSHHostKeyFingerprint(ctx context.Context, targetID TargetID, fingerprint string) error
 }
 
 var (
-	ErrTargetExists          = errors.New("target already exists")
-	ErrTargetNotFound        = errors.New("target not found")
-	ErrEncryptionKeyRequired = errors.New("SSH password encryption key not configured (set VANTYX_SSH_PASSWORD_ENCRYPTION_KEY); required by ASVS L2 for sensitive data at rest")
+	ErrTargetExists              = errors.New("target already exists")
+	ErrTargetNotFound            = errors.New("target not found")
+	ErrEncryptionKeyRequired     = errors.New("SSH password encryption key not configured (set VANTYX_SSH_PASSWORD_ENCRYPTION_KEY); required by ASVS L2 for sensitive data at rest")
+	ErrHostKeyFingerprintInvalid = errors.New("SSH host key fingerprint must be empty or of the form 'SHA256:<base64>'")
 )

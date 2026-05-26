@@ -42,7 +42,33 @@ const (
 	//   - 'sha256-s8+L0bCTMcFupV+e7ZrRCMZiZTxI6IiNza6yMagaWHs=' : /docs (Swagger UI) の起動スクリプト
 	//   - 'sha256-35xcTuqYk4DXbahDhOkqFlRN1S9LOUWqKshTkAh51qQ=' : SPA index.html のテーマ/ロケール初期化（FOUC 防止のため <html class="dark"> と lang を先に確定）
 	// wasm-unsafe-eval は asciinema-player の WebAssembly 用、img-src data: は noVNC のカーソル画像用。
-	cspValue = "default-src 'self'; script-src 'self' https://unpkg.com 'sha256-s8+L0bCTMcFupV+e7ZrRCMZiZTxI6IiNza6yMagaWHs=' 'sha256-35xcTuqYk4DXbahDhOkqFlRN1S9LOUWqKshTkAh51qQ=' 'wasm-unsafe-eval'; style-src 'self' https://unpkg.com 'unsafe-inline' 'unsafe-hashes'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'"
+	// CSP rationale:
+	//   - script-src: 'self' + the SHA-256 hash of the two known
+	//     inline initialisers (Swagger UI bootstrap on /docs, SPA
+	//     theme bootstrap in index.html). 'unsafe-hashes' was
+	//     removed because we no longer ship inline event handlers.
+	//     'wasm-unsafe-eval' is needed by asciinema-player.
+	//   - style-src: 'unsafe-inline' remains because Tailwind ships
+	//     hashed inline <style> blocks and xterm.js writes inline
+	//     styles at runtime. Migrating to nonce-based CSP requires
+	//     plumbing a per-request nonce through the SPA bootstrap
+	//     and is tracked separately.
+	//   - connect-src restricts where XHR / fetch / WebSocket can
+	//     reach (ASVS V14.4.6); 'self' is sufficient since Vantyx
+	//     does not call third-party APIs.
+	//   - frame-ancestors 'none' & base-uri 'self' prevent
+	//     clickjacking and <base> hijacking (ASVS V14.4.4).
+	//   - object-src 'none' blocks Flash/PDF embed attack surface.
+	//   - form-action 'self' stops form-based exfiltration.
+	cspValue = "default-src 'self'; " +
+		"script-src 'self' https://unpkg.com 'sha256-s8+L0bCTMcFupV+e7ZrRCMZiZTxI6IiNza6yMagaWHs=' 'sha256-35xcTuqYk4DXbahDhOkqFlRN1S9LOUWqKshTkAh51qQ=' 'wasm-unsafe-eval'; " +
+		"style-src 'self' https://unpkg.com 'unsafe-inline'; " +
+		"img-src 'self' data:; " +
+		"connect-src 'self' ws: wss:; " +
+		"frame-ancestors 'none'; " +
+		"base-uri 'self'; " +
+		"object-src 'none'; " +
+		"form-action 'self'"
 )
 
 func main() {

@@ -391,7 +391,7 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		endReason = "telnet_session_closed"
 		endMsg = "session_ended: Telnet session closed"
 	default:
-		bridgeErr = sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, conn, touch, tee, stdinRecorder, cols, rows, nil)
+		bridgeErr = sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, conn, touch, tee, stdinRecorder, cols, rows, nil, sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint))
 		endReason = "ssh_session_closed"
 		endMsg = "session_ended: SSH session closed"
 	}
@@ -432,7 +432,9 @@ func (a *App) setupRecording(ctx context.Context, termSess *session.Session, id 
 	safeName := strings.ReplaceAll(string(id), ":", "-")
 	safeName = strings.ReplaceAll(safeName, ".", "-")
 	castPath := filepath.Join(recordingDir, safeName+".cast")
-	f, err := os.Create(castPath) // #nosec G703 G304 -- path under recordingDir, safeName sanitised.
+	// Recordings may contain sensitive output (passwords, tokens), so
+	// open with 0o600 to bypass the user's umask (M-18 / CWE-732).
+	f, err := os.OpenFile(castPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // #nosec G703 G304 -- path under recordingDir, safeName sanitised.
 	if err != nil {
 		audit("recording_create_failed", auditFields{
 			"session_id": id,

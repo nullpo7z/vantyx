@@ -3,6 +3,7 @@ package recording
 import (
 	"encoding/json"
 	"io"
+	"os"
 	"sync"
 	"time"
 )
@@ -76,9 +77,16 @@ func (a *AsciinemaWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// RecordInput records stdin input (call when bytes are sent to the target).
+// RecordInput records stdin input (call when bytes are sent to the
+// target). Disabled by default because raw stdin can capture sudo
+// passwords and other interactive secrets (CWE-532). Set
+// VANTYX_RECORD_INPUT=1 to opt in for environments that need
+// keystroke-level forensics.
 func (a *AsciinemaWriter) RecordInput(p []byte) {
 	if len(p) == 0 {
+		return
+	}
+	if os.Getenv("VANTYX_RECORD_INPUT") != "1" {
 		return
 	}
 	a.mu.Lock()

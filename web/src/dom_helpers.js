@@ -21,6 +21,27 @@ export function escapeHtml(s) {
 }
 
 /**
+ * Sanitise a URL before interpolating it into an `href` / `src`
+ * attribute. Rejects javascript:, data:, vbscript:, and file: URIs to
+ * prevent XSS via reflected target names / descriptions (CWE-79 /
+ * CWE-80). Empty or non-string input collapses to `#`.
+ *
+ * @param {unknown} url
+ * @returns {string}
+ */
+export function safeUrl(url) {
+  if (typeof url !== 'string') return '#'
+  const trimmed = url.trim()
+  if (trimmed === '') return '#'
+  const lower = trimmed.toLowerCase()
+  // Reject obvious script protocols regardless of leading whitespace.
+  for (const proto of ['javascript:', 'data:', 'vbscript:', 'file:']) {
+    if (lower.startsWith(proto)) return '#'
+  }
+  return escapeHtml(trimmed)
+}
+
+/**
  * Render Proxmox-style tag pills (rounded, bordered, with an inline
  * tag glyph) for the supplied tag list.
  *

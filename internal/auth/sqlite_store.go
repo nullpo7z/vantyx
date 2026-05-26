@@ -3,7 +3,9 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -58,18 +60,33 @@ func (s *SQLiteUserStore) CreateUser(id, username, plainPassword, role string) (
 	}, nil
 }
 
+// dummyBcryptHash is used by Authenticate to equalize the timing
+// between "user does not exist" and "wrong password" so an attacker
+// cannot enumerate usernames by latency (CWE-208).
+//
+// The constant is a bcrypt hash of an unguessable random string.
+// VerifyPassword always returns false for any real password.
+const dummyBcryptHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy" //nolint:gosec // dummy hash; no real secret
+
 // Authenticate verifies username/password and returns the user on success.
+//
+// Always runs bcrypt against either the real or dummy hash so the
+// response time is independent of whether the username exists
+// (CWE-208 user enumeration).
 func (s *SQLiteUserStore) Authenticate(username, plainPassword string) (*User, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var u User
+	var forcePW int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, '')
+		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(force_password_change, 0)
 		FROM users
 		WHERE username = ?
-	`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale)
+	`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &forcePW)
 	if err == sql.ErrNoRows {
+		// Run bcrypt against a dummy hash so the latency matches.
+		_ = VerifyPassword(dummyBcryptHash, plainPassword)
 		return nil, ErrInvalidSecret
 	}
 	if err != nil {
@@ -78,6 +95,7 @@ func (s *SQLiteUserStore) Authenticate(username, plainPassword string) (*User, e
 	if !VerifyPassword(u.PasswordHash, plainPassword) {
 		return nil, ErrInvalidSecret
 	}
+	u.ForcePasswordChange = forcePW != 0
 	return &u, nil
 }
 
@@ -87,17 +105,19 @@ func (s *SQLiteUserStore) GetByID(id string) (*User, error) {
 	defer cancel()
 
 	var u User
+	var forcePW int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, '')
+		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(force_password_change, 0)
 		FROM users
 		WHERE id = ?
-	`, id).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale)
+	`, id).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &forcePW)
 	if err == sql.ErrNoRows {
 		return nil, ErrUserNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
+	u.ForcePasswordChange = forcePW != 0
 	return &u, nil
 }
 
@@ -113,7 +133,7 @@ func (s *SQLiteUserStore) ListUsers(limit, offset int) ([]*User, error) {
 	defer cancel()
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, '')
+		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(force_password_change, 0)
 		FROM users
 		ORDER BY username
 		LIMIT ? OFFSET ?
@@ -126,12 +146,36 @@ func (s *SQLiteUserStore) ListUsers(limit, offset int) ([]*User, error) {
 	var out []*User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale); err != nil {
+		var forcePW int
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &forcePW); err != nil {
 			return nil, err
 		}
+		u.ForcePasswordChange = forcePW != 0
 		out = append(out, &u)
 	}
 	return out, rows.Err()
+}
+
+// SetForcePasswordChange flips the force_password_change flag.
+func (s *SQLiteUserStore) SetForcePasswordChange(userID string, force bool) error {
+	if strings.TrimSpace(userID) == "" {
+		return ErrUserNotFound
+	}
+	val := 0
+	if force {
+		val = 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET force_password_change = ? WHERE id = ?`, val, userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return ErrUserNotFound
+	}
+	return nil
 }
 
 // supportedUILocales lists the locale codes the UI currently ships translations for.
@@ -378,15 +422,26 @@ func NewSQLiteSessionStore(db *sql.DB, ttl time.Duration) *SQLiteSessionStore {
 	return &SQLiteSessionStore{db: db, ttl: ttl}
 }
 
+// hashSessionToken returns the SHA-256 hex digest of the raw token.
+// The database column "sessions.id" holds this digest, never the raw
+// token (ASVS V3.2.2 / CWE-312).
+func hashSessionToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
 // Create creates a new session for the given user ID.
+// The returned Session.ID is the raw token to send to the client; the
+// database row keyed by the SHA-256 hash of that token.
 func (s *SQLiteSessionStore) Create(userID string) (*Session, error) {
 	if userID == "" {
 		return nil, errors.New("userID must not be empty")
 	}
-	id, err := randomID(32)
+	raw, err := randomID(32)
 	if err != nil {
 		return nil, err
 	}
+	hashed := hashSessionToken(raw)
 	now := time.Now().UTC()
 	expires := now.Add(s.ttl)
 
@@ -396,30 +451,36 @@ func (s *SQLiteSessionStore) Create(userID string) (*Session, error) {
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO sessions (id, user_id, created_at, expires_at)
 		VALUES (?, ?, ?, ?)
-	`, id, userID, now, expires)
+	`, hashed, userID, now, expires)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Session{
-		ID:        id,
+		ID:        raw,
 		UserID:    userID,
 		CreatedAt: now,
 		ExpiresAt: expires,
 	}, nil
 }
 
-// Get returns a valid (non-expired) session by ID.
-func (s *SQLiteSessionStore) Get(id string) (*Session, error) {
+// Get returns a valid (non-expired) session by raw token. The store
+// hashes the token before looking it up, so a database leak does not
+// expose usable credentials.
+func (s *SQLiteSessionStore) Get(rawToken string) (*Session, error) {
+	if rawToken == "" {
+		return nil, ErrSessionNotFound
+	}
+	hashed := hashSessionToken(rawToken)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var sess Session
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, user_id, created_at, expires_at
+		SELECT user_id, created_at, expires_at
 		FROM sessions
 		WHERE id = ?
-	`, id).Scan(&sess.ID, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt)
+	`, hashed).Scan(&sess.UserID, &sess.CreatedAt, &sess.ExpiresAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrSessionNotFound
 	}
@@ -427,15 +488,44 @@ func (s *SQLiteSessionStore) Get(id string) (*Session, error) {
 		return nil, err
 	}
 	if time.Now().After(sess.ExpiresAt) {
-		s.Delete(id)
+		_ = s.Delete(rawToken)
 		return nil, ErrSessionNotFound
 	}
+	// Return the raw token to keep parity with Create(); callers that
+	// surface session IDs externally should be re-checked, but the
+	// existing code paths use ID only for logging.
+	sess.ID = rawToken
 	return &sess, nil
 }
 
-// Delete removes a session by ID.
-func (s *SQLiteSessionStore) Delete(id string) {
+// Delete removes a session identified by its raw token. Returns nil
+// when the row is gone (idempotent) and a non-nil error only on
+// database failures so the caller can audit them.
+func (s *SQLiteSessionStore) Delete(rawToken string) error {
+	if rawToken == "" {
+		return nil
+	}
+	hashed := hashSessionToken(rawToken)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, _ = s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, hashed)
+	return err
+}
+
+// DeleteAllForUser invalidates every session for userID, optionally
+// keeping the one whose raw token matches keepToken. Called from the
+// password change flow (ASVS V3.3.1 / CWE-613).
+func (s *SQLiteSessionStore) DeleteAllForUser(userID, keepToken string) error {
+	if userID == "" {
+		return errors.New("userID must not be empty")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if keepToken == "" {
+		_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID)
+		return err
+	}
+	keepHash := hashSessionToken(keepToken)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ? AND id <> ?`, userID, keepHash)
+	return err
 }

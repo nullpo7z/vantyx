@@ -160,7 +160,7 @@ func (a *App) handleTFTPServerDownloadFile(w http.ResponseWriter, r *http.Reques
 	if name == "" || name == "." {
 		name = "download"
 	}
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+	setAttachmentDisposition(w, name)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if info.Size() > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
@@ -182,8 +182,9 @@ func (a *App) handleTFTPServerUploadFile(w http.ResponseWriter, r *http.Request)
 	}
 
 	const maxUploadMB = 64
+	const memoryThresholdMB = 8 // overflow spills to disk; bounds memory pressure under parallel uploads (CWE-770).
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadMB<<20)
-	if err := r.ParseMultipartForm(maxUploadMB << 20); err != nil { // #nosec G120 -- bounded by maxUploadMB and MaxBytesReader above
+	if err := r.ParseMultipartForm(memoryThresholdMB << 20); err != nil { // #nosec G120 -- bounded by MaxBytesReader above
 		writeJSONErrorKey(w, r, "files.invalidMultipart", http.StatusBadRequest, "error", err)
 		return
 	}

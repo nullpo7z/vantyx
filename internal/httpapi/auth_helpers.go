@@ -42,6 +42,49 @@ func (a *App) currentUserID(r *http.Request) string {
 	return userID
 }
 
+// forcePasswordChangeMiddleware blocks all non-bootstrap requests
+// while the caller's account is flagged for forced rotation. Without
+// this guard the SPA's UI hint alone would leave the API reachable
+// (CWE-1188 / ASVS V2.10.4). The whitelist below covers the calls the
+// rotation flow itself needs:
+//
+//   - GET /api/me               – display the "you must change" banner
+//   - POST /api/me/password     – the rotation itself
+//   - POST /api/logout          – escape hatch
+//   - GET /healthz, /api/spec   – infra / docs (no user data)
+func (a *App) forcePasswordChangeMiddleware(next http.Handler) http.Handler {
+	whitelist := map[string]struct{}{
+		"/api/me":          {},
+		"/api/me/password": {},
+		"/api/logout":      {},
+		"/api/login":       {},
+		"/healthz":         {},
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Static assets and SSE / WS handshakes are gated by their own
+		// auth checks; only consult the flag for /api/*.
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if _, ok := whitelist[r.URL.Path]; ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		userID, err := a.currentUserIDWithError(r)
+		if err != nil || userID == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		u, err := a.UserStore.GetByID(userID)
+		if err != nil || u == nil || !u.ForcePasswordChange {
+			next.ServeHTTP(w, r)
+			return
+		}
+		writeJSONErrorKey(w, r, "auth.passwordChangeRequired", http.StatusForbidden)
+	})
+}
+
 // requireAdmin writes a JSON error and returns false if the current
 // user is not an admin. Admin-only handlers should call this first and
 // return early. Storage errors (for example "database is locked") map

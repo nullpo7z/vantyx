@@ -26,9 +26,12 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /out/vantyx ./cmd/vantyx-server
 
 # -----------------------------------------------------------------------------
-# Stage 3: Runtime (Alpine edge for FreeRDP 3.x; gnome-remote-desktop on Ubuntu 24.04 requires it)
+# Stage 3: Runtime (Alpine 3.22 + FreeRDP 3.x community edge package).
+# CWE-1104: pin to a non-rolling release tag so re-builds are
+# reproducible and CVE auditing is meaningful. The `community-edge`
+# overlay is only used to pull a FreeRDP 3.x build.
 # -----------------------------------------------------------------------------
-FROM alpine:edge
+FROM alpine:3.22
 
 # su-exec, nonroot user, asciinema-agg (GIF 用), ffmpeg (WebM 用), フォント (agg の描画用)
 # freerdp (3.x) + Xvfb + x11vnc: browser-based RDP via FreeRDP→Xvfb→x11vnc→noVNC

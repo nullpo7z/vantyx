@@ -7,6 +7,7 @@ import {
   startBackgroundUpload,
 } from './file_transfer_manager.js'
 import { openTerminalForTarget } from './terminal_launch.js'
+import { t as tr } from './i18n.js'
 
 function escapeHtml(s) {
   if (s == null) return ''
@@ -38,7 +39,7 @@ const iconDelete = `<svg class="w-5 h-5 text-slate-400 hover:text-red-500" viewB
 export function renderFilesPage(container) {
   const params = new URLSearchParams(window.location.search)
   const targetId = params.get('target_id') || ''
-  const targetName = params.get('target_name') || targetId || 'ファイル'
+  const targetName = params.get('target_name') || targetId || tr('files.fallbackName')
   const protocol = params.get('protocol') || ''
   const isTftp = protocol === 'tftp'
   const isFtp = protocol === 'ftp'
@@ -70,10 +71,10 @@ export function renderFilesPage(container) {
         setTransferStatus(t.id, 'done')
         if (t.type === 'upload' && !isTftp) loadList()
       } else if (j.state === 'failed') {
-        setTransferStatus(t.id, 'error', new Error(j.error || '転送に失敗しました'))
-        setError(j.error || '転送に失敗しました')
+        setTransferStatus(t.id, 'error', new Error(j.error || tr('files.transferFailedDefault')))
+        setError(j.error || tr('files.transferFailedDefault'))
       } else if (j.state === 'cancelled') {
-        setTransferStatus(t.id, 'error', new Error('キャンセルされました'))
+        setTransferStatus(t.id, 'error', new Error(tr('files.transferCancelledDefault')))
       }
     }
   }
@@ -146,7 +147,7 @@ export function renderFilesPage(container) {
               <div class="h-full ${t.status === 'error' ? 'bg-red-400' : 'bg-sky-500'}" style="width:${t.status === 'done' ? 100 : (t.percent || 0)}%"></div>
             </div>
             <span class="text-xs min-w-[3rem] text-right">
-              ${t.status === 'pending' && (t.percent || 0) > 0 ? `${t.percent}%` : t.status === 'pending' ? '転送中…' : t.status === 'done' ? '完了' : (t.err && t.err.message) || 'エラー'}
+              ${t.status === 'pending' && (t.percent || 0) > 0 ? `${t.percent}%` : t.status === 'pending' ? tr('files.transferInFlight') : t.status === 'done' ? tr('files.transferDoneShort') : (t.err && t.err.message) || tr('files.transferError')}
             </span>
           </div>
         </div>
@@ -167,7 +168,7 @@ export function renderFilesPage(container) {
       setError('')
     } catch (err) {
       setTransferStatus(tid, 'error', err)
-      setError(err.message || 'ダウンロードに失敗しました')
+      setError(err.message || tr('files.downloadFailedSimple'))
     }
   }
 
@@ -185,13 +186,13 @@ export function renderFilesPage(container) {
       setError('')
     } catch (err) {
       setTransferStatus(tid, 'error', err)
-      setError(err.message || 'アップロードに失敗しました')
+      setError(err.message || tr('files.uploadFailedSimple'))
     }
   }
 
   function renderBreadcrumb() {
     const parts = pathParts(currentPath)
-    const segs = [{ name: 'ルート', path: '/' }]
+    const segs = [{ name: tr('files.breadcrumbRoot'), path: '/' }]
     let acc = ''
     for (const name of parts) {
       acc += '/' + name
@@ -218,9 +219,7 @@ export function renderFilesPage(container) {
     const listEl = container.querySelector('#files-list')
     if (!listEl) return
     if (!entries || entries.length === 0) {
-      const msg = isTftp
-        ? 'TFTP ではディレクトリ一覧は取得できません。下の「パスを指定してダウンロード」をご利用ください。'
-        : 'このフォルダは空です'
+      const msg = isTftp ? tr('files.tftpEmptyHint') : tr('files.emptyFolder')
       listEl.innerHTML = `<div class="py-12 text-center text-slate-500 text-sm">${escapeHtml(msg)}</div>`
       return
     }
@@ -242,8 +241,8 @@ export function renderFilesPage(container) {
             </div>
             ${!isDir ? `
             <div class="flex items-center gap-1 flex-shrink-0">
-              <button type="button" class="files-download p-2 rounded-lg hover:bg-slate-200 text-slate-500 hover:text-slate-700" data-path="${escapeHtml(pathNext)}" title="ダウンロード">${iconDownload}</button>
-              <button type="button" class="files-delete p-2 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" data-path="${escapeHtml(pathNext)}" data-name="${escapeHtml(e.name)}" title="削除">${iconDelete}</button>
+              <button type="button" class="files-download p-2 rounded-lg hover:bg-slate-200 text-slate-500 hover:text-slate-700" data-path="${escapeHtml(pathNext)}" title="${tr('files.downloadTitle')}">${iconDownload}</button>
+              <button type="button" class="files-delete p-2 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" data-path="${escapeHtml(pathNext)}" data-name="${escapeHtml(e.name)}" title="${tr('files.deleteTitle')}">${iconDelete}</button>
             </div>
             ` : ''}
           </div>
@@ -258,14 +257,14 @@ export function renderFilesPage(container) {
     const listEl = container.querySelector('#files-list')
     if (listEl) {
       if (entries) listEl.innerHTML = '' // will be set by renderList
-      else listEl.innerHTML = '<div class="py-12 text-center text-slate-500 text-sm">読み込み中…</div>'
+      else listEl.innerHTML = `<div class="py-12 text-center text-slate-500 text-sm">${tr('common.loading')}</div>`
     }
     if (entries) renderList(entries)
   }
 
   async function loadList() {
     if (!targetId) {
-      setError('target_id が指定されていません。')
+      setError(tr('files.targetIdMissing'))
       renderContent([])
       return
     }
@@ -279,7 +278,7 @@ export function renderFilesPage(container) {
       const entries = await API.filesList(targetId, currentPath)
       renderContent(entries)
     } catch (err) {
-      setError(err.message || '一覧の取得に失敗しました')
+      setError(err.message || tr('files.listFailedSimple'))
       renderContent([])
     } finally {
       loading = false
@@ -311,18 +310,18 @@ export function renderFilesPage(container) {
           <div class="vantyx-header-start">
             <h1 class="vantyx-brand">Vantyx</h1>
             <div class="vantyx-page-context">
-              <span class="vantyx-page-context-label">${isTftp ? 'ファイル (TFTP)' : 'ファイル'}</span>
+              <span class="vantyx-page-context-label">${isTftp ? tr('files.pageLabelTftp') : tr('files.pageLabelPlain')}</span>
               <span class="vantyx-page-context-target">${escapeHtml(targetName)}</span>
             </div>
           </div>
           <div class="vantyx-header-end">
             ${
               isTftp
-                ? `<button type="button" id="files-back" class="vantyx-page-btn">戻る</button>`
+                ? `<button type="button" id="files-back" class="vantyx-page-btn">${tr('files.back')}</button>`
                 : showTerminalBtn
-                  ? `<button type="button" id="files-terminal-open" class="vantyx-page-btn" title="ターミナルで開く">ターミナル</button>
-                     <a href="/" id="files-back" class="vantyx-page-btn" title="ホームへ戻る">ホーム</a>`
-                  : `<a href="/" id="files-back" class="vantyx-page-btn" title="ホームへ戻る">ホーム</a>`
+                  ? `<button type="button" id="files-terminal-open" class="vantyx-page-btn" title="${tr('files.terminalBtnTitle')}">${tr('files.terminalBtn')}</button>
+                     <a href="/" id="files-back" class="vantyx-page-btn" title="${tr('files.homeBtnTitle')}">${tr('files.backHome')}</a>`
+                  : `<a href="/" id="files-back" class="vantyx-page-btn" title="${tr('files.homeBtnTitle')}">${tr('files.backHome')}</a>`
             }
           </div>
         </div>
@@ -340,14 +339,14 @@ export function renderFilesPage(container) {
         ${isTftp ? `
         <div id="files-tftp-box" class="mx-4 mt-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
           <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-            <p class="text-sm text-amber-800 flex-1 min-w-0">リモート TFTP ではパスを指定してダウンロード・アップロードします。ディレクトリ一覧と削除はプロトコル上サポートされません。</p>
+            <p class="text-sm text-amber-800 flex-1 min-w-0">${tr('files.tftpHelper')}</p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
-            <input type="text" id="files-tftp-path" class="rounded-lg border border-slate-300 px-3 py-2 text-sm w-64 font-mono bg-white" placeholder="例: config.txt または /path/to/file" />
-            <button type="button" id="files-tftp-download" class="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700">ダウンロード</button>
+            <input type="text" id="files-tftp-path" class="rounded-lg border border-slate-300 px-3 py-2 text-sm w-64 font-mono bg-white" placeholder="${tr('files.tftpPathPlaceholder')}" />
+            <button type="button" id="files-tftp-download" class="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700">${tr('files.tftpDownloadBtn')}</button>
             <label class="inline-flex items-center gap-2 rounded-lg bg-white border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 cursor-pointer shadow-sm">
               <span class="flex items-center">${iconUpload}</span>
-              アップロード
+              ${tr('files.uploadBtn')}
               <input type="file" id="files-upload-input" class="sr-only" />
             </label>
           </div>
@@ -360,15 +359,15 @@ export function renderFilesPage(container) {
             : `<div class="mx-4 mt-3 flex items-center gap-2">
           <label class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50 cursor-pointer shadow-sm">
             <span class="flex items-center">${iconUpload}</span>
-            アップロード
+            ${tr('files.uploadBtn')}
             <input type="file" id="files-upload-input" class="sr-only" />
           </label>
-          <button type="button" id="files-refresh" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm" title="更新">${iconRefresh}</button>
+          <button type="button" id="files-refresh" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm" title="${tr('files.refreshTitle')}">${iconRefresh}</button>
         </div>`
         }
         <div class="mx-4 mt-3 mb-4 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden ${isTftp ? 'hidden' : ''}">
           <div id="files-list" class="min-h-[200px]">
-            <div class="py-12 text-center text-slate-500 text-sm">${isTftp ? '' : '読み込み中…'}</div>
+            <div class="py-12 text-center text-slate-500 text-sm">${isTftp ? '' : tr('common.loading')}</div>
           </div>
         </div>
       </main>
@@ -416,10 +415,10 @@ export function renderFilesPage(container) {
       const path = del.dataset.path
       const name = del.dataset.name || path
       if (!path || path === '/' || path === '') return
-      if (!window.confirm(`「${escapeHtml(name)}」を削除しますか？`)) return
+      if (!window.confirm(tr('files.confirmDeleteSimple', { name }))) return
       API.filesDelete(targetId, path)
         .then(() => loadList())
-        .catch((err) => setError(err.message || '削除に失敗しました'))
+        .catch((err) => setError(err.message || tr('files.deleteFailedSimple')))
     }
   })
 
@@ -446,7 +445,7 @@ export function renderFilesPage(container) {
       const pathEl = container.querySelector('#files-tftp-path')
       const path = pathEl && pathEl.value.trim()
       if (!path) {
-        setError('パスを入力してください')
+        setError(tr('files.enterTftpPath'))
         return
       }
       const remotePath = path.startsWith('/') ? path : '/' + path

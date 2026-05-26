@@ -1,4 +1,5 @@
 import API from './api.js'
+import { t } from './i18n.js'
 
 function escapeHtml(s) {
   const div = document.createElement('div')
@@ -23,24 +24,11 @@ function fieldsToText(fields) {
     .join(' ')
 }
 
-const AUDIT_EVENT_LABELS = {
-  http_request: 'API',
-  login_success: 'ログイン成功',
-  login_failed: 'ログイン失敗',
-  login_rate_limited: 'ログイン制限',
-  terminal_session_start: 'ターミナル開始',
-  terminal_session_stop: 'ターミナル終了',
-  terminal_session_attach: 'ターミナル再接続',
-  terminal_ws_credentials_ok: 'ターミナル認証OK',
-  terminal_ws_credentials_invalid: 'ターミナル認証失敗',
-  files_upload_failed: 'ファイルアップロード失敗',
-  files_list_failed: 'ファイル一覧失敗',
-  target_access_forbidden: 'ターゲット拒否',
-  internal_error: 'サーバーエラー',
-}
-
 function auditEventLabel(event) {
-  return AUDIT_EVENT_LABELS[event] || event || '—'
+  if (!event) return '—'
+  const k = `audit.eventLabels.${event}`
+  const localized = t(k)
+  return localized === k ? event : localized
 }
 
 function auditUserId(it) {
@@ -61,11 +49,11 @@ function formatAuditSummary(it) {
     return tail ? `${method} ${path}${query} → ${tail}` : `${method} ${path}${query}`
   }
   if (ev === 'login_success') {
-    return `${auditUserId(it) || 'ユーザー'} がログインしました`
+    return t('audit.loggedIn', { user: auditUserId(it) || t('audit.fallbackUser') })
   }
   if (ev === 'login_failed' || ev === 'login_rate_limited') {
     const remote = f.remote ? ` (${f.remote})` : ''
-    return `${auditUserId(it) || 'ユーザー'}${remote}`
+    return `${auditUserId(it) || t('audit.fallbackUser')}${remote}`
   }
   if (ev.startsWith('terminal_')) {
     const parts = []
@@ -121,7 +109,7 @@ const TAB_BTN_INACTIVE =
 
 export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
   if (!meData || meData.role !== 'admin') {
-    mainContent.innerHTML = `<p class="text-sm text-red-600">forbidden: admin only</p>`
+    mainContent.innerHTML = `<p class="text-sm text-red-600">${t('audit.forbidden')}</p>`
     return
   }
   if (typeof setActiveNav === 'function') setActiveNav('audit')
@@ -137,238 +125,239 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
     /* dropdowns stay empty */
   }
 
+  const allOpt = `<option value="">${t('audit.allOptionParen')}</option>`
   const userOptions =
-    '<option value="">(すべて)</option>' +
+    allOpt +
     users.map((u) => `<option value="${escapeHtml(u.id)}">${escapeHtml(u.id)}</option>`).join('')
   const targetOptions =
-    '<option value="">(すべて)</option>' +
+    allOpt +
     targets
-      .map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} (${escapeHtml(t.id)})</option>`)
+      .map((tg) => `<option value="${escapeHtml(tg.id)}">${escapeHtml(tg.name)} (${escapeHtml(tg.id)})</option>`)
       .join('')
 
   mainContent.innerHTML = `
     <div class="w-full max-w-6xl">
-      <h2 class="text-lg font-semibold text-slate-800 mb-4">監査ログ</h2>
+      <h2 class="text-lg font-semibold text-slate-800 mb-4">${t('audit.title')}</h2>
 
-      <div class="flex gap-1 border-b border-slate-200 mb-0" role="tablist" aria-label="証跡ログの種類">
+      <div class="flex gap-1 border-b border-slate-200 mb-0" role="tablist" aria-label="${t('audit.tabsAria')}">
         <button type="button" id="audit-tab-btn-audit" role="tab" aria-selected="true" aria-controls="audit-panel-audit" data-tab="audit"
           class="px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${TAB_BTN_ACTIVE}">
-          監査ログ
+          ${t('audit.tabAudit')}
         </button>
         <button type="button" id="audit-tab-btn-cmd" role="tab" aria-selected="false" aria-controls="audit-panel-cmd" data-tab="cmd"
           class="px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${TAB_BTN_INACTIVE}">
-          コマンドログ
+          ${t('audit.tabCmd')}
         </button>
         <button type="button" id="audit-tab-btn-ft" role="tab" aria-selected="false" aria-controls="audit-panel-ft" data-tab="ft"
           class="px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${TAB_BTN_INACTIVE}">
-          ファイル転送
+          ${t('audit.tabFt')}
         </button>
       </div>
 
       <div id="audit-panel-audit" role="tabpanel" aria-labelledby="audit-tab-btn-audit" class="bg-white rounded-b-lg rounded-tr-lg border border-t-0 border-slate-200 shadow-sm overflow-hidden">
         <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
-          <p class="text-xs text-slate-500">ログイン・ターミナル・ファイル操作など（API のアクセスログは既定で非表示）</p>
-          <button id="audit-refresh" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">更新</button>
+          <p class="text-xs text-slate-500">${t('audit.auditCardHint')}</p>
+          <button id="audit-refresh" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('audit.refresh')}</button>
         </div>
         <div class="p-4 border-b border-slate-200 flex gap-3 flex-wrap items-end">
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">開始日</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.rangeFrom')}</label>
             <input id="audit-filter-from" type="date" value="${escapeHtml(dates.from)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">終了日</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.rangeTo')}</label>
             <input id="audit-filter-to" type="date" value="${escapeHtml(dates.to)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">種別</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.eventKind')}</label>
             <select id="audit-filter-event-preset" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
-              <option value="">すべて</option>
-              <option value="login_">ログイン</option>
-              <option value="terminal_">ターミナル</option>
-              <option value="files_">ファイル</option>
+              <option value="">${t('audit.allOption')}</option>
+              <option value="login_">${t('audit.eventLogin')}</option>
+              <option value="terminal_">${t('audit.eventTerminal')}</option>
+              <option value="files_">${t('audit.eventFiles')}</option>
             </select>
           </div>
           <div>
             <label class="block text-xs font-medium text-slate-600 mb-1">event</label>
-            <input id="audit-filter-event" class="w-36 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: login_" />
+            <input id="audit-filter-event" class="w-36 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="${t('audit.eventPlaceholder')}" />
           </div>
           <label class="flex items-center gap-2 text-sm text-slate-700 pb-2 cursor-pointer select-none">
             <input id="audit-filter-http" type="checkbox" class="rounded border-slate-300" />
-            <span class="text-xs">HTTP/API ログを含める</span>
+            <span class="text-xs">${t('audit.includeHttp')}</span>
           </label>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">user_id</label>
-            <input id="audit-filter-user" class="w-40 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: admin" />
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.userIdLabel')}</label>
+            <input id="audit-filter-user" class="w-40 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="${t('audit.userIdPlaceholder')}" />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">limit</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.limit')}</label>
             <input id="audit-filter-limit" type="number" min="1" max="1000" value="200" class="w-28 rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
-          <button id="audit-apply" type="button" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">適用</button>
+          <button id="audit-apply" type="button" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('audit.apply')}</button>
         </div>
         <div id="audit-error" class="px-4 py-3 text-sm text-red-600 hidden"></div>
         <div class="overflow-x-auto">
           <table class="min-w-full text-left text-sm">
             <thead class="bg-slate-50 border-b border-slate-200">
               <tr>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">時刻</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">種別</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザー</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">内容</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.headerTime')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.headerKind')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.headerWho')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.headerSummary')}</th>
               </tr>
             </thead>
             <tbody id="audit-rows">
-              <tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">読み込み中…</td></tr>
+              <tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">${t('audit.loading')}</td></tr>
             </tbody>
           </table>
         </div>
         <div id="audit-footer" class="px-4 py-3 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
           <span id="audit-count" class="text-xs text-slate-500"></span>
-          <button type="button" id="audit-load-more" class="hidden rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">さらに読み込む</button>
+          <button type="button" id="audit-load-more" class="hidden rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('audit.loadMore')}</button>
         </div>
       </div>
 
       <div id="audit-panel-cmd" role="tabpanel" aria-labelledby="audit-tab-btn-cmd" class="hidden bg-white rounded-b-lg rounded-tr-lg border border-t-0 border-slate-200 shadow-sm overflow-hidden">
         <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
-          <p class="text-xs text-slate-500">ターミナルで入力された行（stdin）を文字列で検索します（最大 90 日間）</p>
-          <button id="cmd-refresh" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">再検索</button>
+          <p class="text-xs text-slate-500">${t('audit.cmdHint')}</p>
+          <button id="cmd-refresh" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('audit.cmdResearch')}</button>
         </div>
         <div class="p-4 border-b border-slate-200 flex gap-3 flex-wrap items-end">
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">開始日</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.rangeFrom')}</label>
             <input id="cmd-filter-from" type="date" value="${escapeHtml(dates.from)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">終了日</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.rangeTo')}</label>
             <input id="cmd-filter-to" type="date" value="${escapeHtml(dates.to)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">query</label>
-            <input id="cmd-filter-query" class="w-48 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: sudo" />
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.cmdQueryLabel')}</label>
+            <input id="cmd-filter-query" class="w-48 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="${t('audit.cmdQueryPlaceholder')}" />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">ユーザー</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.cmdUserLabel')}</label>
             <select id="cmd-filter-user" class="w-40 rounded border border-slate-300 px-3 py-2 text-sm bg-white">${userOptions}</select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">ターゲット</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.cmdTargetLabel')}</label>
             <select id="cmd-filter-target" class="w-56 rounded border border-slate-300 px-3 py-2 text-sm bg-white">${targetOptions}</select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">limit</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.limit')}</label>
             <input id="cmd-filter-limit" type="number" min="1" max="500" value="200" class="w-24 rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
-          <button id="cmd-apply" type="button" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">適用</button>
+          <button id="cmd-apply" type="button" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('audit.apply')}</button>
         </div>
         <div id="cmd-error" class="px-4 py-3 text-sm text-red-600 hidden"></div>
         <div class="overflow-x-auto">
           <table class="min-w-full text-left text-sm">
             <thead class="bg-slate-50 border-b border-slate-200">
               <tr>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">時刻</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザー</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ターゲット</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">セッション</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">入力</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.headerTime')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.cmdHeaderUser')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.cmdHeaderTarget')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.cmdHeaderSession')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.cmdHeaderInput')}</th>
               </tr>
             </thead>
             <tbody id="cmd-rows">
-              <tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">検索条件を入力して「適用」を押してください。</td></tr>
+              <tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">${t('audit.cmdInitialPrompt')}</td></tr>
             </tbody>
           </table>
         </div>
         <div id="cmd-footer" class="px-4 py-3 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
           <span id="cmd-count" class="text-xs text-slate-500"></span>
-          <button type="button" id="cmd-load-more" class="hidden rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">さらに読み込む</button>
+          <button type="button" id="cmd-load-more" class="hidden rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('audit.loadMore')}</button>
         </div>
       </div>
 
       <div id="audit-panel-ft" role="tabpanel" aria-labelledby="audit-tab-btn-ft" class="hidden bg-white rounded-b-lg rounded-tr-lg border border-t-0 border-slate-200 shadow-sm overflow-hidden">
         <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
-          <p class="text-xs text-slate-500">全ユーザーのファイル転送履歴（最大 90 日間）</p>
-          <button id="ft-refresh" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">再検索</button>
+          <p class="text-xs text-slate-500">${t('audit.ftHint')}</p>
+          <button id="ft-refresh" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('audit.cmdResearch')}</button>
         </div>
         <div class="p-4 border-b border-slate-200 flex gap-3 flex-wrap items-end">
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">開始日</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.rangeFrom')}</label>
             <input id="ft-filter-from" type="date" value="${escapeHtml(dates.from)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">終了日</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.rangeTo')}</label>
             <input id="ft-filter-to" type="date" value="${escapeHtml(dates.to)}" class="rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">状態</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.ftStateLabel')}</label>
             <select id="ft-filter-state" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
-              <option value="">(すべて)</option>
-              <option value="completed">完了</option>
-              <option value="failed">失敗</option>
-              <option value="cancelled">キャンセル</option>
-              <option value="running">実行中</option>
-              <option value="receiving">受信中</option>
+              <option value="">${t('audit.allOptionParen')}</option>
+              <option value="completed">${t('audit.ftStateCompleted')}</option>
+              <option value="failed">${t('audit.ftStateFailed')}</option>
+              <option value="cancelled">${t('audit.ftStateCancelled')}</option>
+              <option value="running">${t('audit.ftStateRunning')}</option>
+              <option value="receiving">${t('audit.ftStateReceiving')}</option>
             </select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">方向</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.ftDirectionLabel')}</label>
             <select id="ft-filter-direction" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
-              <option value="">(すべて)</option>
-              <option value="upload">アップロード</option>
-              <option value="download">ダウンロード</option>
+              <option value="">${t('audit.allOptionParen')}</option>
+              <option value="upload">${t('audit.ftDirectionUpload')}</option>
+              <option value="download">${t('audit.ftDirectionDownload')}</option>
             </select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">バックエンド</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.ftBackendLabel')}</label>
             <select id="ft-filter-backend" class="rounded border border-slate-300 px-3 py-2 text-sm bg-white">
-              <option value="">(すべて)</option>
+              <option value="">${t('audit.allOptionParen')}</option>
               <option value="remote">remote</option>
               <option value="tftp_server">tftp_server</option>
             </select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">ユーザー</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.cmdUserLabel')}</label>
             <select id="ft-filter-user" class="w-40 rounded border border-slate-300 px-3 py-2 text-sm bg-white">${userOptions}</select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">ターゲット</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.cmdTargetLabel')}</label>
             <select id="ft-filter-target" class="w-56 rounded border border-slate-300 px-3 py-2 text-sm bg-white">${targetOptions}</select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">検索（ファイル名・パス・ターゲット名）</label>
-            <input id="ft-filter-query" class="w-56 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="例: report.pdf" />
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.ftSearchLabel')}</label>
+            <input id="ft-filter-query" class="w-56 rounded border border-slate-300 px-3 py-2 text-sm" placeholder="${t('audit.ftSearchPlaceholder')}" />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">limit</label>
+            <label class="block text-xs font-medium text-slate-600 mb-1">${t('audit.limit')}</label>
             <input id="ft-filter-limit" type="number" min="1" max="500" value="100" class="w-24 rounded border border-slate-300 px-3 py-2 text-sm" />
           </div>
-          <button id="ft-apply" type="button" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">適用</button>
+          <button id="ft-apply" type="button" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('audit.apply')}</button>
         </div>
         <div id="ft-error" class="px-4 py-3 text-sm text-red-600 hidden"></div>
         <div class="overflow-x-auto">
           <table class="min-w-full text-left text-sm">
             <thead class="bg-slate-50 border-b border-slate-200">
               <tr>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">時刻</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザー</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">方向</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">バックエンド</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ターゲット</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">ファイル</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">状態</th>
-                <th class="px-4 py-2 text-xs font-semibold text-slate-700">進捗</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.headerTime')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.cmdHeaderUser')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.ftHeaderDirection')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.ftHeaderBackend')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.ftHeaderTarget')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.ftHeaderFile')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.ftHeaderState')}</th>
+                <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('audit.ftHeaderProgress')}</th>
               </tr>
             </thead>
             <tbody id="ft-rows">
-              <tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">検索条件を入力して「適用」を押してください。</td></tr>
+              <tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">${t('audit.ftInitialPrompt')}</td></tr>
             </tbody>
           </table>
         </div>
         <div id="ft-footer" class="px-4 py-3 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap bg-slate-50">
           <span id="ft-count" class="text-xs text-slate-500"></span>
-          <button type="button" id="ft-load-more" class="hidden rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">さらに読み込む</button>
+          <button type="button" id="ft-load-more" class="hidden rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('audit.loadMore')}</button>
         </div>
       </div>
 
-      <p class="text-xs text-slate-500 mt-3">注意: コマンドログは Enter 時に PTY の表示行（Tab 補完を含む）を優先して記録します。シェルや端末設定によっては完全一致しない場合があります。</p>
+      <p class="text-xs text-slate-500 mt-3">${t('audit.cmdNote')}</p>
     </div>
   `
 
@@ -387,11 +376,11 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
       { name: 'cmd', btn: tabBtnCmd, panel: panelCmd },
       { name: 'ft', btn: tabBtnFt, panel: panelFt },
     ]
-    for (const t of tabs) {
-      const active = t.name === tab
-      t.panel.classList.toggle('hidden', !active)
-      t.btn.setAttribute('aria-selected', active ? 'true' : 'false')
-      t.btn.className = `px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${active ? TAB_BTN_ACTIVE : TAB_BTN_INACTIVE}`
+    for (const tb of tabs) {
+      const active = tb.name === tab
+      tb.panel.classList.toggle('hidden', !active)
+      tb.btn.setAttribute('aria-selected', active ? 'true' : 'false')
+      tb.btn.className = `px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${active ? TAB_BTN_ACTIVE : TAB_BTN_INACTIVE}`
     }
     if (tab === 'ft' && !ftLoadedOnce) {
       ftLoadedOnce = true
@@ -451,8 +440,8 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
   function updateAuditFooter() {
     const hasMore = Boolean(auditNextCursor)
     countEl.textContent = hasMore
-      ? `表示中 ${auditRowCount} 件（続きがあります）`
-      : `表示中 ${auditRowCount} 件`
+      ? t('audit.visibleCountMore', { n: auditRowCount })
+      : t('audit.visibleCount', { n: auditRowCount })
     loadMoreEl.classList.toggle('hidden', !hasMore)
   }
 
@@ -461,11 +450,11 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
     if (!append) {
       auditNextCursor = ''
       auditRowCount = 0
-      rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">読み込み中…</td></tr>`
+      rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">${t('audit.loading')}</td></tr>`
       loadMoreEl.classList.add('hidden')
     } else {
       loadMoreEl.disabled = true
-      loadMoreEl.textContent = '読み込み中…'
+      loadMoreEl.textContent = t('audit.loading')
     }
     const params = auditQueryParams()
     try {
@@ -473,7 +462,7 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
       const items = (res && res.items) || []
       auditNextCursor = (res && res.next_cursor) || ''
       if (!append && !items.length) {
-        rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">ログがありません</td></tr>`
+        rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">${t('audit.noLogs')}</td></tr>`
         countEl.textContent = ''
         loadMoreEl.classList.add('hidden')
         return
@@ -487,16 +476,16 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
       auditRowCount += items.length
       updateAuditFooter()
     } catch (e) {
-      errEl.textContent = e.message || '取得に失敗しました'
+      errEl.textContent = e.message || t('audit.fetchFailed')
       errEl.classList.remove('hidden')
       if (!append) {
-        rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+        rowsEl.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">${t('audit.fetchFailedRow')}</td></tr>`
         countEl.textContent = ''
       }
       loadMoreEl.classList.add('hidden')
     } finally {
       loadMoreEl.disabled = false
-      loadMoreEl.textContent = 'さらに読み込む'
+      loadMoreEl.textContent = t('audit.loadMore')
     }
   }
 
@@ -550,9 +539,9 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
   function updateCmdFooter() {
     const hasMore = Boolean(cmdNextCursor)
     cmdCountEl.textContent = hasMore
-      ? `表示中 ${cmdRowCount} 件（続きがあります）`
+      ? t('audit.visibleCountMore', { n: cmdRowCount })
       : cmdRowCount > 0
-        ? `表示中 ${cmdRowCount} 件`
+        ? t('audit.visibleCount', { n: cmdRowCount })
         : ''
     cmdLoadMoreEl.classList.toggle('hidden', !hasMore)
   }
@@ -562,12 +551,12 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
     if (!append) {
       cmdNextCursor = ''
       cmdRowCount = 0
-      cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">検索中…</td></tr>`
+      cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">${t('audit.cmdSearching')}</td></tr>`
       cmdLoadMoreEl.classList.add('hidden')
       cmdCountEl.textContent = ''
     } else {
       cmdLoadMoreEl.disabled = true
-      cmdLoadMoreEl.textContent = '読み込み中…'
+      cmdLoadMoreEl.textContent = t('audit.loading')
     }
     const params = cmdQueryParams()
     try {
@@ -575,7 +564,7 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
       const items = (res && res.items) || []
       cmdNextCursor = (res && res.next_cursor) || ''
       if (!append && !items.length) {
-        cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">該当するコマンドはありません。</td></tr>`
+        cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">${t('audit.cmdNoResults')}</td></tr>`
         cmdCountEl.textContent = ''
         cmdLoadMoreEl.classList.add('hidden')
         return
@@ -589,16 +578,16 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
       cmdRowCount += items.length
       updateCmdFooter()
     } catch (e) {
-      cmdErrEl.textContent = e.message || '取得に失敗しました'
+      cmdErrEl.textContent = e.message || t('audit.fetchFailed')
       cmdErrEl.classList.remove('hidden')
       if (!append) {
-        cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+        cmdRowsEl.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">${t('audit.fetchFailedRow')}</td></tr>`
         cmdCountEl.textContent = ''
       }
       cmdLoadMoreEl.classList.add('hidden')
     } finally {
       cmdLoadMoreEl.disabled = false
-      cmdLoadMoreEl.textContent = 'さらに読み込む'
+      cmdLoadMoreEl.textContent = t('audit.loadMore')
     }
   }
 
@@ -623,20 +612,20 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
   let ftNextCursor = ''
   let ftRowCount = 0
 
-  const FT_STATE_LABELS = {
-    completed: '完了',
-    failed: '失敗',
-    cancelled: 'キャンセル',
-    running: '実行中',
-    receiving: '受信中',
+  const FT_STATE_KEYS = {
+    completed: 'audit.ftStateCompleted',
+    failed: 'audit.ftStateFailed',
+    cancelled: 'audit.ftStateCancelled',
+    running: 'audit.ftStateRunning',
+    receiving: 'audit.ftStateReceiving',
   }
-  const FT_DIRECTION_LABELS = {
-    upload: 'アップロード',
-    download: 'ダウンロード',
+  const FT_DIRECTION_KEYS = {
+    upload: 'audit.ftDirectionUpload',
+    download: 'audit.ftDirectionDownload',
   }
 
   function ftStateBadge(state) {
-    const label = FT_STATE_LABELS[state] || state || '—'
+    const label = FT_STATE_KEYS[state] ? t(FT_STATE_KEYS[state]) : state || '—'
     let cls = 'text-slate-700 bg-slate-100'
     if (state === 'completed') cls = 'text-emerald-800 bg-emerald-50'
     else if (state === 'failed') cls = 'text-red-700 bg-red-50'
@@ -669,7 +658,11 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
     }
     if (total > 0) {
       const pct = Math.min(100, Math.round((prog / total) * 100))
-      return `${pct}%（${formatBytes(prog)} / ${formatBytes(total)}）`
+      return t('audit.ftProgressFormat', {
+        pct,
+        prog: formatBytes(prog),
+        total: formatBytes(total),
+      })
     }
     return prog > 0 ? formatBytes(prog) : '—'
   }
@@ -690,7 +683,7 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
 
   function renderFtRow(it) {
     const time = fmtTime(it.updated_at || it.created_at)
-    const dirLabel = FT_DIRECTION_LABELS[it.direction] || it.direction || ''
+    const dirLabel = FT_DIRECTION_KEYS[it.direction] ? t(FT_DIRECTION_KEYS[it.direction]) : it.direction || ''
     const file = it.file_name || (it.remote_path ? it.remote_path.split('/').pop() : '—')
     const path = it.remote_path || ''
     const targetCell = it.target_name
@@ -716,9 +709,9 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
   function updateFtFooter() {
     const hasMore = Boolean(ftNextCursor)
     ftCountEl.textContent = hasMore
-      ? `表示中 ${ftRowCount} 件（続きがあります）`
+      ? t('audit.visibleCountMore', { n: ftRowCount })
       : ftRowCount > 0
-        ? `表示中 ${ftRowCount} 件`
+        ? t('audit.visibleCount', { n: ftRowCount })
         : ''
     ftLoadMoreEl.classList.toggle('hidden', !hasMore)
   }
@@ -728,12 +721,12 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
     if (!append) {
       ftNextCursor = ''
       ftRowCount = 0
-      ftRowsEl.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">読み込み中…</td></tr>`
+      ftRowsEl.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">${t('audit.loading')}</td></tr>`
       ftLoadMoreEl.classList.add('hidden')
       ftCountEl.textContent = ''
     } else {
       ftLoadMoreEl.disabled = true
-      ftLoadMoreEl.textContent = '読み込み中…'
+      ftLoadMoreEl.textContent = t('audit.loading')
     }
     const params = ftQueryParams()
     try {
@@ -741,7 +734,7 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
       const items = (res && res.items) || []
       ftNextCursor = (res && res.next_cursor) || ''
       if (!append && !items.length) {
-        ftRowsEl.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">該当する転送はありません。</td></tr>`
+        ftRowsEl.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">${t('audit.ftNoResults')}</td></tr>`
         ftCountEl.textContent = ''
         ftLoadMoreEl.classList.add('hidden')
         return
@@ -755,16 +748,16 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
       ftRowCount += items.length
       updateFtFooter()
     } catch (e) {
-      ftErrEl.textContent = e.message || '取得に失敗しました'
+      ftErrEl.textContent = e.message || t('audit.fetchFailed')
       ftErrEl.classList.remove('hidden')
       if (!append) {
-        ftRowsEl.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">取得に失敗しました</td></tr>`
+        ftRowsEl.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">${t('audit.fetchFailedRow')}</td></tr>`
         ftCountEl.textContent = ''
       }
       ftLoadMoreEl.classList.add('hidden')
     } finally {
       ftLoadMoreEl.disabled = false
-      ftLoadMoreEl.textContent = 'さらに読み込む'
+      ftLoadMoreEl.textContent = t('audit.loadMore')
     }
   }
 

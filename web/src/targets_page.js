@@ -1,3 +1,5 @@
+import { t as tr } from './i18n.js'
+
 /** 組み込み TFTP 用の内部ターゲット（SSH/Telnet の TFTP トグルで自動作成）。一覧には出さず SSH 行の「ファイル」から操作する。 */
 function isEmbeddedTftpCompanionTarget(t, targets) {
   if (t.protocol !== 'tftp' || !t.host) return false
@@ -21,7 +23,7 @@ function renderHomeConnectButton(t, escapeHtml) {
       t.protocol === 'ssh' && t.needs_passphrase ? '1' : ''
     }"
               class="connect-btn-in-group terminal-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50 w-[96px] text-center whitespace-nowrap">
-              接続
+              ${tr('targets.connectBtn')}
             </button>`
   }
   if (t.protocol === 'vnc') {
@@ -29,7 +31,7 @@ function renderHomeConnectButton(t, escapeHtml) {
       t.id,
     )}" data-popup-target-name="${escapeHtml(t.name || '')}"
               class="connect-btn-in-group vnc-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block w-[96px] text-center whitespace-nowrap">
-              接続
+              ${tr('targets.connectBtn')}
             </button>`
   }
   if (t.protocol === 'rdp') {
@@ -39,16 +41,16 @@ function renderHomeConnectButton(t, escapeHtml) {
               target="_blank" rel="noopener noreferrer"
               data-rdp-target-id="${escapeHtml(t.id)}" data-rdp-target-name="${escapeHtml(t.name || '')}"
               class="connect-btn-in-group rdp-open-link rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors inline-block w-[96px] text-center whitespace-nowrap">
-              接続
+              ${tr('targets.connectBtn')}
             </a>`
   }
-  return `<button type="button" disabled class="${disabledBtnClass}">接続</button>`
+  return `<button type="button" disabled class="${disabledBtnClass}">${tr('targets.connectBtn')}</button>`
 }
 
 export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, renderTagPills) {
   const isManageMode = mode === 'manage'
   if (!targets || targets.length === 0) {
-    return '<p class="text-sm text-slate-500">このグループに登録されているサーバーはありません。</p>'
+    return `<p class="text-sm text-slate-500">${tr('targets.emptyInGroup')}</p>`
   }
   const targetTags = (t) => (Array.isArray(t.tags) ? t.tags : [])
   // ホスト単位で TFTP/FTP ターゲット有無と、SSH/Telnet の機能フラグを管理する。
@@ -137,11 +139,11 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
                     t.ftp_enabled ? '1' : '0'
                   }" data-target-tftp-enabled="${t.tftp_enabled ? '1' : '0'}"
                 class="edit-btn-in-group rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 border border-slate-300 shadow-sm transition-colors w-[96px] text-center whitespace-nowrap">
-              編集
+              ${tr('targets.editBtn')}
             </button>
               <button type="button" data-target-id="${escapeHtml(t.id)}" data-target-name="${escapeHtml(t.name)}"
                 class="delete-btn-in-group rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 shadow-sm transition-colors w-[96px] text-center whitespace-nowrap">
-                削除
+                ${tr('targets.deleteBtn')}
               </button>
             </div>
             `
@@ -160,11 +162,11 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
                 data-files-host="${escapeHtml(t.host)}"
                 data-files-sftp-enabled="${hasSftpEnabled ? '1' : '0'}"
                 data-files-disabled="${showFileBtn ? '0' : '1'}"
-              >ファイル</button>
+              >${tr('targets.filesBtnLabel')}</button>
               ${renderHomeConnectButton(t, escapeHtml)}
               <button type="button" class="active-sessions-btn rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors w-[200px] text-center whitespace-nowrap" data-target-id="${escapeHtml(
                 t.id,
-              )}" data-target-name="${escapeHtml(t.name || '')}">アクティブなセッション (0)</button>
+              )}" data-target-name="${escapeHtml(t.name || '')}">${tr('targets.activeSessionsCount', { count: 0 })}</button>
             </div>
             `
             }
@@ -173,15 +175,15 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
       `
     })
     .join('')
-  const theadTags = isManageMode ? '<th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[22%]">タグ</th>' : ''
+  const theadTags = isManageMode ? `<th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[22%]">${tr('common.tags')}</th>` : ''
   return `
       <div class="overflow-x-auto">
         <table class="min-w-full text-left text-sm table-fixed">
           <thead class="bg-slate-50 border-b border-slate-200">
             <tr>
-              <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[26%]">名前</th>
-              <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[28%]">ホスト</th>
-              <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[12%]">プロトコル</th>
+              <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[26%]">${tr('common.name')}</th>
+              <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[28%]">${tr('common.host')}</th>
+              <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[12%]">${tr('common.protocol')}</th>
               ${theadTags}
               <th class="px-4 py-2 w-[34%]"></th>
             </tr>

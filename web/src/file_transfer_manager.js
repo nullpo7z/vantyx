@@ -1,4 +1,5 @@
 import API from './api.js'
+import { t } from './i18n.js'
 
 const STORAGE_KEY = 'vantyx_file_transfer_ids'
 const POLL_MS_FALLBACK = 2000
@@ -53,15 +54,15 @@ function isActive(state) {
 function stateLabel(state) {
   switch (state) {
     case 'receiving':
-      return '受信中…'
+      return t('sessions.transferReceiving')
     case 'running':
-      return '転送中…'
+      return t('sessions.transferRunning')
     case 'completed':
-      return '完了'
+      return t('sessions.transferCompleted')
     case 'failed':
-      return 'エラー'
+      return t('sessions.transferFailed')
     case 'cancelled':
-      return 'キャンセル'
+      return t('sessions.transferCancelled')
     default:
       return state
   }
@@ -285,7 +286,7 @@ function renderGlobalBar() {
     .reverse()
     .map((j) => {
       const pct = percentFor(j)
-      const dir = j.direction === 'upload' ? '↑' : '↓'
+      const dir = j.direction === 'upload' ? t('fileTransfersBar.arrowUp') : t('fileTransfersBar.arrowDown')
       return `
         <div class="flex items-center gap-2 py-1.5 px-2 text-sm ${j.state === 'failed' ? 'text-red-600' : 'text-slate-700'}">
           <span class="font-mono text-xs text-slate-500">${dir}</span>
@@ -294,21 +295,21 @@ function renderGlobalBar() {
             <div class="h-full bg-sky-500" style="width:${pct}%"></div>
           </div>
           <span class="text-xs min-w-[4rem] text-right">${j.state === 'running' || j.state === 'receiving' ? (pct > 0 ? `${pct}%` : stateLabel(j.state)) : stateLabel(j.state)}</span>
-          ${isActive(j.state) ? `<button type="button" class="text-xs text-slate-500 hover:text-red-600 cancel-transfer" data-id="${escapeHtml(j.id)}">中止</button>` : ''}
+          ${isActive(j.state) ? `<button type="button" class="text-xs text-slate-500 hover:text-red-600 cancel-transfer" data-id="${escapeHtml(j.id)}">${t('fileTransfersBar.cancel')}</button>` : ''}
         </div>
       `
     })
     .join('')
   const hasUpload = active.some((j) => j.direction === 'upload')
   const hasDownload = active.some((j) => j.direction === 'download')
-  let title = 'ファイル転送'
-  if (hasUpload && !hasDownload) title = 'ファイルアップロード'
-  else if (hasDownload && !hasUpload) title = 'ファイルダウンロード'
+  let title = t('fileTransfersBar.titleAll')
+  if (hasUpload && !hasDownload) title = t('fileTransfersBar.titleUpload')
+  else if (hasDownload && !hasUpload) title = t('fileTransfersBar.titleDownload')
   const html = `
     <div class="px-3 py-2">
       <div class="flex items-center justify-between mb-1 gap-2">
         <span class="text-xs font-semibold text-slate-600">${escapeHtml(title)}</span>
-        <a href="#" id="file-transfers-goto-sessions" class="text-xs text-sky-600 hover:text-sky-800 whitespace-nowrap">セッション一覧で詳細</a>
+        <a href="#" id="file-transfers-goto-sessions" class="text-xs text-sky-600 hover:text-sky-800 whitespace-nowrap">${t('fileTransfersBar.gotoSessions')}</a>
       </div>
       <div class="max-h-32 overflow-auto">${rows}</div>
     </div>

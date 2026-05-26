@@ -6,6 +6,7 @@
  */
 
 import API from './api.js'
+import { t } from './i18n.js'
 
 /**
  * Escape arbitrary text for safe interpolation into innerHTML.
@@ -56,7 +57,7 @@ export function fillExistingTagsPicker(modalEl, inputId) {
         container.innerHTML = ''
         return
       }
-      container.innerHTML = `<p class="text-xs text-slate-500 mb-1.5">登録済みのタグから選択:</p><div class="flex flex-wrap gap-2">${allTags.map((t) => `<button type="button" class="existing-tag-pill rounded border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-sky-50 hover:border-sky-300 transition-colors" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`).join('')}</div>`
+      container.innerHTML = `<p class="text-xs text-slate-500 mb-1.5">${t('targets.pickExistingTags')}</p><div class="flex flex-wrap gap-2">${allTags.map((tag) => `<button type="button" class="existing-tag-pill rounded border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-sky-50 hover:border-sky-300 transition-colors" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`).join('')}</div>`
       container.querySelectorAll('.existing-tag-pill').forEach((btn) => {
         btn.addEventListener('click', () => {
           const tag = (btn.dataset.tag || '').trim()

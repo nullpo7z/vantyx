@@ -1,4 +1,5 @@
 import API from './api.js'
+import { t } from './i18n.js'
 
 const ID_MAX_LENGTH = 512
 const ID_PATTERN = /^[A-Za-z0-9_-]+$/
@@ -6,7 +7,7 @@ const ID_PATTERN = /^[A-Za-z0-9_-]+$/
 function validateOptionalUserId(rawId) {
   if (!rawId) return null
   if (rawId.length > ID_MAX_LENGTH || !ID_PATTERN.test(rawId)) {
-    return 'ユーザーIDは英数字・ハイフン・アンダースコアのみ、最大512文字で入力してください'
+    return t('users.validateUserId')
   }
   return null
 }
@@ -18,7 +19,7 @@ export async function renderUsersPage({
   renderTagPills,
   fillExistingTagsPicker,
 }) {
-  mainContent.innerHTML = '<p class="text-slate-500">読み込み中…</p>'
+  mainContent.innerHTML = `<p class="text-slate-500">${t('common.loading')}</p>`
 
   const reload = () =>
     renderUsersPage({
@@ -51,13 +52,13 @@ export async function renderUsersPage({
                 data-username="${escapeHtml(u.username)}"
                 data-user-role="${escapeHtml(u.role || 'user')}"
                 data-user-tags="${escapeHtml((userTags || []).join(','))}">
-                編集
+                ${t('users.edit')}
               </button>
               <button type="button"
                 class="user-ssh-keys-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
                 data-user-id="${escapeHtml(u.id)}"
                 data-username="${escapeHtml(u.username)}">
-                公開鍵
+                ${t('users.keysBtn')}
               </button>
             </div>
           </td>
@@ -69,23 +70,23 @@ export async function renderUsersPage({
     mainContent.innerHTML = `
       <div class="w-full flex flex-col">
         <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-medium text-slate-800">ユーザー管理</h2>
-          <button type="button" id="btn-add-user" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">ユーザーを追加</button>
+          <h2 class="text-lg font-medium text-slate-800">${t('users.headerTitle')}</h2>
+          <button type="button" id="btn-add-user" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('users.addBtn')}</button>
         </div>
         <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
           <div class="overflow-x-auto">
             <table class="min-w-full text-left text-sm">
               <thead class="bg-slate-50 border-b border-slate-200">
                 <tr>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザーID</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザー名</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">ロール</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">タグ</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('users.headerId')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('users.headerUsername')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('users.headerRole')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('users.headerTags')}</th>
                 </tr>
               </thead>
               <tbody>${
                 rows ||
-                '<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">ユーザーがありません</td></tr>'
+                `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">${t('users.listEmpty')}</td></tr>`
               }</tbody>
             </table>
           </div>
@@ -125,7 +126,7 @@ export async function renderUsersPage({
     })
   } catch (e) {
     mainContent.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(
-      e.message || '取得に失敗しました',
+      e.message || t('users.fetchFailed'),
     )}</p>`
   }
 }
@@ -137,35 +138,35 @@ function showAddUserModal({ reload }) {
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">ユーザーを追加</h3>
+            <h3 class="font-semibold text-slate-800">${t('users.addTitle')}</h3>
             <button id="add-user-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="add-user-form">
             <div class="px-6 py-5 space-y-5">
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザー名</label>
-                <input type="text" id="add-user-username" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: alice" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldUsername')}</label>
+                <input type="text" id="add-user-username" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('users.fieldUsernamePlaceholder')}" />
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">パスワード</label>
-                <input type="password" id="add-user-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="8文字以上・大文字・小文字・数字・記号" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldPassword')}</label>
+                <input type="password" id="add-user-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('users.fieldPasswordPlaceholder')}" />
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ロール</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldRole')}</label>
                 <select id="add-user-role" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
-                  <option value="user">user</option>
-                  <option value="admin">admin</option>
+                  <option value="user">${t('users.roleUser')}</option>
+                  <option value="admin">${t('users.roleAdmin')}</option>
                 </select>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザーID（任意）</label>
-                <input type="text" id="add-user-id" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="省略時はユーザー名から自動生成" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldId')}</label>
+                <input type="text" id="add-user-id" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('users.fieldIdPlaceholder')}" />
               </div>
               <p id="add-user-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="add-user-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-              <button type="submit" id="add-user-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">追加</button>
+              <button type="button" id="add-user-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('users.cancel')}</button>
+              <button type="submit" id="add-user-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('users.submit')}</button>
             </div>
           </form>
         </div>
@@ -194,7 +195,7 @@ function showAddUserModal({ reload }) {
     }
     const id = rawId || undefined
     if (!username || !password) {
-      errorEl.textContent = 'ユーザー名とパスワードを入力してください'
+      errorEl.textContent = t('users.usernamePasswordRequired')
       errorEl.classList.remove('hidden')
       return
     }
@@ -204,7 +205,7 @@ function showAddUserModal({ reload }) {
       close()
       await reload()
     } catch (err) {
-      errorEl.textContent = err.message || '追加に失敗しました'
+      errorEl.textContent = err.message || t('users.createFailed', { error: '' }).replace(/:\s*$/, '')
       errorEl.classList.remove('hidden')
     } finally {
       submitBtn.disabled = false
@@ -220,35 +221,35 @@ function showEditUserModal({ user, escapeHtml, fillExistingTagsPicker, reload })
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">ユーザーを編集</h3>
+            <h3 class="font-semibold text-slate-800">${t('users.editTitle')}</h3>
             <button id="edit-user-modal-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="edit-user-form">
             <div class="px-6 py-5 space-y-5">
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザーID</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldIdValue')}</label>
                 <p class="text-sm text-slate-800">${escapeHtml(user.id)}</p>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザー名</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldUsername')}</label>
                 <p class="text-sm text-slate-800">${escapeHtml(user.username)}</p>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ロール</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldRole')}</label>
                 <p class="text-sm text-slate-800">${escapeHtml(user.role || 'user')}</p>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">タグ（カンマ区切り）</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldTagsLabel')}</label>
                 <input type="text" id="edit-user-tags-input" value="${escapeHtml(
                   tagsStr,
-                )}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: prod, network, ops" />
+                )}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('users.fieldTagsPlaceholder')}" />
                 <div id="edit-user-tags-input-picker" class="mt-2"></div>
               </div>
               <p id="edit-user-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="edit-user-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-              <button type="submit" id="edit-user-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">保存</button>
+              <button type="button" id="edit-user-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('users.cancel')}</button>
+              <button type="submit" id="edit-user-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('users.save')}</button>
             </div>
           </form>
         </div>
@@ -274,7 +275,7 @@ function showEditUserModal({ user, escapeHtml, fillExistingTagsPicker, reload })
       close()
       await reload()
     } catch (err) {
-      errorEl.textContent = err.message || '保存に失敗しました'
+      errorEl.textContent = err.message || t('users.saveFailed', { error: '' }).replace(/:\s*$/, '')
       errorEl.classList.remove('hidden')
     } finally {
       submitBtn.disabled = false
@@ -291,17 +292,17 @@ async function showUserSSHKeysModal({ userId, username, escapeHtml }) {
       <div class="fixed inset-0 bg-black/40 flex items-center justify-center p-4" id="user-ssh-keys-backdrop">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl border border-slate-200 max-h-[90vh] flex flex-col">
           <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between shrink-0">
-            <h3 class="font-semibold text-slate-800">SSH 公開鍵 — ${safeName}</h3>
+            <h3 class="font-semibold text-slate-800">${t('users.keysTitle')} — ${safeName}</h3>
             <button id="user-ssh-keys-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <div class="px-5 py-4 overflow-auto flex-1 min-h-0">
-            <p class="text-xs text-slate-600 mb-3">Vantyx に SSH でログインする際に使う公開鍵を、このユーザーに紐づけて登録します。</p>
-            <div id="user-ssh-keys-list" class="mb-4">読み込み中…</div>
+            <p class="text-xs text-slate-600 mb-3">${t('users.keysHint')}</p>
+            <div id="user-ssh-keys-list" class="mb-4">${t('users.keysLoading')}</div>
             <div class="border-t border-slate-200 pt-4">
-              <label class="block text-xs font-medium text-slate-600 mb-1.5">公開鍵を追加（authorized_keys 形式の1行）</label>
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.keyAdd')}</label>
               <textarea id="user-ssh-key-input" rows="2" class="w-full rounded border border-slate-300 px-3 py-2 text-sm font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="ssh-ed25519 AAAAC3... user@host"></textarea>
               <p id="user-ssh-key-error" class="mt-1 text-sm text-red-600 hidden"></p>
-              <button type="button" id="user-ssh-key-add-btn" class="mt-2 rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700">追加</button>
+              <button type="button" id="user-ssh-key-add-btn" class="mt-2 rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700">${t('users.keyAddBtn')}</button>
             </div>
           </div>
         </div>
@@ -329,23 +330,23 @@ async function showUserSSHKeysModal({ userId, username, escapeHtml }) {
             <span class="text-xs text-slate-400 shrink-0">${escapeHtml(k.created_at || '')}</span>
             <button type="button" class="user-ssh-key-del-btn rounded border border-red-200 px-2 py-0.5 text-xs text-red-700 hover:bg-red-50 shrink-0" data-key-id="${escapeHtml(
               String(k.id),
-            )}">削除</button>
+            )}">${t('users.keyDelete')}</button>
           </div>
         `
       })
       .join('')
     listEl.innerHTML = keyRows
       ? `<div class="space-y-0">${keyRows}</div>`
-      : '<p class="text-slate-500 text-sm">登録された公開鍵はありません。</p>'
+      : `<p class="text-slate-500 text-sm">${t('users.keysNone')}</p>`
     modal.querySelectorAll('.user-ssh-key-del-btn').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        if (!confirm('この公開鍵を削除しますか？')) return
+        if (!confirm(t('users.keyConfirmDelete'))) return
         try {
           await API.deleteUserSSHKey(userId, btn.dataset.keyId)
           const keys = await API.userSSHKeys(userId)
           renderList(keys)
         } catch (e) {
-          alert(e.message || '削除に失敗しました')
+          alert(e.message || t('users.keyDeleteFailed'))
         }
       })
     })
@@ -363,7 +364,7 @@ async function showUserSSHKeysModal({ userId, username, escapeHtml }) {
     const line = raw.split(/\r?\n/)[0]?.trim() || raw
     errorEl.classList.add('hidden')
     if (!line) {
-      errorEl.textContent = '公開鍵を1行で入力してください。'
+      errorEl.textContent = t('users.keyEnterOneLine')
       errorEl.classList.remove('hidden')
       return
     }
@@ -373,7 +374,7 @@ async function showUserSSHKeysModal({ userId, username, escapeHtml }) {
       const keys = await API.userSSHKeys(userId)
       renderList(keys)
     } catch (e) {
-      errorEl.textContent = e.message || '追加に失敗しました'
+      errorEl.textContent = e.message || t('users.keyAddFailed')
       errorEl.classList.remove('hidden')
     }
   })
@@ -385,7 +386,7 @@ async function showUserSSHKeysModal({ userId, username, escapeHtml }) {
     const listEl = modal.querySelector('#user-ssh-keys-list')
     if (listEl) {
       listEl.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(
-        e.message || '公開鍵一覧の取得に失敗しました',
+        e.message || t('users.keysFetchFailed'),
       )}</p>`
     }
   }

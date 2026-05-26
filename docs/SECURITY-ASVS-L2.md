@@ -1,7 +1,5 @@
 # Security notes (best-effort)
 
-[日本語](SECURITY-ASVS-L2.ja.md)
-
 Vantyx is a small personal OSS project, but it terminates remote access to
 SSH / RDP / VNC / Telnet servers, so it tries to follow the spirit of
 [OWASP ASVS](https://owasp.org/www-project-application-security-verification-standard/)

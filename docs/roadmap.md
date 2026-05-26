@@ -1,7 +1,5 @@
 # Vantyx roadmap and feature matrix
 
-[日本語](roadmap.ja.md)
-
 This is a snapshot of what Vantyx supports today and what is on the
 roadmap. It mirrors the implementation, not aspirational design notes.
 

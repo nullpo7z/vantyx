@@ -65,7 +65,7 @@ graph LR
     Bridges --> Targets(("Remote SSH /<br/>Telnet / VNC /<br/>SFTP / FTP / TFTP"))
 ```
 
-詳細は [docs/ARCHITECTURE.ja.md](docs/ARCHITECTURE.ja.md) を参照してください。
+詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください（英語のみ）。
 公開 REST + WebSocket API は [docs/api/openapi.yaml](docs/api/openapi.yaml)
 にドキュメント化され、管理者は `/docs`（Swagger UI）から参照できます。
 
@@ -117,9 +117,9 @@ make e2e    # Playwright E2E（Docker 必須）
 ## セキュリティ
 
 Vantyx は機密データの保存・通信について
-[OWASP ASVS Level 2](docs/SECURITY-ASVS-L2.ja.md) の精神に倣うよう努めています
-（正式な監査ではなくベストエフォート）。脆弱性報告は
-[SECURITY.ja.md](SECURITY.ja.md) を参照し、公開 Issue ではなく
+[OWASP ASVS Level 2](docs/SECURITY-ASVS-L2.md) の精神に倣うよう努めています
+（正式な監査ではなくベストエフォート、ドキュメントは英語のみ）。
+脆弱性報告は [SECURITY.ja.md](SECURITY.ja.md) を参照し、公開 Issue ではなく
 GitHub Private Security Advisory フォームを使用してください。
 
 ## コントリビューション

@@ -54,5 +54,5 @@ Vantyx は 1.0 未満の開発段階にあります。セキュリティ修正�
 
 Vantyx は機密データの保存・通信について **OWASP ASVS Level 2** の精神に倣う
 よう努めています（正式な監査ではなくベストエフォート）。実装している対策の
-概要と既知のギャップは
-[docs/SECURITY-ASVS-L2.ja.md](docs/SECURITY-ASVS-L2.ja.md) を参照してください。
+概要と既知のギャップは [docs/SECURITY-ASVS-L2.md](docs/SECURITY-ASVS-L2.md)
+を参照してください（英語のみ）。

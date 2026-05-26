@@ -10,11 +10,16 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
 
 ### Changed
 
-- Docs: rewrote `docs/SECURITY-ASVS-L2.md` / `.ja.md` as a concise
-  best-effort security checklist instead of a full ASVS L2 self-assessment.
+- Docs: rewrote `docs/SECURITY-ASVS-L2.md` as a concise best-effort
+  security checklist instead of a full ASVS L2 self-assessment.
   Re-framed the security claims in `README.md` / `SECURITY.md` (and their
   Japanese counterparts) as "follows the spirit of ASVS L2" to avoid
   implying a formal audit.
+- Docs: dropped the Japanese mirrors under `docs/`
+  (`docs/ARCHITECTURE.ja.md`, `docs/SECURITY-ASVS-L2.ja.md`,
+  `docs/roadmap.ja.md`). Top-level documents (`README`, `SECURITY`,
+  `CONTRIBUTING`) keep their bilingual pairs; everything under `docs/` is
+  English only to cap the bilingual-maintenance load.
 - CI: split the workflow so per-PR runs only execute the fast gates
   (`lint-go`, `lint-fe`, `test-go`). The slower `link-check`,
   `security-scan` (Trivy + gosec), and `build-docker` jobs moved to a
@@ -30,8 +35,7 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
   (English + Japanese), `SECURITY.md`, `.github/` bug-report issue template,
   dependabot, and `.editorconfig`.
 - Bilingual top-level documentation (`README.md` + `README.ja.md`,
-  `docs/ARCHITECTURE.md` + `docs/ARCHITECTURE.ja.md`,
-  `docs/SECURITY-ASVS-L2.md` + `docs/SECURITY-ASVS-L2.ja.md`).
+  `SECURITY.md` + `SECURITY.ja.md`, `CONTRIBUTING.md` + `CONTRIBUTING.ja.md`).
 - Centralised configuration reference at `docs/configuration.md`.
 - Developer guide at `docs/development.md` covering toolchain, tests,
   coverage, and logging key conventions.

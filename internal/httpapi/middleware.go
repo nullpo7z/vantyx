@@ -13,17 +13,6 @@ import (
 	"github.com/nullpo7z/vantyx/internal/logging"
 )
 
-// requestScheme returns the effective scheme of r, honoring the
-// X-Forwarded-Proto header when the request arrived via a trusted
-// proxy. This is what should be used everywhere Vantyx needs to know
-// whether the *original* request was HTTPS (CSRF check, Secure cookie,
-// HSTS-style redirects).
-//
-// The function is exported via this name purely for backwards
-// compatibility with existing call sites; new code should use
-// effectiveScheme directly.
-func requestScheme(r *http.Request) string { return effectiveScheme(r) }
-
 // csrfOriginMiddleware mitigates CSRF for cookie-authenticated browser
 // requests by enforcing same-origin Origin / Referer on unsafe methods.
 //

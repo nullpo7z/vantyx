@@ -31,21 +31,11 @@ import (
 // component. Other files in this package can share it for consistency.
 var httpLogger = logging.WithComponent("httpapi.router")
 
-// initialAdminPasswordMarker is stored verbatim in the password_hash
-// column whenever the admin user is auto-created without an operator
-// supplied password. The handleLogin / handleChangePassword paths
-// detect the marker and refuse normal logins until the operator
-// completes the initial password rotation flow. The value is a non-
-// bcrypt sentinel ("not a hash") so it can never accidentally validate
-// a real password through bcrypt.CompareHashAndPassword.
-const initialAdminPasswordMarker = "!INITIAL!"
-
-// adminUserID is the user ID allowed to access /api/spec and /docs.
-const adminUserID = "admin"
-
 // initialAdminPasswordEnv lets operators supply the bootstrap admin
 // password through their secret manager. When unset, NewApp generates
 // a random one-time password and writes it to stdout.
+//
+// #nosec G101 -- this is the name of the env var, not a credential.
 const initialAdminPasswordEnv = "VANTYX_INITIAL_ADMIN_PASSWORD"
 
 // App encapsulates HTTP handlers and shared dependencies.

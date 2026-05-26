@@ -237,11 +237,3 @@ func (l *loginRateLimiter) recordSuccess(ip, username string) {
 	}
 }
 
-// allow is kept for callers that have not been migrated to
-// allowIP/allowUser yet.
-//
-// Deprecated: use allowIP / allowUser directly so the audit / metric
-// surface can distinguish IP-scope from user-scope blocks.
-func (l *loginRateLimiter) allow(ip string) bool { return l.allowIP(ip) }
-
-func (l *loginRateLimiter) recordFailure(ip string) { l.recordFailureIP(ip) }

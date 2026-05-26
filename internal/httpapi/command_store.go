@@ -30,7 +30,7 @@ var secretArgPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)([A-Z0-9_]*(?:PASSWORD|SECRET|TOKEN|API_KEY)[A-Z0-9_]*=)\S+`),
 }
 
-// redactSecrets sanitises a command line before persistence. The
+// redactSecrets sanitizes a command line before persistence. The
 // replacement keeps the flag / variable name so operators can still
 // see what was run.
 func redactSecrets(line string) string {

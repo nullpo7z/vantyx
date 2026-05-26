@@ -30,7 +30,7 @@ var tftpLogger = logging.WithComponent("tftp")
 //   - the requested target has ProtocolTFTP;
 //   - the client's IP matches the target's stored host *and* one of
 //     the source IPs explicitly whitelisted via TrustedClient (set by
-//     the HTTP control plane after an admin authorises a job); and
+//     the HTTP control plane after an admin authorizes a job); and
 //   - for write requests (WRQ), a write window is currently open for
 //     that target. Reads remain permissive when
 //     VANTYX_TFTP_ALLOW_READ_WITHOUT_WINDOW=1 (default off) so legacy
@@ -77,7 +77,7 @@ func NewServer(targetStore access.TargetStore, rootDir string) *Server {
 	return s
 }
 
-// OpenWriteWindow authorises subsequent TFTP writes from clientIP to
+// OpenWriteWindow authorizes subsequent TFTP writes from clientIP to
 // land in targetID's directory for at most ttl. Existing windows are
 // replaced. ttl <= 0 closes the window.
 func (s *Server) OpenWriteWindow(targetID access.TargetID, clientIP net.IP, ttl time.Duration) {
@@ -276,7 +276,7 @@ func (s *Server) authorize(clientIP net.IP, filename string, isWrite bool) (*acc
 }
 
 // enforceWindow rejects a request when no admin-opened TFTP window
-// authorises it. Writes always require a window; reads require one
+// authorizes it. Writes always require a window; reads require one
 // unless VANTYX_TFTP_ALLOW_READ_WITHOUT_WINDOW=1 (default off).
 //
 // UDP source addresses are spoofable, so the window flow is what

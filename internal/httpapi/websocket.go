@@ -52,7 +52,7 @@ func allowedWebSocketOrigin(r *http.Request) bool {
 		}
 	}
 
-	// Default: same-origin (scheme + host) only, honouring the
+	// Default: same-origin (scheme + host) only, honoring the
 	// effective scheme reported by a trusted reverse proxy so a TLS
 	// terminator does not require operators to populate
 	// VANTYX_WS_ALLOWED_ORIGINS (which previously meant they had to
@@ -83,12 +83,3 @@ var wsUpgrader = websocket.Upgrader{
 	},
 }
 
-// applyInitialReadLimit configures the per-connection size + idle
-// timeouts used while reading the initial credential frame. Callers
-// must reset the limit before entering long-lived bridge loops if
-// they expect larger payloads.
-func applyInitialReadLimit(conn interface {
-	SetReadLimit(int64)
-}) {
-	conn.SetReadLimit(wsMaxInitialMessageBytes)
-}

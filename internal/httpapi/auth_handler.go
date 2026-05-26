@@ -134,6 +134,10 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"username": u.Username,
 	})
 
+	// #nosec G124 -- HttpOnly, SameSite=Strict and Secure are all set;
+	// Secure is configured at runtime via cookieSecure(r) which honors
+	// X-Forwarded-Proto for TLS-terminating reverse proxies, so gosec's
+	// static check can not see the assignment.
 	cookie := &http.Cookie{
 		Name:     "vantyx_session",
 		Value:    sess.ID,
@@ -144,7 +148,7 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// the cookie is now never sent on any cross-site navigation
 		// or sub-resource request, which closes the small remaining
 		// window for top-level CSRF (the API was already protected
-		// by Origin checks, but defence in depth is cheap).
+		// by Origin checks, but defense in depth is cheap).
 		SameSite: http.SameSiteStrictMode,
 		Secure:   cookieSecure(r),
 	}
@@ -175,6 +179,8 @@ func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 			audit("logout_delete_failed", auditFields{"error": delErr.Error()})
 		}
 	}
+	// #nosec G124 -- same rationale as the login cookie above (Secure
+	// is runtime-controlled, all other safe-cookie attributes are set).
 	clearCookie := &http.Cookie{
 		Name:     "vantyx_session",
 		Value:    "",

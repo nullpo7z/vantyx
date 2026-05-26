@@ -349,13 +349,6 @@ func trustedProxyCIDRs() []*net.IPNet {
 	return trustedProxyCache
 }
 
-// resetTrustedProxiesForTest re-reads VANTYX_TRUSTED_PROXIES; only the
-// httpapi tests use it.
-func resetTrustedProxiesForTest() {
-	trustedProxyCache = nil
-	trustedProxyOnce = sync.Once{}
-}
-
 // randReadFull reads len(buf) bytes from crypto/rand; declared here so
 // auditUsernameHash can call it without pulling crypto/rand directly
 // into the file's import set in multiple places.

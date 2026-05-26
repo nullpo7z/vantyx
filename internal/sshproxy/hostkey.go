@@ -49,13 +49,6 @@ func WithInsecureSkipHostKeyVerify() BridgeOption {
 	return func(o *bridgeOptions) { o.insecureSkipVerify = true }
 }
 
-// withCapture is an internal option that lets callers retrieve the
-// SHA-256 fingerprint of the key offered by the server when the
-// connection is rejected because no expected value was configured.
-func withCapture(into *string) BridgeOption {
-	return func(o *bridgeOptions) { o.captured = into }
-}
-
 func buildOptions(opts []BridgeOption) *bridgeOptions {
 	o := &bridgeOptions{}
 	for _, f := range opts {

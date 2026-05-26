@@ -30,7 +30,17 @@ func newTestApp(t *testing.T) *App {
 	if err := os.Setenv("VANTYX_SQLITE_PATH", dbPath); err != nil {
 		t.Fatalf("set env: %v", err)
 	}
+	// Pin the bootstrap admin password to the legacy fixture value so
+	// the existing test suite (which hard-codes "Admin123!") keeps
+	// working after the C-2 fix removed the in-source default.
+	t.Setenv(initialAdminPasswordEnv, "Admin123!")
 	app := NewApp()
+	// Tests authenticate immediately as admin against many endpoints;
+	// the force-password-change middleware would otherwise gate every
+	// call. Clear the flag once after bootstrap.
+	if app != nil && app.UserStore != nil {
+		_ = app.UserStore.SetForcePasswordChange("admin", false)
+	}
 	t.Cleanup(func() {
 		_ = closeAuditSink()
 		// Give in-flight goroutines a moment to release SQLite handles
@@ -1251,7 +1261,11 @@ func TestApp_SSHKeys_List_Unauthorized(t *testing.T) {
 	}
 }
 
-func TestApp_SSHKeys_List_Forbidden_NonAdmin(t *testing.T) {
+// TestApp_SSHKeys_Self_AllowedForNonAdmin verifies the H-17 change:
+// /api/me/ssh-keys must be accessible to the caller themselves,
+// regardless of role. Previously this returned 403 for non-admins,
+// which prevented members from managing their own public keys.
+func TestApp_SSHKeys_Self_AllowedForNonAdmin(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 	// Create non-admin user via API (as admin)
@@ -1266,15 +1280,15 @@ func TestApp_SSHKeys_List_Forbidden_NonAdmin(t *testing.T) {
 	if createW.Result().StatusCode != http.StatusOK && createW.Result().StatusCode != http.StatusCreated {
 		t.Fatalf("create user expected 200/201, got %d body=%s", createW.Result().StatusCode, createW.Body.String())
 	}
-	// Request ssh-keys as non-admin
+	// Request ssh-keys as the freshly-created non-admin owner.
 	u2Sess, _ := app.SessionStore.Create("u2")
 	u2Cookie := &http.Cookie{Name: "vantyx_session", Value: u2Sess.ID, Path: "/"}
 	req := httptest.NewRequest(http.MethodGet, "/api/me/ssh-keys", nil)
 	req.AddCookie(u2Cookie)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
-	if w.Result().StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 for non-admin, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for owner, got %d body=%s", w.Result().StatusCode, w.Body.String())
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -697,14 +698,22 @@ func NewSQLiteTargetStore(db *sql.DB, cfg *StoreConfig, encKey []byte) *SQLiteTa
 	return &SQLiteTargetStore{db: db, queryTimeout: timeout, defaultListLimit: limit, encKey: encKey}
 }
 
-func (s *SQLiteTargetStore) encryptCredentials(sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (storedPassword, storedKey, storedKeyPass string, err error) {
+// credentialAAD returns the Associated Authenticated Data used for the
+// given target's column. Binding the ciphertext to "<id>:<field>"
+// prevents an attacker with write access to the SQLite file from
+// swapping ciphertexts between rows or columns (CWE-345).
+func credentialAAD(targetID TargetID, field string) []byte {
+	return []byte("vantyx/target/" + string(targetID) + "/" + field)
+}
+
+func (s *SQLiteTargetStore) encryptCredentials(targetID TargetID, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string) (storedPassword, storedKey, storedKeyPass string, err error) {
 	if (sshPassword != "" || sshPrivateKey != "") && (s.encKey == nil || len(s.encKey) != secret.KeySize) {
 		return "", "", "", ErrEncryptionKeyRequired
 	}
 
 	storedPassword = sshPassword
 	if sshPassword != "" {
-		storedPassword, err = secret.Encrypt(s.encKey, sshPassword)
+		storedPassword, err = secret.EncryptWithAAD(s.encKey, sshPassword, credentialAAD(targetID, "ssh_password"))
 		if err != nil {
 			return "", "", "", err
 		}
@@ -712,7 +721,7 @@ func (s *SQLiteTargetStore) encryptCredentials(sshPassword, sshPrivateKey, sshPr
 
 	storedKey = sshPrivateKey
 	if sshPrivateKey != "" {
-		storedKey, err = secret.Encrypt(s.encKey, sshPrivateKey)
+		storedKey, err = secret.EncryptWithAAD(s.encKey, sshPrivateKey, credentialAAD(targetID, "ssh_private_key"))
 		if err != nil {
 			return "", "", "", err
 		}
@@ -720,7 +729,7 @@ func (s *SQLiteTargetStore) encryptCredentials(sshPassword, sshPrivateKey, sshPr
 
 	storedKeyPass = sshPrivateKeyPassphrase
 	if sshPrivateKeyPassphrase != "" {
-		storedKeyPass, err = secret.Encrypt(s.encKey, sshPrivateKeyPassphrase)
+		storedKeyPass, err = secret.EncryptWithAAD(s.encKey, sshPrivateKeyPassphrase, credentialAAD(targetID, "ssh_private_key_passphrase"))
 		if err != nil {
 			return "", "", "", err
 		}
@@ -753,7 +762,7 @@ func (s *SQLiteTargetStore) CreateWithPath(ctx context.Context, id TargetID, nam
 			return nil, err
 		}
 	}
-	storedPassword, storedKey, storedKeyPass, err := s.encryptCredentials(sshPassword, sshPrivateKey, sshPrivateKeyPassphrase)
+	storedPassword, storedKey, storedKeyPass, err := s.encryptCredentials(id, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase)
 	if err != nil {
 		return nil, err
 	}
@@ -809,7 +818,7 @@ func (s *SQLiteTargetStore) Update(ctx context.Context, id TargetID, name, host 
 	if err := validateProtocol(protocol); err != nil {
 		return nil, err
 	}
-	storedPassword, storedKey, storedKeyPass, err := s.encryptCredentials(sshPassword, sshPrivateKey, sshPrivateKeyPassphrase)
+	storedPassword, storedKey, storedKeyPass, err := s.encryptCredentials(id, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase)
 	if err != nil {
 		return nil, err
 	}
@@ -838,6 +847,56 @@ func (s *SQLiteTargetStore) Update(ctx context.Context, id TargetID, name, host 
 		return nil, ErrTargetNotFound
 	}
 	return s.Get(ctx, id)
+}
+
+// validHostKeyFingerprint accepts "SHA256:<base64>" (with or without padding)
+// or empty. Returns the canonical form (padding stripped) or an error.
+func validHostKeyFingerprint(fp string) (string, error) {
+	fp = strings.TrimSpace(fp)
+	if fp == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(fp, "SHA256:") {
+		return "", ErrHostKeyFingerprintInvalid
+	}
+	body := strings.TrimRight(fp[len("SHA256:"):], "=")
+	if len(body) < 40 || len(body) > 60 {
+		return "", ErrHostKeyFingerprintInvalid
+	}
+	for _, r := range body {
+		switch {
+		case r >= 'A' && r <= 'Z':
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '+' || r == '/':
+		default:
+			return "", ErrHostKeyFingerprintInvalid
+		}
+	}
+	return "SHA256:" + body, nil
+}
+
+// SetSSHHostKeyFingerprint records (or clears) the expected SHA-256
+// fingerprint of the upstream SSH host key for the target.
+func (s *SQLiteTargetStore) SetSSHHostKeyFingerprint(ctx context.Context, id TargetID, fingerprint string) error {
+	if err := validateTargetID(id); err != nil {
+		return err
+	}
+	canonical, err := validHostKeyFingerprint(fingerprint)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	res, err := s.db.ExecContext(ctx, `UPDATE targets SET ssh_host_key_fingerprint = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, canonical, string(id))
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrTargetNotFound
+	}
+	return nil
 }
 
 // Delete removes a target. Group assignments (group_targets) are removed by FK CASCADE.
@@ -870,19 +929,21 @@ func (s *SQLiteTargetStore) Get(ctx context.Context, id TargetID) (*Target, erro
 	var proto string
 	var storedPassword, storedKey, storedKeyPass string
 	var sftpVal, ftpVal, tftpVal int
+	var hostKeyFP string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0)
+		SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0), COALESCE(ssh_host_key_fingerprint,'')
 		FROM targets
 		WHERE id = ?
-	`, string(id)).Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal)
+	`, string(id)).Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal, &hostKeyFP)
 	if err == nil {
 		t.ID = TargetID(idStr)
-		t.SSHPassword = decryptOrPlain(s.encKey, storedPassword)
-		t.SSHPrivateKey = decryptOrPlain(s.encKey, storedKey)
-		t.SSHPrivateKeyPassphrase = decryptOrPlain(s.encKey, storedKeyPass)
+		t.SSHPassword = decryptOrPlain(s.encKey, storedPassword, t.ID, "ssh_password")
+		t.SSHPrivateKey = decryptOrPlain(s.encKey, storedKey, t.ID, "ssh_private_key")
+		t.SSHPrivateKeyPassphrase = decryptOrPlain(s.encKey, storedKeyPass, t.ID, "ssh_private_key_passphrase")
 		t.SFTPEnabled = sftpVal != 0
 		t.FTPEnabled = ftpVal != 0
 		t.TFTPEnabled = tftpVal != 0
+		t.SSHHostKeyFingerprint = hostKeyFP
 	}
 	if err == sql.ErrNoRows {
 		return nil, ErrTargetNotFound
@@ -899,21 +960,33 @@ func (s *SQLiteTargetStore) Get(ctx context.Context, id TargetID) (*Target, erro
 	return &t, nil
 }
 
-func decryptOrPlain(encKey []byte, stored string) string {
+// decryptOrPlain decrypts a stored credential. For v2 ciphertexts the
+// caller-supplied targetID and field bind the AAD; for legacy v1 the
+// AAD is ignored (the value was not AAD-bound at encryption time).
+func decryptOrPlain(encKey []byte, stored string, targetID TargetID, field string) string {
 	if stored == "" {
 		return ""
 	}
-	if !strings.HasPrefix(stored, secret.CiphertextVersionPrefix) {
-		// Legacy plaintext or non-versioned data; return as-is.
+	if !strings.HasPrefix(stored, secret.CiphertextVersionPrefix) && !strings.HasPrefix(stored, secret.CiphertextVersionPrefixV2) {
+		// Legacy plaintext or non-versioned data. Refuse it when
+		// strict mode is on so a DB write that bypasses Encrypt()
+		// (e.g. a leaked backup re-imported by an attacker) can no
+		// longer be used to inject plaintext credentials
+		// (CWE-326 / CWE-757).
+		if os.Getenv("VANTYX_STRICT_CIPHERTEXT") == "1" {
+			logger.Warn("rejected non-versioned credential in strict ciphertext mode")
+			return ""
+		}
+		logger.Warn("stored credential is not encrypted; enable VANTYX_STRICT_CIPHERTEXT=1 to reject these")
 		return stored
 	}
 	if len(encKey) != secret.KeySize {
 		logger.Warn("encrypted credential present but encryption key is not configured correctly")
 		return ""
 	}
-	dec, err := secret.Decrypt(encKey, stored)
+	dec, err := secret.DecryptWithAAD(encKey, stored, credentialAAD(targetID, field))
 	if err != nil {
-		logger.Warn("failed to decrypt stored credential", "error", err)
+		logger.Warn("failed to decrypt stored credential", "error", err, "target_id", string(targetID), "field", field)
 		return ""
 	}
 	return dec
@@ -971,7 +1044,7 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 		err := func() error {
 			// #nosec G202 -- placeholders is "?,?,?" from len(chunk); args are validated TargetIDs
 			rows, err := s.db.QueryContext(ctx, `
-				SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0)
+				SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0), COALESCE(ssh_host_key_fingerprint,'')
 				FROM targets
 				WHERE id IN (`+placeholders+`)`, args...)
 			if err != nil {
@@ -985,19 +1058,21 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 				var proto string
 				var storedPassword, storedKey, storedKeyPass string
 				var sftpVal, ftpVal, tftpVal int
-				if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal); err != nil {
+				var hostKeyFP string
+				if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal, &hostKeyFP); err != nil {
 					return err
 				}
 				if port >= 0 && port <= 65535 {
 					t.ID = TargetID(idStr)
 					t.Port = uint16(port)
 					t.Protocol = Protocol(proto)
-					t.SSHPassword = decryptOrPlain(s.encKey, storedPassword)
-					t.SSHPrivateKey = decryptOrPlain(s.encKey, storedKey)
-					t.SSHPrivateKeyPassphrase = decryptOrPlain(s.encKey, storedKeyPass)
+					t.SSHPassword = decryptOrPlain(s.encKey, storedPassword, t.ID, "ssh_password")
+					t.SSHPrivateKey = decryptOrPlain(s.encKey, storedKey, t.ID, "ssh_private_key")
+					t.SSHPrivateKeyPassphrase = decryptOrPlain(s.encKey, storedKeyPass, t.ID, "ssh_private_key_passphrase")
 					t.SFTPEnabled = sftpVal != 0
 					t.FTPEnabled = ftpVal != 0
 					t.TFTPEnabled = tftpVal != 0
+					t.SSHHostKeyFingerprint = hostKeyFP
 					byID[TargetID(idStr)] = &t
 				}
 			}

@@ -137,8 +137,11 @@ func buildAuditLogQuery(eventQ, userQ string, excludeEvents []string, from, to t
 	args = append(args, from.UTC(), to.UTC())
 
 	if eventQ != "" {
-		conds = append(conds, "event LIKE ?")
-		args = append(args, "%"+eventQ+"%")
+		// Escape SQLite LIKE wildcards (% / _) and the escape byte
+		// itself so caller-controlled fragments can not turn the query
+		// into a full-table scan or smuggle wildcards (M-12).
+		conds = append(conds, `event LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeLikeOperand(eventQ)+"%")
 	}
 	if userQ != "" {
 		conds = append(conds, "user_id = ?")

@@ -3,6 +3,8 @@ package sshd
 import (
 	"bufio"
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -540,7 +542,15 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 	}
 	defer func() { _ = frame.Leave() }()
 
-	sessionID := session.ID(time.Now().UTC().Format(time.RFC3339Nano))
+	// 32 random bytes -> 64-char hex (cryptographically unguessable).
+	// Mirrors httpapi/newTerminalSessionID so attach/view APIs cannot
+	// be brute-forced (CWE-330 / CWE-340).
+	sidBytes := make([]byte, 32)
+	if _, randErr := cryptorand.Read(sidBytes); randErr != nil {
+		add(fmt.Sprintf("Error: %v", randErr))
+		return status
+	}
+	sessionID := session.ID(hex.EncodeToString(sidBytes))
 	bridgeDone := make(chan struct{})
 	readDone := make(chan struct{})
 	var readStarted bool
@@ -570,7 +580,9 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 			safeName := strings.ReplaceAll(string(sessionID), ":", "-")
 			safeName = strings.ReplaceAll(safeName, ".", "-")
 			castPath := filepath.Join(s.recordingDir, safeName+".cast")
-			f, createErr := os.Create(castPath)
+			// 0o600 so an over-permissive umask cannot expose
+			// recordings (M-18 / CWE-732).
+			f, createErr := os.OpenFile(castPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 			if createErr != nil {
 				slog.Warn("CLI recording create failed", "session_id", sessionID, "path", castPath, "error", createErr)
 			} else {
@@ -600,7 +612,7 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 			}
 			bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, streamAttach, touch, tee, telStdin, sessionCols, sessionRows, bridgeResize)
 		default:
-			bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, sessionCols, sessionRows, bridgeResize)
+			bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, sessionCols, sessionRows, bridgeResize, sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint))
 		}
 	})
 	if err != nil {

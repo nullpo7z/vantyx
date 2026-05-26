@@ -10,6 +10,7 @@ import (
 )
 
 func TestAsciinemaWriter_WriteAndRecordInput(t *testing.T) {
+	t.Setenv("VANTYX_RECORD_INPUT", "1")
 	var buf bytes.Buffer
 	w := NewAsciinemaWriter(&buf, 80, 24)
 
@@ -180,6 +181,7 @@ func TestAsciinemaWriter_WriteEventWriteError(t *testing.T) {
 }
 
 func TestAsciinemaWriter_RecordInputWriteError(t *testing.T) {
+	t.Setenv("VANTYX_RECORD_INPUT", "1")
 	wantErr := errors.New("record write failed")
 	var buf bytes.Buffer
 	lw := &limitWriter{w: &buf, limit: 200, errAfter: wantErr}

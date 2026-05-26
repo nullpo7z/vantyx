@@ -237,7 +237,7 @@ func (a *App) handleFileTransferContent(w http.ResponseWriter, r *http.Request) 
 		writeInternalError(w, err)
 		return
 	}
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+fileName+"\"")
+	setAttachmentDisposition(w, fileName)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if info.Size() > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
@@ -332,8 +332,9 @@ func (a *App) handleFileTransferUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
+	const memoryThresholdMB = 8 // overflow spills to disk (CWE-770).
 	r.Body = http.MaxBytesReader(w, r.Body, maxFileTransferMB<<20)
-	if err := r.ParseMultipartForm(maxFileTransferMB << 20); err != nil { // #nosec G120
+	if err := r.ParseMultipartForm(memoryThresholdMB << 20); err != nil { // #nosec G120
 		writeJSONErrorKey(w, r, "files.invalidMultipart", http.StatusBadRequest, "error", err)
 		return
 	}

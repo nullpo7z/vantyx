@@ -210,7 +210,7 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 	if format == "cast" {
 		defer f.Close()
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(castPath))
+		setAttachmentDisposition(w, filepath.Base(castPath))
 		_, _ = io.Copy(w, f)
 		return
 	}
@@ -259,7 +259,10 @@ func convertCastToVideo(castPath, format string) (string, string, string, error)
 			_ = os.Remove(gifPath)
 		}
 	}()
-	cmd := exec.Command(aggPath, castPath, gifPath) // #nosec G204 -- paths from validated castPath and temp file.
+	// `--` forces every subsequent argument to be treated as a
+	// positional file path, so a basename that happens to start with
+	// "-" cannot be re-interpreted as an agg flag (CWE-88).
+	cmd := exec.Command(aggPath, "--", castPath, gifPath) // #nosec G204 -- paths from validated castPath and temp file; `--` blocks option injection.
 	if out, runErr := cmd.CombinedOutput(); runErr != nil {
 		_ = os.Remove(gifPath)
 		return "", "", "", errors.New(strings.TrimSpace(string(out)) + ": " + runErr.Error())

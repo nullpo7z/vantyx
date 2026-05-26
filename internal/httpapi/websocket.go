@@ -52,11 +52,12 @@ func allowedWebSocketOrigin(r *http.Request) bool {
 		}
 	}
 
-	// Default: same-origin (scheme + host) only.
-	wantScheme := "https"
-	if r.TLS == nil {
-		wantScheme = "http"
-	}
+	// Default: same-origin (scheme + host) only, honouring the
+	// effective scheme reported by a trusted reverse proxy so a TLS
+	// terminator does not require operators to populate
+	// VANTYX_WS_ALLOWED_ORIGINS (which previously meant they had to
+	// drop the protection entirely for browser callers).
+	wantScheme := effectiveScheme(r)
 	wantHost := r.Host
 	if strings.EqualFold(u.Scheme, wantScheme) && strings.EqualFold(u.Host, wantHost) {
 		return true
@@ -64,10 +65,30 @@ func allowedWebSocketOrigin(r *http.Request) bool {
 	return false
 }
 
+// wsMaxInitialMessageBytes caps the size of the first WebSocket frame
+// (credentials, geometry, etc.). Subsequent frames are bounded by the
+// proxy-specific handlers (e.g. SSH bridges set their own limits).
+//
+// Using a generous-but-finite limit prevents a DoS where the upgrade
+// succeeds but the next frame is a 1 GB string (CWE-770).
+const wsMaxInitialMessageBytes = 64 << 10 // 64 KiB
+
 // wsUpgrader is the shared WebSocket upgrader. CheckOrigin defers to
-// [allowedWebSocketOrigin].
+// [allowedWebSocketOrigin] and a server-side read buffer cap is set.
 var wsUpgrader = websocket.Upgrader{
+	ReadBufferSize:  4 << 10,
+	WriteBufferSize: 4 << 10,
 	CheckOrigin: func(r *http.Request) bool {
 		return allowedWebSocketOrigin(r)
 	},
+}
+
+// applyInitialReadLimit configures the per-connection size + idle
+// timeouts used while reading the initial credential frame. Callers
+// must reset the limit before entering long-lived bridge loops if
+// they expect larger payloads.
+func applyInitialReadLimit(conn interface {
+	SetReadLimit(int64)
+}) {
+	conn.SetReadLimit(wsMaxInitialMessageBytes)
 }

@@ -124,7 +124,10 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		// Use the JSON-shaped helper so the API surface stays
+		// consistent (M-23 / CWE-1077). http.Error would have sent
+		// plain text instead.
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -301,9 +304,16 @@ func (a *App) handleGroupTags(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(tagsResponse{Tags: tags})
 }
 
-// handleSetGroupTags sets tags for the group. The caller must be a
-// member or an admin.
+// handleSetGroupTags sets tags for the group. Admin only (CWE-269):
+// because group tags drive cross-user ACL via user_tags ⇄ group_tags,
+// allowing non-admin group members to mutate them would let any
+// member silently grant other users access to every target in the
+// group. Members read their group tags via GET, which keeps the
+// non-admin self-service flow intact.
 func (a *App) handleSetGroupTags(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
 	groupID := chi.URLParam(r, "group_id")
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
@@ -311,9 +321,6 @@ func (a *App) handleSetGroupTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	if _, ok := a.requireGroupMemberOrAdmin(w, r, access.GroupID(groupID)); !ok {
-		return
-	}
 	var req setTagsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)

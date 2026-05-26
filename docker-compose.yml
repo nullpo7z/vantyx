@@ -1,7 +1,27 @@
 services:
   vantyx:
     build: .
+    # Hardening defaults (L-7 / CWE-250):
+    #   - no-new-privileges:true forbids setuid-style privilege gain
+    #     from anything the container launches.
+    #   - cap_drop ALL plus a minimal cap_add (NET_BIND_SERVICE for
+    #     :80 / :443 / :69 publishing) avoids ambient privileges.
+    #   - read_only roots the container at a read-only filesystem;
+    #     state lives in the named volumes / bind mounts below.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     ports:
+      # 既定では 0.0.0.0 にバインドされ、全インターフェースで公開される。
+      # 公開範囲を制限する場合は明示的に IP を指定する。
+      # 例: 内部 LAN のみ公開する場合は VANTYX_BIND_HOST=10.0.0.5 を設定し、
+      # 各ポート定義を "${VANTYX_BIND_HOST}:80:8080" の形に変更する (M-22 / CWE-668)。
       - "80:8080"    # HTTP → HTTPS リダイレクト（無効化不可）
       - "443:8443"   # HTTPS (TLS)
       - "2222:2222"  # CLI SSH ゲートウェイ (Phase 2)
@@ -19,9 +39,18 @@ services:
       - VANTYX_SQLITE_PATH=/app/data/vantyx.db
       # ターミナル録画（Asciinema）を有効にする場合に指定。未設定時は録画しない。
       - VANTYX_RECORDINGS_DIR=/app/recordings
-      # サーバー登録で SSH パスワードを保存する場合に必須（AES-256-GCM 用、32 バイトを Base64 にした値）。未設定時はパスワード保存で 503。
-      # 生成: openssl rand -base64 32。本番では .env に記載して env_file で読み込むか、シークレット管理を推奨。
-      - VANTYX_SSH_PASSWORD_ENCRYPTION_KEY=${VANTYX_SSH_PASSWORD_ENCRYPTION_KEY:-}
+      # SSH パスワード暗号化キー（AES-256-GCM 用 / 32 バイトを Base64 にした値）。
+      # `${VAR:?...}` 構文で起動時に必須化しているため、未設定の場合は
+      # docker compose up が即座に失敗する（fail-fast）。リポジトリに固定値
+      # を入れない（CWE-321 / 798）。`openssl rand -base64 32` で生成し、
+      # 本番では Vault / sops / Secrets Manager から注入することを推奨。
+      - VANTYX_SSH_PASSWORD_ENCRYPTION_KEY=${VANTYX_SSH_PASSWORD_ENCRYPTION_KEY:?VANTYX_SSH_PASSWORD_ENCRYPTION_KEY must be set (openssl rand -base64 32). Refusing to start in plaintext mode.}
+      # 初回起動時にランダムな admin パスワードを stdout に出力する。
+      # 既知の値を指定したい場合のみ VANTYX_INITIAL_ADMIN_PASSWORD を設定する。
+      # - VANTYX_INITIAL_ADMIN_PASSWORD=
+      # 信頼できるリバースプロキシ（TLS終端）CIDR。X-Forwarded-Proto / -For を
+      # 受け入れる対象を明示的に列挙する。例: "10.0.0.0/8,fd00::/8"
+      # - VANTYX_TRUSTED_PROXIES=
       # TFTP: コンテナは nonroot のため 69 不可。6969 で listen し、上記 69:6969/udp でホスト 69 に届く。
       - VANTYX_TFTP_LISTEN=0.0.0.0:6969
       # 監査ログ（永続化 + 外部転送）

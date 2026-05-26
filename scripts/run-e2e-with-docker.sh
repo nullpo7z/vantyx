@@ -42,6 +42,11 @@ if [[ -f "$E2E_DB" ]]; then
   }
 fi
 
+# E2E ごとにフレッシュな AES-256 鍵を生成して compose に渡す（リポジトリに固定鍵を残さない: CWE-321 / 798）。
+if [[ -z "${VANTYX_SSH_PASSWORD_ENCRYPTION_KEY:-}" ]]; then
+  export VANTYX_SSH_PASSWORD_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+fi
+
 echo "Building and starting E2E server with Docker Compose ..."
 docker compose -f "$COMPOSE_FILE" build --quiet 2>/dev/null || docker compose -f "$COMPOSE_FILE" build
 docker compose -f "$COMPOSE_FILE" up -d

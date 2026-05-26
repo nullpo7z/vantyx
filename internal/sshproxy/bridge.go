@@ -181,17 +181,18 @@ func AuthMethods(password, privateKeyPEM, keyPassphrase string) ([]ssh.AuthMetho
 // If touch is non-nil, it is called on each client message and when remote stdout/stderr is received.
 // If tee is non-nil, a copy of stdout and stderr is written to tee for session replay.
 // If stdinRecorder is non-nil, it is called when data is written to the target stdin.
+// Optional BridgeOption values configure host-key verification (see hostkey.go).
 // RunBridge blocks until ctx is done or the WebSocket or SSH session closes.
-func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, touch func(), tee io.Writer, stdinRecorder StdinRecorder) error {
+func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, touch func(), tee io.Writer, stdinRecorder StdinRecorder, opts ...BridgeOption) error {
 	auth, err := AuthMethods(password, privateKeyPEM, keyPassphrase)
 	if err != nil {
 		return err
 	}
+	o := buildOptions(opts)
 	config := &ssh.ClientConfig{
-		User: username,
-		Auth: auth,
-		// #nosec G106 -- Phase 2: accept any host key; verify in Phase 3
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		User:            username,
+		Auth:            auth,
+		HostKeyCallback: hostKeyCallback(o),
 		Timeout:         15 * time.Second,
 	}
 	config.Ciphers = ClientCiphers()
@@ -317,16 +318,16 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 // If touch is non-nil, it is called when data is read from localStdin or target stdout/stderr.
 // If tee is non-nil, target stdout/stderr is also written to tee.
 // If stdinRecorder is non-nil, it is called when data is written to the target stdin.
-func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.Writer, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, ptyCols, ptyRows int, resizeChan <-chan TerminalSize, touch func(), tee io.Writer, stdinRecorder StdinRecorder) error {
+func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.Writer, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, ptyCols, ptyRows int, resizeChan <-chan TerminalSize, touch func(), tee io.Writer, stdinRecorder StdinRecorder, opts ...BridgeOption) error {
 	auth, err := AuthMethods(password, privateKeyPEM, keyPassphrase)
 	if err != nil {
 		return err
 	}
+	o := buildOptions(opts)
 	config := &ssh.ClientConfig{
-		User: username,
-		Auth: auth,
-		// #nosec G106 -- Phase 2: accept any host key; verify in Phase 3
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		User:            username,
+		Auth:            auth,
+		HostKeyCallback: hostKeyCallback(o),
 		Timeout:         15 * time.Second,
 	}
 	config.Ciphers = ClientCiphers()
@@ -476,16 +477,16 @@ func (s *StreamAttach) Close() error {
 // Touch is called on client or remote I/O. If tee is non-nil, a copy of stdout/stderr is written to tee (e.g. asciinema file).
 // If stdinRecorder is non-nil, it is called when data is written to the target stdin. The bridge exits when ctx is done or SSH session closes.
 // initialCols and initialRows are the terminal size for the PTY (e.g. from client); 0 lets the factory use defaults.
-func RunBridgeDetachable(ctx context.Context, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, output *session.RingBuffer, attachCh <-chan session.AttachReq, initialConn interface{}, touch func(), tee io.Writer, stdinRecorder StdinRecorder, initialCols, initialRows int, externalResize <-chan TerminalSize) error {
+func RunBridgeDetachable(ctx context.Context, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, output *session.RingBuffer, attachCh <-chan session.AttachReq, initialConn interface{}, touch func(), tee io.Writer, stdinRecorder StdinRecorder, initialCols, initialRows int, externalResize <-chan TerminalSize, opts ...BridgeOption) error {
 	auth, err := AuthMethods(password, privateKeyPEM, keyPassphrase)
 	if err != nil {
 		return err
 	}
+	o := buildOptions(opts)
 	config := &ssh.ClientConfig{
-		User: username,
-		Auth: auth,
-		// #nosec G106 -- Phase 2: accept any host key; verify in Phase 3
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		User:            username,
+		Auth:            auth,
+		HostKeyCallback: hostKeyCallback(o),
 		Timeout:         15 * time.Second,
 	}
 	config.Ciphers = ClientCiphers()

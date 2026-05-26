@@ -1,4 +1,5 @@
 import API from './api.js'
+import { safeUrl } from './dom_helpers.js'
 import { t as tr } from './i18n.js'
 
 /** Relative last-activity label for display. */
@@ -147,7 +148,7 @@ export function buildGroupedSessionListHTML(sessions, rdpSessions, escapeHtml) {
             <p class="text-xs text-slate-500 mt-0.5">${escapeHtml(tr('sessions.rdpRowLastSeen', { when: lastSeen }))}</p>
           </div>
           <div class="flex flex-col gap-1 shrink-0 self-center">
-            <a href="${url}" target="_blank" rel="noopener noreferrer" data-rdp-reconnect="1" data-rdp-target-id="${escapeHtml(r.target_id)}" data-rdp-href="${escapeHtml(url)}" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 text-center">${tr('sessions.reconnect')}</a>
+            <a href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer" data-rdp-reconnect="1" data-rdp-target-id="${escapeHtml(r.target_id)}" data-rdp-href="${escapeHtml(url)}" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 text-center">${tr('sessions.reconnect')}</a>
             <button type="button" ${sessionEndButtonAttrs(r, escapeHtml, { kind: 'rdp' })} class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">${tr('sessions.end')}</button>
           </div>
         </li>`
@@ -230,7 +231,7 @@ export function buildSessionsTableHTML(sessions, rdpSessions, escapeHtml) {
       <td class="${SESSIONS_CELL_SHRINK} text-slate-600">${escapeHtml(formatLastSeen(r.last_seen || r.created_at))}</td>
       <td class="${SESSIONS_CELL_ACTIONS}">
         <div class="${SESSIONS_ACTION_BTNS}">
-          <a href="${url}" target="_blank" rel="noopener noreferrer" data-rdp-reconnect="1" data-rdp-target-id="${escapeHtml(r.target_id)}" data-rdp-href="${escapeHtml(url)}" class="${SESSIONS_BTN} bg-sky-600 text-white hover:bg-sky-700">${tr('sessions.reconnect')}</a>
+          <a href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer" data-rdp-reconnect="1" data-rdp-target-id="${escapeHtml(r.target_id)}" data-rdp-href="${escapeHtml(url)}" class="${SESSIONS_BTN} bg-sky-600 text-white hover:bg-sky-700">${tr('sessions.reconnect')}</a>
           <button type="button" ${sessionEndButtonAttrs(r, escapeHtml, { kind: 'rdp' })} class="${SESSIONS_BTN} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">${tr('sessions.end')}</button>
         </div>
       </td>

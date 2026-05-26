@@ -14,6 +14,7 @@ import (
 )
 
 func TestSSHEchoServer_EchoViaRunBridge(t *testing.T) {
+	t.Setenv("VANTYX_SSH_INSECURE_IGNORE_HOST_KEY", "1")
 	server, err := NewSSHEchoServer("test", "test")
 	if err != nil {
 		t.Fatalf("NewSSHEchoServer: %v", err)

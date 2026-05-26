@@ -3,9 +3,42 @@ package httpapi
 import (
 	"context"
 	"database/sql"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// secretArgPatterns matches common credential-bearing CLI fragments so
+// command_logs (and downstream audit log export) cannot accidentally
+// record passwords typed at the shell (CWE-532).
+//
+// The replacement is conservative: rather than removing the entire
+// invocation we replace just the secret portion with "***". That keeps
+// the audit signal (which tool was invoked, with what flags) while
+// not retaining a usable credential.
+var secretArgPatterns = []*regexp.Regexp{
+	// -psecret  /  -pSECRET (mysql/mysqldump short flag).
+	regexp.MustCompile(`(\B-p)\S+`),
+	// --password=secret  /  --password secret
+	regexp.MustCompile(`(?i)(--password[=\s])\S+`),
+	regexp.MustCompile(`(?i)(--token[=\s])\S+`),
+	regexp.MustCompile(`(?i)(--api[-_]?key[=\s])\S+`),
+	regexp.MustCompile(`(?i)(--secret[=\s])\S+`),
+	// `Authorization: Bearer XYZ` typed at the shell (e.g. curl -H).
+	regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._\-]+`),
+	// FOO_PASSWORD=secret env-var preambles.
+	regexp.MustCompile(`(?i)([A-Z0-9_]*(?:PASSWORD|SECRET|TOKEN|API_KEY)[A-Z0-9_]*=)\S+`),
+}
+
+// redactSecrets sanitises a command line before persistence. The
+// replacement keeps the flag / variable name so operators can still
+// see what was run.
+func redactSecrets(line string) string {
+	for _, re := range secretArgPatterns {
+		line = re.ReplaceAllString(line, "${1}***")
+	}
+	return line
+}
 
 type commandLogStore struct {
 	db *sql.DB
@@ -18,7 +51,8 @@ func newCommandLogStore(db *sql.DB) *commandLogStore {
 	return &commandLogStore{db: db}
 }
 
-// appendLine inserts one logical input line into command_logs.
+// appendLine inserts one logical input line into command_logs after
+// scrubbing well-known credential-bearing flags.
 func (s *commandLogStore) appendLine(ctx context.Context, sessionID, userID, targetID, line string) {
 	if s == nil {
 		return
@@ -27,6 +61,7 @@ func (s *commandLogStore) appendLine(ctx context.Context, sessionID, userID, tar
 	if line == "" {
 		return
 	}
+	line = redactSecrets(line)
 	_, _ = s.db.ExecContext(ctx,
 		`INSERT INTO command_logs (session_id,user_id,target_id,time,line_text) VALUES (?,?,?,?,?)`,
 		sessionID, userID, targetID, time.Now().UTC(), line,

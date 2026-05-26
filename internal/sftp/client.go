@@ -33,17 +33,18 @@ func (c *Client) Close() error {
 // NewClient connects to host:port with username and password and/or private key (PEM + optional passphrase).
 // The caller must call Close on the returned client.
 // ctx is reserved for future cancellation.
-func NewClient(ctx context.Context, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string) (*Client, error) {
+// Optional BridgeOption values configure host-key verification; the
+// secure default rejects connections to servers whose key is unknown.
+func NewClient(ctx context.Context, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, opts ...sshproxy.BridgeOption) (*Client, error) {
 	_ = ctx
 	auth, err := sshproxy.AuthMethods(password, privateKeyPEM, keyPassphrase)
 	if err != nil {
 		return nil, err
 	}
 	config := &ssh.ClientConfig{
-		User: username,
-		Auth: auth,
-		// #nosec G106 -- Phase 2: accept any host key; verify in Phase 3
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		User:            username,
+		Auth:            auth,
+		HostKeyCallback: sshproxy.HostKeyCallbackForOptions(opts...),
 		Timeout:         15 * time.Second,
 	}
 	config.Ciphers = sshproxy.ClientCiphers()

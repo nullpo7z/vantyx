@@ -3,9 +3,58 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 )
+
+// hasColumn reports whether table already has a column named col by
+// inspecting SQLite's pragma_table_info view.
+//
+// Using a structured check is preferable to substring-matching the
+// "duplicate column" error returned by ALTER TABLE: the error message
+// has changed between SQLite versions and is also locale-sensitive
+// (M-9 / CWE-754).
+func hasColumn(ctx context.Context, db *sql.DB, table, col string) (bool, error) {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT name FROM pragma_table_info('%s')`, table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// addColumnIfMissing applies an ALTER TABLE ADD COLUMN statement only
+// when the target column does not yet exist. Safe to call multiple
+// times during startup.
+func addColumnIfMissing(ctx context.Context, db *sql.DB, table, col, ddl string) error {
+	present, err := hasColumn(ctx, db, table, col)
+	if err != nil {
+		return err
+	}
+	if present {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, ddl); err != nil {
+		// Race: another startup path may have applied the column in
+		// parallel. Fall back to the legacy error-string check so we
+		// stay idempotent in that edge case.
+		if strings.Contains(err.Error(), "duplicate column") {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
 
 // Migrate applies the minimal schema required for Vantyx.
 // It is safe to call multiple times; CREATE TABLE statements use IF NOT EXISTS.
@@ -14,6 +63,13 @@ func Migrate(db *sql.DB) error {
 	defer cancel()
 
 	stmts := []string{
+		// migration_marks records one-shot data migrations so they
+		// don't re-run on every startup (which would otherwise let an
+		// attacker reset privileged rows by recreating them).
+		`CREATE TABLE IF NOT EXISTS migration_marks (
+			name TEXT PRIMARY KEY,
+			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`,
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY,
 			username TEXT NOT NULL UNIQUE,
@@ -145,35 +201,55 @@ func Migrate(db *sql.DB) error {
 			return err
 		}
 	}
-	// Optional columns for targets (SSH credentials). Ignore if already present.
-	for _, alter := range []string{
-		`ALTER TABLE targets ADD COLUMN ssh_username TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE targets ADD COLUMN ssh_password TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE targets ADD COLUMN ssh_private_key TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE targets ADD COLUMN ssh_private_key_passphrase TEXT NOT NULL DEFAULT ''`,
+	// Optional columns for targets (SSH credentials).
+	for _, alter := range []struct {
+		col, ddl string
+	}{
+		{"ssh_username", `ALTER TABLE targets ADD COLUMN ssh_username TEXT NOT NULL DEFAULT ''`},
+		{"ssh_password", `ALTER TABLE targets ADD COLUMN ssh_password TEXT NOT NULL DEFAULT ''`},
+		{"ssh_private_key", `ALTER TABLE targets ADD COLUMN ssh_private_key TEXT NOT NULL DEFAULT ''`},
+		{"ssh_private_key_passphrase", `ALTER TABLE targets ADD COLUMN ssh_private_key_passphrase TEXT NOT NULL DEFAULT ''`},
 	} {
-		if _, err := db.ExecContext(ctx, alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		if err := addColumnIfMissing(ctx, db, "targets", alter.col, alter.ddl); err != nil {
 			return err
 		}
 	}
 	// User role: admin | user. Default user; existing id='admin' -> admin.
-	if _, err := db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+	if err := addColumnIfMissing(ctx, db, "users", "role", `ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE users SET role = 'admin' WHERE id = 'admin'`); err != nil {
+	// One-shot promotion of the bundled admin user. Guarded so we only
+	// run it during the initial role-column rollout; subsequent
+	// restarts must not re-elevate an id='admin' row created by a
+	// malicious or accidental write.
+	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO migration_marks(name) VALUES ('admin_role_seed_v1')`); err == nil {
+		var seeded int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM migration_marks WHERE name = 'admin_role_seed_v1'`).Scan(&seeded); err == nil && seeded == 1 {
+			if _, err := db.ExecContext(ctx, `UPDATE users SET role = 'admin' WHERE id = 'admin'`); err != nil {
+				return err
+			}
+		}
+	}
+	// force_password_change forces a rotation on the next login, used
+	// for the bootstrap admin password (ASVS V2.10.4 / CWE-1188).
+	if err := addColumnIfMissing(ctx, db, "users", "force_password_change",
+		`ALTER TABLE users ADD COLUMN force_password_change INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
 	// Per-user UI locale (BCP 47 short code, currently '' | 'en' | 'ja').
 	// Empty means "no preference" so the frontend falls back to its default.
-	if _, err := db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN locale TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+	if err := addColumnIfMissing(ctx, db, "users", "locale",
+		`ALTER TABLE users ADD COLUMN locale TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
 	// Recordings: optional session name/description (from terminal session StartOptions).
-	for _, alter := range []string{
-		`ALTER TABLE recordings ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE recordings ADD COLUMN session_description TEXT NOT NULL DEFAULT ''`,
+	for _, alter := range []struct {
+		col, ddl string
+	}{
+		{"session_name", `ALTER TABLE recordings ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`},
+		{"session_description", `ALTER TABLE recordings ADD COLUMN session_description TEXT NOT NULL DEFAULT ''`},
 	} {
-		if _, err := db.ExecContext(ctx, alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		if err := addColumnIfMissing(ctx, db, "recordings", alter.col, alter.ddl); err != nil {
 			return err
 		}
 	}
@@ -186,12 +262,17 @@ func Migrate(db *sql.DB) error {
 		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 	)`)
 	// File transfer protocol toggles (SFTP/FTP/TFTP). Stored in DB instead of tags.
-	for _, alter := range []string{
-		`ALTER TABLE targets ADD COLUMN sftp_enabled INTEGER NOT NULL DEFAULT 1`,
-		`ALTER TABLE targets ADD COLUMN ftp_enabled INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE targets ADD COLUMN tftp_enabled INTEGER NOT NULL DEFAULT 0`,
+	for _, alter := range []struct {
+		col, ddl string
+	}{
+		{"sftp_enabled", `ALTER TABLE targets ADD COLUMN sftp_enabled INTEGER NOT NULL DEFAULT 1`},
+		{"ftp_enabled", `ALTER TABLE targets ADD COLUMN ftp_enabled INTEGER NOT NULL DEFAULT 0`},
+		{"tftp_enabled", `ALTER TABLE targets ADD COLUMN tftp_enabled INTEGER NOT NULL DEFAULT 0`},
+		// SHA-256 fingerprint of the upstream SSH host key.
+		// Required by sshproxy / sftp to prevent MITM (ASVS V2.6, CWE-295).
+		{"ssh_host_key_fingerprint", `ALTER TABLE targets ADD COLUMN ssh_host_key_fingerprint TEXT NOT NULL DEFAULT ''`},
 	} {
-		if _, err := db.ExecContext(ctx, alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		if err := addColumnIfMissing(ctx, db, "targets", alter.col, alter.ddl); err != nil {
 			return err
 		}
 	}

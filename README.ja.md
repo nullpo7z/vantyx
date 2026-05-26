@@ -24,7 +24,7 @@ FTP / TFTP サーバーをつなぐセルフホスト型のアクセスゲート
 - **セッション録画**：対話シェルを asciinema 形式で記録し、UI で再生。
 - **監査パイプライン**：全ての API 呼び出し・セッションイベントを取得し、
   外部 syslog / SIEM 転送に対応。
-- **OWASP ASVS Level 2** に準拠した機密データ保存・通信のベースライン。
+- **OWASP ASVS Level 2** の精神に倣う機密データ保存・通信のベースライン（正式監査ではなくベストエフォート）。
 
 ## クイックスタート（Docker）
 
@@ -117,8 +117,9 @@ make e2e    # Playwright E2E（Docker 必須）
 ## セキュリティ
 
 Vantyx は機密データの保存・通信について
-[OWASP ASVS Level 2](docs/SECURITY-ASVS-L2.ja.md) を目標としています。
-脆弱性報告は [SECURITY.ja.md](SECURITY.ja.md) を参照し、公開 Issue ではなく
+[OWASP ASVS Level 2](docs/SECURITY-ASVS-L2.ja.md) の精神に倣うよう努めています
+（正式な監査ではなくベストエフォート）。脆弱性報告は
+[SECURITY.ja.md](SECURITY.ja.md) を参照し、公開 Issue ではなく
 GitHub Private Security Advisory フォームを使用してください。
 
 ## コントリビューション

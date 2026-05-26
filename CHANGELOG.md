@@ -10,6 +10,11 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
 
 ### Changed
 
+- Docs: rewrote `docs/SECURITY-ASVS-L2.md` / `.ja.md` as a concise
+  best-effort security checklist instead of a full ASVS L2 self-assessment.
+  Re-framed the security claims in `README.md` / `SECURITY.md` (and their
+  Japanese counterparts) as "follows the spirit of ASVS L2" to avoid
+  implying a formal audit.
 - CI: split the workflow so per-PR runs only execute the fast gates
   (`lint-go`, `lint-fe`, `test-go`). The slower `link-check`,
   `security-scan` (Trivy + gosec), and `build-docker` jobs moved to a

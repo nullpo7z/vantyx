@@ -24,7 +24,7 @@ exposes a unified REST + WebSocket API for the bundled single-page UI.
   asciinema format and replayed in the UI.
 - **Audit pipeline**: every API call and session event is captured and can
   be forwarded to an external syslog / SIEM endpoint.
-- **OWASP ASVS Level 2** baseline for sensitive-data storage and transport.
+- Follows the spirit of **OWASP ASVS Level 2** (best-effort, not a formal audit) for sensitive-data storage and transport.
 
 ## Quickstart (Docker)
 
@@ -118,10 +118,12 @@ make e2e    # Playwright E2E (requires Docker)
 
 ## Security
 
-Vantyx targets [OWASP ASVS Level 2](docs/SECURITY-ASVS-L2.md) for sensitive
-data at rest and in transit. See [SECURITY.md](SECURITY.md) before reporting
-vulnerabilities — please use the GitHub private security advisory form
-rather than opening a public issue.
+Vantyx tries to follow the spirit of
+[OWASP ASVS Level 2](docs/SECURITY-ASVS-L2.md) for sensitive data at rest
+and in transit (best-effort, not a formal audit). See
+[SECURITY.md](SECURITY.md) before reporting vulnerabilities — please use
+the GitHub private security advisory form rather than opening a public
+issue.
 
 ## Contributing
 

@@ -54,8 +54,9 @@ Out of scope:
 - Misconfiguration by an operator (for example, running with
   `VANTYX_DISABLE_ORIGIN_CHECK=1` on a public deployment).
 
-## Hardening guide
+## Hardening notes
 
-Vantyx is designed to meet **OWASP ASVS Level 2** for sensitive data
-storage. See [docs/SECURITY-ASVS-L2.md](docs/SECURITY-ASVS-L2.md) for the
-controls implemented and the recommended deployment hardening checklist.
+Vantyx aims to follow the spirit of **OWASP ASVS Level 2** for sensitive
+data at rest and in transit, on a best-effort basis (no formal audit). See
+[docs/SECURITY-ASVS-L2.md](docs/SECURITY-ASVS-L2.md) for a short summary of
+the controls in place and known gaps.

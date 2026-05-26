@@ -10,6 +10,36 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
 
 ### Changed
 
+- Docs: rewrote `docs/SECURITY-ASVS-L2.md` as a concise best-effort
+  security checklist instead of a full ASVS L2 self-assessment.
+  Re-framed the security claims in `README.md` / `SECURITY.md` (and their
+  Japanese counterparts) as "follows the spirit of ASVS L2" to avoid
+  implying a formal audit.
+- Docs: dropped the Japanese mirrors under `docs/`
+  (`docs/ARCHITECTURE.ja.md`, `docs/SECURITY-ASVS-L2.ja.md`,
+  `docs/roadmap.ja.md`). Top-level documents (`README`, `SECURITY`,
+  `CONTRIBUTING`) keep their bilingual pairs; everything under `docs/` is
+  English only to cap the bilingual-maintenance load.
+- Docs: trimmed `docs/roadmap.md` to the open items only. The list of
+  shipped features lives in `README.md` and was duplicated in the old
+  roadmap; the new file just enumerates what is still missing so the
+  two sources do not drift.
+- CI: dropped the coverage threshold gate. `test-go` still computes
+  coverage for the security-sensitive packages and prints the total
+  for visibility, but does not fail on a numeric threshold. The
+  `scripts/check_coverage.sh` helper and the `make coverage` target
+  remain available locally (the Makefile target now accepts an
+  optional `MIN=NN` to opt back in).
+- Lint: trimmed `configs/golangci.yml` to a minimal personal-OSS set
+  (`govet`, `errcheck`, `staticcheck`, `gosimple`, `unused`,
+  `ineffassign`, `gosec`, `misspell`, `bodyclose`). The opinionated
+  style linters (`revive` godoc requirements, `gocyclo`, `unparam`,
+  `nilerr`) are off so PRs are not blocked on style nits unrelated to
+  the change.
+- Deps: `.github/dependabot.yml` now groups all minor/patch updates
+  per ecosystem (gomod / npm web / npm e2e / github-actions / docker)
+  into a single PR each, and lowers `open-pull-requests-limit` from
+  10/10/5/—/— to 3/3/2/2/2. Major upgrades still open separate PRs.
 - CI: split the workflow so per-PR runs only execute the fast gates
   (`lint-go`, `lint-fe`, `test-go`). The slower `link-check`,
   `security-scan` (Trivy + gosec), and `build-docker` jobs moved to a
@@ -25,8 +55,7 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
   (English + Japanese), `SECURITY.md`, `.github/` bug-report issue template,
   dependabot, and `.editorconfig`.
 - Bilingual top-level documentation (`README.md` + `README.ja.md`,
-  `docs/ARCHITECTURE.md` + `docs/ARCHITECTURE.ja.md`,
-  `docs/SECURITY-ASVS-L2.md` + `docs/SECURITY-ASVS-L2.ja.md`).
+  `SECURITY.md` + `SECURITY.ja.md`, `CONTRIBUTING.md` + `CONTRIBUTING.ja.md`).
 - Centralised configuration reference at `docs/configuration.md`.
 - Developer guide at `docs/development.md` covering toolchain, tests,
   coverage, and logging key conventions.

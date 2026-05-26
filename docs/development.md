@@ -87,13 +87,14 @@ set of `VANTYX_*` env vars.
 | Command | Scope |
 |---------|-------|
 | `make test` | `go vet ./...` + `go test ./...`. |
-| `make coverage` | `go test ./... -covermode=atomic -coverprofile=coverage.out` plus the threshold check. |
+| `make coverage` | Runs the focused coverage suite for the security-sensitive packages and prints the total. Informational only — pass `MIN=NN` to fail the target when the total drops below NN percent. |
 | `make e2e` | Playwright suite under `e2e/`. Requires Docker. |
 | `make smoke` | Build the Docker image and hit `/healthz`. |
 
-The coverage threshold is enforced by
-[`scripts/check_coverage.sh`](../scripts/check_coverage.sh) and applied in
-CI to a subset of the most security-sensitive packages.
+Coverage is not a CI gate: PRs are not blocked on a numeric threshold.
+[`scripts/check_coverage.sh`](../scripts/check_coverage.sh) is still
+available locally for anyone who wants to enforce one
+(`./scripts/check_coverage.sh coverage.out 75`, etc.).
 
 End-to-end tests are documented in [`e2e/README.md`](../e2e/README.md).
 
@@ -105,13 +106,15 @@ End-to-end tests are documented in [`e2e/README.md`](../e2e/README.md).
   uses [`goimports`](https://pkg.go.dev/golang.org/x/tools/cmd/goimports)
   to normalise import groups.
 - Lint with `golangci-lint` using
-  [`configs/golangci.yml`](../configs/golangci.yml). Mandatory
-  linters include `revive` (godoc on every exported symbol),
-  `gocyclo`, `gosec`, `errcheck`, `gosimple`, `govet`, `staticcheck`,
-  `misspell`, and `unparam`.
-- Public symbols must have godoc comments starting with the symbol
-  name (`Foo does ...`). Package documentation lives in a `doc.go`
-  file per package.
+  [`configs/golangci.yml`](../configs/golangci.yml). The enabled set
+  is intentionally small: `govet`, `errcheck`, `staticcheck`,
+  `gosimple`, `unused`, `ineffassign`, `gosec`, `misspell`,
+  `bodyclose`. Opinionated style linters (`revive` godoc requirements,
+  `gocyclo`, `unparam`, `nilerr`) are off.
+- Godoc on exported symbols is encouraged but not enforced. When you
+  do write one, follow the convention of starting it with the symbol
+  name (`Foo does ...`). Package documentation can live in a `doc.go`
+  file when useful.
 - Logging: use the helpers in
   [`internal/logging`](../internal/logging). Do not call `log.Printf`
   directly in new code.

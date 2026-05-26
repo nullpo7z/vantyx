@@ -50,8 +50,9 @@ Vantyx は 1.0 未満の開発段階にあります。セキュリティ修正�
   場合は事後に Vantyx 側にもお知らせください。
 - 運用者による設定ミス（例: 公開環境で `VANTYX_DISABLE_ORIGIN_CHECK=1` を設定）
 
-## ハードニングガイド
+## ハードニングに関する補足
 
-Vantyx は機密データの保存において **OWASP ASVS Level 2** を満たすよう
-設計されています。実装されている対策と推奨デプロイ手順は
-[docs/SECURITY-ASVS-L2.ja.md](docs/SECURITY-ASVS-L2.ja.md) を参照してください。
+Vantyx は機密データの保存・通信について **OWASP ASVS Level 2** の精神に倣う
+よう努めています（正式な監査ではなくベストエフォート）。実装している対策の
+概要と既知のギャップは [docs/SECURITY-ASVS-L2.md](docs/SECURITY-ASVS-L2.md)
+を参照してください（英語のみ）。

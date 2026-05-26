@@ -1,7 +1,5 @@
 # Vantyx architecture
 
-[日本語](ARCHITECTURE.ja.md)
-
 This document gives a high-level tour of the Vantyx backend, the SPA, and
 how they cooperate. It is aimed at new contributors who need to find their
 way around the source tree before making a change.

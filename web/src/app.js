@@ -1,7 +1,7 @@
 import API from './api.js'
 import { renderLogin } from './login.js'
 import { applyStoredTheme, toggleStoredTheme } from './theme.js'
-import { setLocale, onLocaleChange } from './i18n.js'
+import { setLocale, onLocaleChange, t } from './i18n.js'
 import { initNav, setActiveNav, showAuthenticatedNav } from './nav.js'
 import { renderUsersPage } from './users_page.js'
 import { renderRecordingsPage } from './recordings_page.js'
@@ -217,35 +217,35 @@ export function renderApp(container) {
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">ユーザーを追加</h3>
+            <h3 class="font-semibold text-slate-800">${t('app.addUserTitle')}</h3>
             <button id="add-user-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="add-user-form">
             <div class="px-6 py-5 space-y-5">
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザー名</label>
-                <input type="text" id="add-user-username" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: alice" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldUsername')}</label>
+                <input type="text" id="add-user-username" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderUsername')}" />
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">パスワード</label>
-                <input type="password" id="add-user-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="8文字以上・大文字・小文字・数字・記号" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldPassword')}</label>
+                <input type="password" id="add-user-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderStrong')}" />
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ロール</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldRole')}</label>
                 <select id="add-user-role" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
                   <option value="user">user</option>
                   <option value="admin">admin</option>
                 </select>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザーID（任意）</label>
-                <input type="text" id="add-user-id" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="省略時はユーザー名から自動生成" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldUserIdOpt')}</label>
+                <input type="text" id="add-user-id" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderUserId')}" />
               </div>
               <p id="add-user-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="add-user-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-              <button type="submit" id="add-user-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">追加</button>
+              <button type="button" id="add-user-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
+              <button type="submit" id="add-user-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.add')}</button>
             </div>
           </form>
         </div>
@@ -274,7 +274,7 @@ export function renderApp(container) {
       }
       const id = rawId || undefined
       if (!username || !password) {
-        errorEl.textContent = 'ユーザー名とパスワードを入力してください'
+        errorEl.textContent = t('app.addUserError')
         errorEl.classList.remove('hidden')
         return
       }
@@ -284,7 +284,7 @@ export function renderApp(container) {
         close()
         await showUsersPage()
       } catch (err) {
-        errorEl.textContent = err.message || '追加に失敗しました'
+        errorEl.textContent = err.message || t('app.addUserFailed')
         errorEl.classList.remove('hidden')
       } finally {
         submitBtn.disabled = false
@@ -300,33 +300,33 @@ export function renderApp(container) {
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">ユーザーを編集</h3>
+            <h3 class="font-semibold text-slate-800">${t('app.editUserTitle')}</h3>
             <button id="edit-user-modal-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="edit-user-form">
             <div class="px-6 py-5 space-y-5">
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザーID</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldUserId')}</label>
                 <p class="text-sm text-slate-800">${escapeHtml(user.id)}</p>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザー名</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldUsername')}</label>
                 <p class="text-sm text-slate-800">${escapeHtml(user.username)}</p>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ロール</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldRole')}</label>
                 <p class="text-sm text-slate-800">${escapeHtml(user.role || 'user')}</p>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">タグ（カンマ区切り）</label>
-                <input type="text" id="edit-user-tags-input" value="${escapeHtml(tagsStr)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: prod, network, ops" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldTagsCsv')}</label>
+                <input type="text" id="edit-user-tags-input" value="${escapeHtml(tagsStr)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderTagsCsv')}" />
                 <div id="edit-user-tags-input-picker" class="mt-2"></div>
               </div>
               <p id="edit-user-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="edit-user-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-              <button type="submit" id="edit-user-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">保存</button>
+              <button type="button" id="edit-user-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
+              <button type="submit" id="edit-user-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.save')}</button>
             </div>
           </form>
         </div>
@@ -352,7 +352,7 @@ export function renderApp(container) {
         close()
         await showUsersPage()
       } catch (err) {
-        errorEl.textContent = err.message || '保存に失敗しました'
+        errorEl.textContent = err.message || t('app.saveFailed')
         errorEl.classList.remove('hidden')
       } finally {
         submitBtn.disabled = false
@@ -369,17 +369,17 @@ export function renderApp(container) {
       <div class="fixed inset-0 bg-black/40 flex items-center justify-center p-4" id="user-ssh-keys-backdrop">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl border border-slate-200 max-h-[90vh] flex flex-col">
           <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between shrink-0">
-            <h3 class="font-semibold text-slate-800">SSH 公開鍵 — ${safeName}</h3>
+            <h3 class="font-semibold text-slate-800">${t('app.sshKeysTitle', { name: safeName })}</h3>
             <button id="user-ssh-keys-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <div class="px-5 py-4 overflow-auto flex-1 min-h-0">
-            <p class="text-xs text-slate-600 mb-3">Vantyx に SSH でログインする際に使う公開鍵を、このユーザーに紐づけて登録します。</p>
-            <div id="user-ssh-keys-list" class="mb-4">読み込み中…</div>
+            <p class="text-xs text-slate-600 mb-3">${t('app.sshKeysIntro')}</p>
+            <div id="user-ssh-keys-list" class="mb-4">${t('app.sshKeysLoading')}</div>
             <div class="border-t border-slate-200 pt-4">
-              <label class="block text-xs font-medium text-slate-600 mb-1.5">公開鍵を追加（authorized_keys 形式の1行）</label>
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.sshKeyAddLabel')}</label>
               <textarea id="user-ssh-key-input" rows="2" class="w-full rounded border border-slate-300 px-3 py-2 text-sm font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="ssh-ed25519 AAAAC3... user@host"></textarea>
               <p id="user-ssh-key-error" class="mt-1 text-sm text-red-600 hidden"></p>
-              <button type="button" id="user-ssh-key-add-btn" class="mt-2 rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700">追加</button>
+              <button type="button" id="user-ssh-key-add-btn" class="mt-2 rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700">${t('app.add')}</button>
             </div>
           </div>
         </div>
@@ -399,22 +399,22 @@ export function renderApp(container) {
           <div class="flex items-center justify-between gap-2 py-2 border-b border-slate-100 text-sm">
             <span class="font-mono text-slate-700 truncate flex-1" title="${escapeHtml(k.key_line || '')}">${escapeHtml(keyDisplay)}</span>
             <span class="text-xs text-slate-400 shrink-0">${escapeHtml(k.created_at || '')}</span>
-            <button type="button" class="user-ssh-key-del-btn rounded border border-red-200 px-2 py-0.5 text-xs text-red-700 hover:bg-red-50 shrink-0" data-key-id="${escapeHtml(String(k.id))}">削除</button>
+            <button type="button" class="user-ssh-key-del-btn rounded border border-red-200 px-2 py-0.5 text-xs text-red-700 hover:bg-red-50 shrink-0" data-key-id="${escapeHtml(String(k.id))}">${t('app.sshKeyDelete')}</button>
           </div>
         `
       }).join('')
       listEl.innerHTML = keyRows
         ? `<div class="space-y-0">${keyRows}</div>`
-        : '<p class="text-slate-500 text-sm">登録された公開鍵はありません。</p>'
+        : `<p class="text-slate-500 text-sm">${t('app.sshKeyEmpty')}</p>`
       modal.querySelectorAll('.user-ssh-key-del-btn').forEach((btn) => {
         btn.addEventListener('click', async () => {
-          if (!confirm('この公開鍵を削除しますか？')) return
+          if (!confirm(t('app.sshKeyConfirmDelete'))) return
           try {
             await API.deleteUserSSHKey(userId, btn.dataset.keyId)
             const keys = await API.userSSHKeys(userId)
             renderList(keys)
           } catch (e) {
-            alert(e.message || '削除に失敗しました')
+            alert(e.message || t('app.sshKeyDeleteFailed'))
           }
         })
       })
@@ -427,7 +427,7 @@ export function renderApp(container) {
       const line = raw.split(/\r?\n/)[0]?.trim() || raw
       errorEl.classList.add('hidden')
       if (!line) {
-        errorEl.textContent = '公開鍵を1行で入力してください。'
+        errorEl.textContent = t('app.sshKeyAddRequired')
         errorEl.classList.remove('hidden')
         return
       }
@@ -437,7 +437,7 @@ export function renderApp(container) {
         const keys = await API.userSSHKeys(userId)
         renderList(keys)
       } catch (err) {
-        errorEl.textContent = err.message || '登録に失敗しました。'
+        errorEl.textContent = err.message || t('app.sshKeyAddFailed')
         errorEl.classList.remove('hidden')
       }
     })
@@ -445,7 +445,7 @@ export function renderApp(container) {
       const keys = await API.userSSHKeys(userId)
       renderList(keys)
     } catch (e) {
-      modal.querySelector('#user-ssh-keys-list').innerHTML = `<p class="text-sm text-red-600">${escapeHtml(e.message || '取得に失敗しました')}</p>`
+      modal.querySelector('#user-ssh-keys-list').innerHTML = `<p class="text-sm text-red-600">${escapeHtml(e.message || t('app.sshKeyFetchFailed'))}</p>`
     }
   }
 
@@ -463,28 +463,28 @@ export function renderApp(container) {
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">パスワードを変更</h3>
+            <h3 class="font-semibold text-slate-800">${t('app.changePasswordTitle')}</h3>
             <button id="change-password-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="change-password-form">
             <div class="px-6 py-5 space-y-5">
               <div>
-                <label for="change-password-current" class="block text-xs font-medium text-slate-600 mb-1.5">現在のパスワード</label>
-                <input type="password" id="change-password-current" autocomplete="current-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="現在のパスワード" />
+                <label for="change-password-current" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldCurrentPassword')}</label>
+                <input type="password" id="change-password-current" autocomplete="current-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderCurrentPassword')}" />
               </div>
               <div>
-                <label for="change-password-new" class="block text-xs font-medium text-slate-600 mb-1.5">新しいパスワード</label>
-                <input type="password" id="change-password-new" autocomplete="new-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="8文字以上・大文字・小文字・数字・記号" />
+                <label for="change-password-new" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldNewPassword')}</label>
+                <input type="password" id="change-password-new" autocomplete="new-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderStrong')}" />
               </div>
               <div>
-                <label for="change-password-confirm" class="block text-xs font-medium text-slate-600 mb-1.5">新しいパスワード（確認）</label>
-                <input type="password" id="change-password-confirm" autocomplete="new-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="もう一度入力" />
+                <label for="change-password-confirm" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldNewPasswordConfirm')}</label>
+                <input type="password" id="change-password-confirm" autocomplete="new-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderConfirm')}" />
               </div>
               <p id="change-password-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="change-password-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-              <button type="submit" id="change-password-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">変更</button>
+              <button type="button" id="change-password-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
+              <button type="submit" id="change-password-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.submitChange')}</button>
             </div>
           </form>
         </div>
@@ -505,7 +505,7 @@ export function renderApp(container) {
       const confirmPass = modal.querySelector('#change-password-confirm').value
       errorEl.classList.add('hidden')
       if (newPass !== confirmPass) {
-        errorEl.textContent = '新しいパスワードが一致しません'
+        errorEl.textContent = t('app.passwordMismatch')
         errorEl.classList.remove('hidden')
         return
       }
@@ -515,7 +515,7 @@ export function renderApp(container) {
         close()
         showUserInfo()
       } catch (err) {
-        errorEl.textContent = err.message || 'パスワードの変更に失敗しました'
+        errorEl.textContent = err.message || t('app.passwordChangeFailed')
         errorEl.classList.remove('hidden')
       } finally {
         submitBtn.disabled = false
@@ -531,23 +531,23 @@ export function renderApp(container) {
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">タグを編集 — ${escapeHtml(label)}</h3>
+            <h3 class="font-semibold text-slate-800">${t('app.editTagsTitle', { label: escapeHtml(label) })}</h3>
             <button id="edit-tags-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="edit-tags-form">
             <div class="px-6 py-5 space-y-5">
-              <p class="text-sm text-slate-600">タグはアクセス権の付与に使われます。ユーザーとターゲット（またはグループ）で同じタグを持つとアクセス可能になります。英数字・ハイフン・アンダースコア、1〜64文字。</p>
+              <p class="text-sm text-slate-600">${t('app.editTagsIntro')}</p>
               ${currentTags.length ? `<div class="flex flex-wrap gap-2">${renderTagPills(currentTags)}</div>` : ''}
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">タグ（カンマ区切り）</label>
-                <input type="text" id="edit-tags-input" value="${escapeHtml(tagsStr)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: prod, network, ops" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldTagsCsv')}</label>
+                <input type="text" id="edit-tags-input" value="${escapeHtml(tagsStr)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderTagsCsv')}" />
                 <div id="edit-tags-input-picker" class="mt-2"></div>
               </div>
               <p id="edit-tags-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="edit-tags-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-              <button type="submit" id="edit-tags-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">保存</button>
+              <button type="button" id="edit-tags-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
+              <button type="submit" id="edit-tags-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.save')}</button>
             </div>
           </form>
         </div>
@@ -571,7 +571,7 @@ export function renderApp(container) {
       const tagPattern = /^[A-Za-z0-9_-]+$/
       for (const tag of tags) {
         if (!tag || tag.length > 64 || !tagPattern.test(tag)) {
-          errorEl.textContent = 'タグは英数字・ハイフン・アンダースコアのみ、1〜64文字で入力してください'
+          errorEl.textContent = t('app.tagsInvalid')
           errorEl.classList.remove('hidden')
           return
         }
@@ -584,7 +584,7 @@ export function renderApp(container) {
         close()
         if (onSaved) await onSaved()
       } catch (err) {
-        errorEl.textContent = err.message || '保存に失敗しました'
+        errorEl.textContent = err.message || t('app.saveFailed')
         errorEl.classList.remove('hidden')
       } finally {
         submitBtn.disabled = false
@@ -599,22 +599,22 @@ export function renderApp(container) {
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">メンバーを追加</h3>
+            <h3 class="font-semibold text-slate-800">${t('app.addMemberTitle')}</h3>
             <button id="add-member-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="add-member-form">
             <div class="px-6 py-5 space-y-5">
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ユーザー</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldUser')}</label>
                 <select id="add-member-user" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
-                  <option value="">選択してください</option>
+                  <option value="">${t('app.pickPlaceholder')}</option>
                 </select>
               </div>
               <p id="add-member-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="add-member-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-              <button type="submit" id="add-member-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">追加</button>
+              <button type="button" id="add-member-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
+              <button type="submit" id="add-member-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.add')}</button>
             </div>
           </form>
         </div>
@@ -638,11 +638,11 @@ export function renderApp(container) {
         selectEl.appendChild(opt)
       })
       if (toAdd.length === 0) {
-        selectEl.innerHTML = '<option value="">追加できるユーザーがいません</option>'
+        selectEl.innerHTML = `<option value="">${t('app.noMoreUsers')}</option>`
         selectEl.disabled = true
       }
     } catch {
-      selectEl.innerHTML = '<option value="">ユーザー一覧の取得に失敗しました</option>'
+      selectEl.innerHTML = `<option value="">${t('app.fetchUsersFailed')}</option>`
       selectEl.disabled = true
     }
     modal.querySelector('#add-member-form').addEventListener('submit', async (e) => {
@@ -659,7 +659,7 @@ export function renderApp(container) {
         groupsCache = null
         await showTreeView('manage', true)
       } catch (err) {
-        errorEl.textContent = err.message || '追加に失敗しました'
+        errorEl.textContent = err.message || t('app.addUserFailed')
         errorEl.classList.remove('hidden')
       } finally {
         submitBtn.disabled = false
@@ -675,27 +675,27 @@ export function renderApp(container) {
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-xl mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">サーバー管理グループを追加</h3>
+            <h3 class="font-semibold text-slate-800">${t('app.addGroupTitle')}</h3>
             <button id="add-group-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="add-group-form">
             <div class="px-6 py-5 space-y-5">
               <div>
-                <label for="add-group-name" class="block text-xs font-medium text-slate-600 mb-1.5">名前</label>
-                <input type="text" id="add-group-name" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="例: Network" />
+                <label for="add-group-name" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldName')}</label>
+                <input type="text" id="add-group-name" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.placeholderGroupName')}" />
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">親グループ</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldParentGroup')}</label>
                 <div class="text-sm text-slate-800 px-3 py-2 rounded border border-slate-200 bg-slate-50">
                   ${escapeHtml(parentLabel)}
                 </div>
-                <p class="text-xs text-slate-500 mt-1.5">左側ツリーで選択中のグループの直下に作成します。（ルート直下に作成する場合は何も選択せずに追加してください）</p>
+                <p class="text-xs text-slate-500 mt-1.5">${t('app.addGroupHint')}</p>
               </div>
               <p id="add-group-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="add-group-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-              <button type="submit" id="add-group-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">追加</button>
+              <button type="button" id="add-group-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
+              <button type="submit" id="add-group-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.add')}</button>
             </div>
           </form>
         </div>
@@ -722,7 +722,7 @@ export function renderApp(container) {
         close()
         await showTreeView('manage')
       } catch (err) {
-        errorEl.textContent = err.message || '追加に失敗しました'
+        errorEl.textContent = err.message || t('app.addUserFailed')
         errorEl.classList.remove('hidden')
       } finally {
         submitBtn.disabled = false
@@ -735,8 +735,8 @@ export function renderApp(container) {
     modal.classList.remove('hidden')
     const targetIdsInGroup = (targetsForModal || []).map((t) => t.id)
     const modalTitle = targetIdsInGroup.length === 1 && targetsForModal[0].name
-      ? `アクティブなセッション — ${escapeHtml(targetsForModal[0].name)}`
-      : 'アクティブなセッション（再接続）'
+      ? t('app.activeSessionsTitleOne', { name: escapeHtml(targetsForModal[0].name) })
+      : t('app.activeSessionsTitleMany')
     modal.innerHTML = `
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 overflow-hidden border border-slate-200/50 max-h-[90vh] flex flex-col">
@@ -745,7 +745,7 @@ export function renderApp(container) {
             <button id="active-sessions-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <div id="active-sessions-body" class="px-5 py-4 overflow-y-auto flex-1 min-h-0">
-            <p class="text-sm text-slate-500">読み込み中…</p>
+            <p class="text-sm text-slate-500">${t('app.loading')}</p>
           </div>
         </div>
       </div>
@@ -769,14 +769,14 @@ export function renderApp(container) {
           : allRdp
         const hasAny = sessions.length > 0 || rdpSessions.length > 0
         const idleN = countIdleSessions(sessions, rdpSessions)
-        const viewAllLink = '<p class="mt-4 pt-3 border-t border-slate-200"><a href="#" id="active-sessions-view-all" class="text-sm font-medium text-sky-700 hover:text-sky-900">すべてのセッションを表示 →</a></p>'
+        const viewAllLink = `<p class="mt-4 pt-3 border-t border-slate-200"><a href="#" id="active-sessions-view-all" class="text-sm font-medium text-sky-700 hover:text-sky-900">${t('app.viewAllSessions')}</a></p>`
         if (!hasAny) {
           const oneServer = targetIdsInGroup.length === 1
           bodyEl.innerHTML = (targetIdsInGroup.length > 0
             ? (oneServer
-              ? '<p class="text-sm text-slate-500">このサーバーに対する再接続可能なセッションはありません。接続したあと、一度切断するとここに表示され、再接続できます。</p>'
-              : '<p class="text-sm text-slate-500">このグループ内のサーバーに対する再接続可能なセッションはありません。ターミナルで接続したあと、一度切断するとここに表示され、再接続できます。</p>')
-            : '<p class="text-sm text-slate-500">アクティブなセッションはありません。左のツリーでサーバー（グループ）を選択すると、そのグループに属するサーバー単位で表示されます。</p>') + viewAllLink
+              ? `<p class="text-sm text-slate-500">${t('app.activeSessionsEmptyTarget')}</p>`
+              : `<p class="text-sm text-slate-500">${t('app.activeSessionsEmptyGroup')}</p>`)
+            : `<p class="text-sm text-slate-500">${t('app.activeSessionsEmptyAll')}</p>`) + viewAllLink
           bodyEl.querySelector('#active-sessions-view-all')?.addEventListener('click', (e) => {
             e.preventDefault()
             close()
@@ -785,7 +785,7 @@ export function renderApp(container) {
           return
         }
         const idleBanner = idleN > 0
-          ? `<div class="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">${idleN} 件が長時間無活動です。</div>`
+          ? `<div class="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">${t('app.activeSessionsIdleWarn', { n: idleN })}</div>`
           : ''
         bodyEl.innerHTML = idleBanner + buildGroupedSessionListHTML(sessions, rdpSessions, escapeHtml) + viewAllLink
         bindSessionListActions(bodyEl, {
@@ -801,7 +801,7 @@ export function renderApp(container) {
           showSessionsPage()
         })
       } catch {
-        bodyEl.innerHTML = '<p class="text-sm text-red-600">セッション一覧の取得に失敗しました。</p>'
+        bodyEl.innerHTML = `<p class="text-sm text-red-600">${t('app.activeSessionsFetchFailed')}</p>`
       }
     }
     // Expose refresh hook for parent focus event
@@ -812,7 +812,7 @@ export function renderApp(container) {
   function showFileProtocolModal(opts) {
     const modal = document.getElementById('file-protocol-modal')
     if (!modal) return
-    const title = opts?.title || 'ファイル'
+    const title = opts?.title || t('app.fileProtocolTitleDefault')
     const targetName = opts?.targetName || ''
     const actions = Array.isArray(opts?.actions) ? opts.actions : []
     modal.classList.remove('hidden')
@@ -833,10 +833,10 @@ export function renderApp(container) {
                 ${escapeHtml(a.label || '')}
               </button>
             `).join('')
-    : `<p class="text-sm text-slate-600">選択できるプロトコルがありません。</p>`}
+    : `<p class="text-sm text-slate-600">${t('app.fileProtocolNone')}</p>`}
           </div>
           <div class="px-5 py-3 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-            <button type="button" id="file-protocol-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
+            <button type="button" id="file-protocol-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
           </div>
         </div>
       </div>
@@ -873,26 +873,26 @@ export function renderApp(container) {
     const passwordBlock = needsPassword
       ? `
       <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1.5">${isTelnet ? 'Telnet' : 'SSH'} パスワード <span class="text-amber-600">（未登録のため入力してください）</span></label>
+        <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.sshCredsPasswordMissing', { auth: isTelnet ? 'Telnet' : 'SSH' })}</label>
         <input type="password" id="ssh-cred-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
       </div>`
       : ''
     const passphraseBlock = needsPassphrase
       ? `
       <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ <span class="text-amber-600">（未登録のため入力してください）</span></label>
-        <input type="password" id="ssh-cred-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="暗号化された秘密鍵のパスフレーズ" />
+        <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.sshCredsPassphraseMissing')}</label>
+        <input type="password" id="ssh-cred-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.sshCredsPassphrasePlaceholder')}" />
       </div>`
       : ''
     const hasExtraFields = needsPassword || needsPassphrase
     const introText = hasExtraFields
-      ? '不足している情報を入力してください。接続でコンソールを開きます。'
-      : 'セッション名と説明を入力してください（任意）。接続で保存済み認証を使ってコンソールを開きます。'
+      ? t('app.sshCredsHintExtra')
+      : t('app.sshCredsHintStored')
     modal.innerHTML = `
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">接続: ${escapeHtml(targetName || targetId)}</h3>
+            <h3 class="font-semibold text-slate-800">${t('app.sshCredsConnectTitle', { name: escapeHtml(targetName || targetId) })}</h3>
             <button id="ssh-cred-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="ssh-cred-form">
@@ -901,18 +901,18 @@ export function renderApp(container) {
               ${passwordBlock}
               ${passphraseBlock}
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">セッション名（任意）</label>
-                <input type="text" id="ssh-cred-session-name" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: 本番デプロイ用" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldSessionName')}</label>
+                <input type="text" id="ssh-cred-session-name" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderSessionName')}" />
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">説明（任意）</label>
-                <input type="text" id="ssh-cred-session-desc" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: リリース作業用" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldSessionDesc')}</label>
+                <input type="text" id="ssh-cred-session-desc" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderSessionDesc')}" />
               </div>
               <p id="ssh-cred-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="ssh-cred-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-              <button type="submit" id="ssh-cred-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">接続</button>
+              <button type="button" id="ssh-cred-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
+              <button type="submit" id="ssh-cred-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.connect')}</button>
             </div>
           </form>
         </div>
@@ -932,12 +932,12 @@ export function renderApp(container) {
       const password = modal.querySelector('#ssh-cred-password')?.value ?? ''
       const passphrase = modal.querySelector('#ssh-cred-passphrase')?.value ?? ''
       if (needsPassword && !password) {
-        errEl.textContent = 'パスワードを入力してください。'
+        errEl.textContent = t('app.enterPassword')
         errEl.classList.remove('hidden')
         return
       }
       if (needsPassphrase && !passphrase) {
-        errEl.textContent = '秘密鍵のパスフレーズを入力してください。'
+        errEl.textContent = t('app.enterPassphrase')
         errEl.classList.remove('hidden')
         return
       }
@@ -1002,37 +1002,37 @@ export function renderApp(container) {
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">接続: ${escapeHtml(targetName || targetId)}</h3>
+            <h3 class="font-semibold text-slate-800">${t('app.sshCredsConnectTitle', { name: escapeHtml(targetName || targetId) })}</h3>
             <button id="ssh-cred-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="ssh-cred-form">
             <div class="px-6 py-5 space-y-5">
-              <p class="text-sm text-slate-600">接続に必要な情報を入力してください。入力後にコンソールを開きます。</p>
+              <p class="text-sm text-slate-600">${t('app.newConnIntro')}</p>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${authLabel} ユーザー名</label>
-                <input type="text" id="ssh-cred-username" autocomplete="username" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldAuthUsername', { auth: authLabel })}</label>
+                <input type="text" id="ssh-cred-username" autocomplete="username" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderRoot')}" />
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${authLabel} パスワード</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldAuthPassword', { auth: authLabel })}</label>
                 <input type="password" id="ssh-cred-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
               </div>
               ${isTelnet ? '' : `<div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
-                <input type="password" id="ssh-cred-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="保存済み鍵が暗号化されている場合のみ" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldPassphraseOpt')}</label>
+                <input type="password" id="ssh-cred-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderPassphraseOpt')}" />
               </div>`}
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">セッション名（任意）</label>
-                <input type="text" id="ssh-cred-session-name" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: 本番デプロイ用" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldSessionName')}</label>
+                <input type="text" id="ssh-cred-session-name" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderSessionName')}" />
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">説明（任意）</label>
-                <input type="text" id="ssh-cred-session-desc" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: リリース作業用セッション" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldSessionDesc')}</label>
+                <input type="text" id="ssh-cred-session-desc" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderSessionDescNew')}" />
               </div>
               <p id="ssh-cred-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="ssh-cred-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-              <button type="submit" id="ssh-cred-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">接続</button>
+              <button type="button" id="ssh-cred-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
+              <button type="submit" id="ssh-cred-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.connect')}</button>
             </div>
           </form>
         </div>
@@ -1053,7 +1053,7 @@ export function renderApp(container) {
       const sessionName = modal.querySelector('#ssh-cred-session-name').value.trim()
       const sessionDesc = modal.querySelector('#ssh-cred-session-desc').value.trim()
       if (!username) {
-        errorEl.textContent = 'ユーザー名を入力してください'
+        errorEl.textContent = t('app.usernameRequired')
         errorEl.classList.remove('hidden')
         return
       }
@@ -1114,7 +1114,7 @@ export function renderApp(container) {
       mode = 'home'
     }
     const isManageMode = mode === 'manage'
-    const pageTitle = isManageMode ? 'サーバー管理' : 'ホーム'
+    const pageTitle = isManageMode ? t('app.pageManage') : t('app.pageHome')
     setActiveNav(isManageMode ? 'groups' : 'targets')
     mainContent.className = TREE_MAIN_CLASS
 
@@ -1124,7 +1124,7 @@ export function renderApp(container) {
     const scrollPos = treeContainer ? treeContainer.scrollTop : 0
 
     if (!isSameMode && !useCache) {
-      mainContent.innerHTML = '<div class="w-full flex-1 flex items-center justify-center"><p class="text-slate-500">読み込み中…</p></div>'
+      mainContent.innerHTML = `<div class="w-full flex-1 flex items-center justify-center"><p class="text-slate-500">${t('app.loading')}</p></div>`
     }
 
     try {
@@ -1143,11 +1143,11 @@ export function renderApp(container) {
       const label = selectedGroupId || 'root'
 
       const addGroupBtnHtml = isManageMode
-        ? `<button type="button" id="btn-add-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">追加</button>`
+        ? `<button type="button" id="btn-add-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.addBtn')}</button>`
         : ''
 
       const addTargetBtnHtml = isManageMode
-        ? `<button type="button" id="btn-add-target-in-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50" ${selectedGroupId ? '' : 'disabled'}>サーバーを追加</button>`
+        ? `<button type="button" id="btn-add-target-in-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50" ${selectedGroupId ? '' : 'disabled'}>${t('app.addTargetBtn')}</button>`
         : ''
       const isAdmin = meData?.role === 'admin'
       const showMembersSection = isManageMode && isAdmin && selectedGroupId
@@ -1157,11 +1157,11 @@ export function renderApp(container) {
         <div class="flex gap-6 w-full h-full">
           <aside class="w-64 flex-col border-r border-slate-200 bg-white shadow-sm shrink-0 rounded-lg overflow-hidden flex">
             <div class="px-4 py-3 border-b border-slate-200 text-sm font-semibold text-slate-700 flex items-center justify-between">
-              <span>アクセスグループ</span>
+              <span>${t('app.accessGroupsTitle')}</span>
               ${addGroupBtnHtml}
             </div>
             <div class="px-3 py-3 text-xs text-slate-800 overflow-y-auto flex-1 min-h-0">
-              ${treeHtml || '<p class="text-slate-500 p-2">グループがありません。</p>'}
+              ${treeHtml || `<p class="text-slate-500 p-2">${t('app.noGroups')}</p>`}
             </div>
           </aside>
           <section class="flex-1 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col min-h-0">
@@ -1170,14 +1170,14 @@ export function renderApp(container) {
                 <h2 class="text-sm font-semibold text-slate-800">${escapeHtml(label)}</h2>
               </div>
               <div class="flex items-center gap-2">
-                <span class="text-xs text-slate-500">${targets.length} サーバー</span>
+                <span class="text-xs text-slate-500">${t('app.targetsSuffix', { n: targets.length })}</span>
                 ${addTargetBtnHtml}
               </div>
             </div>
             <div class="px-5 py-4">
               ${!isManageMode ? '<div id="idle-sessions-banner" class="hidden mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"></div>' : ''}
               ${renderGroupTargetsTable(targets, mode, escapeHtml, renderTagPills)}
-              ${showMembersSection ? '<div id="group-members-container" class="mt-6 border-t border-slate-200 pt-4"><p class="text-slate-500">読み込み中…</p></div>' : ''}
+              ${showMembersSection ? `<div id="group-members-container" class="mt-6 border-t border-slate-200 pt-4"><p class="text-slate-500">${t('app.loading')}</p></div>` : ''}
             </div>
           </section>
         </div>
@@ -1202,13 +1202,13 @@ export function renderApp(container) {
               const tagsHtml = `
                 <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
                   <div>
-                    <h3 class="text-sm font-semibold text-slate-700 mb-1">タグ</h3>
-                    <p class="text-xs text-slate-500">同じタグを持つユーザーはこのグループのターゲットにアクセスできます</p>
+                    <h3 class="text-sm font-semibold text-slate-700 mb-1">${t('app.tagsHeading')}</h3>
+                    <p class="text-xs text-slate-500">${t('app.tagsHint')}</p>
                     <div class="flex flex-wrap gap-2 mt-2">
-                      ${groupTags.length ? renderTagPills(groupTags) : '<span class="text-xs text-slate-400">タグなし</span>'}
+                      ${groupTags.length ? renderTagPills(groupTags) : `<span class="text-xs text-slate-400">${t('app.noTags')}</span>`}
                     </div>
                   </div>
-                  <button type="button" id="btn-edit-group-tags" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">タグを編集</button>
+                  <button type="button" id="btn-edit-group-tags" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.editTagsBtn')}</button>
                 </div>
               `
               const rows = (members || []).map((m) => `
@@ -1216,27 +1216,27 @@ export function renderApp(container) {
                   <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(m.id)}</td>
                   <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(m.username)}</td>
                   <td class="px-4 py-2 text-right">
-                    <button type="button" class="remove-member-btn rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50" data-user-id="${escapeHtml(m.id)}">削除</button>
+                    <button type="button" class="remove-member-btn rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50" data-user-id="${escapeHtml(m.id)}">${t('app.delete')}</button>
                   </td>
                 </tr>
               `).join('')
               membersContainer.innerHTML = `
                 ${tagsHtml}
-                <h3 class="text-sm font-semibold text-slate-700 mb-2">メンバー（アクセス権）</h3>
+                <h3 class="text-sm font-semibold text-slate-700 mb-2">${t('app.membersHeading')}</h3>
                 <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs text-slate-500">${memberIds.length} 人</span>
-                  <button type="button" id="btn-add-member" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">メンバーを追加</button>
+                  <span class="text-xs text-slate-500">${t('app.membersCount', { n: memberIds.length })}</span>
+                  <button type="button" id="btn-add-member" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.addMember')}</button>
                 </div>
                 <div class="overflow-x-auto border border-slate-200 rounded-lg">
                   <table class="min-w-full text-left text-sm">
                     <thead class="bg-slate-50 border-b border-slate-200">
                       <tr>
-                        <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザーID</th>
-                        <th class="px-4 py-2 text-xs font-semibold text-slate-700">ユーザー名</th>
+                        <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('app.memberHeaderId')}</th>
+                        <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('app.memberHeaderName')}</th>
                         <th class="px-4 py-2"></th>
                       </tr>
                     </thead>
-                    <tbody>${rows || '<tr><td colspan="3" class="px-4 py-4 text-center text-slate-500">メンバーがいません</td></tr>'}</tbody>
+                    <tbody>${rows || `<tr><td colspan="3" class="px-4 py-4 text-center text-slate-500">${t('app.noMembers')}</td></tr>`}</tbody>
                   </table>
                 </div>
               `
@@ -1255,13 +1255,13 @@ export function renderApp(container) {
               membersContainer.querySelectorAll('.remove-member-btn').forEach((btn) => {
                 btn.addEventListener('click', async () => {
                   const uid = btn.dataset.userId || ''
-                  if (!uid || !confirm(`「${escapeHtml(uid)}」をこのグループから削除してもよろしいですか？`)) return
+                  if (!uid || !confirm(t('app.confirmRemoveMember', { user: escapeHtml(uid) }))) return
                   try {
                     await API.removeGroupMember(selectedGroupId, uid)
                     groupsCache = null
                     await showTreeView('manage', true)
                   } catch (err) {
-                    alert(err.message || '削除に失敗しました')
+                    alert(err.message || t('app.deleteFailed'))
                   }
                 })
               })
@@ -1273,7 +1273,7 @@ export function renderApp(container) {
               }
               // 認証エラーや一時的な通信エラーなどはコンソールにのみ出し、画面には控えめに表示
               console.error('Failed to load group members', err)
-              membersContainer.innerHTML = '<p class="text-sm text-red-600">メンバー一覧の取得に失敗しました</p>'
+              membersContainer.innerHTML = `<p class="text-sm text-red-600">${t('app.membersFetchFailed')}</p>`
             })
         }
       }
@@ -1314,13 +1314,13 @@ export function renderApp(container) {
             const targetId = btn.dataset.targetId || ''
             const targetName = btn.dataset.targetName || ''
             if (!targetId) return
-            if (!confirm(`「${escapeHtml(targetName) || targetId}」を削除してもよろしいですか？`)) return
+            if (!confirm(t('app.confirmDeleteTarget', { name: escapeHtml(targetName) || targetId }))) return
             try {
               await API.deleteTarget(targetId)
               groupsCache = null
               await showTreeView('manage')
             } catch (err) {
-              alert(err.message || '削除に失敗しました')
+              alert(err.message || t('app.deleteFailed'))
             }
           })
         })
@@ -1350,7 +1350,7 @@ export function renderApp(container) {
             if (idleBanner) {
               if (totalIdle > 0) {
                 idleBanner.classList.remove('hidden')
-                idleBanner.innerHTML = `${totalIdle} 件のセッションが長時間無活動です。<a href="#" class="font-medium text-amber-950 underline hover:no-underline ml-1" id="idle-banner-sessions-link">セッション一覧</a>で確認できます。`
+                idleBanner.innerHTML = t('app.idleBanner', { n: totalIdle })
                 idleBanner.querySelector('#idle-banner-sessions-link')?.addEventListener('click', (e) => {
                   e.preventDefault()
                   showSessionsPage()
@@ -1361,7 +1361,7 @@ export function renderApp(container) {
             }
             mainContent.querySelectorAll('.active-sessions-btn').forEach((btn) => {
               const targetId = btn.dataset.targetId || ''
-              const baseLabel = 'アクティブなセッション'
+              const baseLabel = t('app.activeSessionsLabel')
               const n = targetId ? (counts[targetId] || 0) : 0
               const idleMark = idleByTarget[targetId] ? ' ⚠' : ''
               btn.textContent = `${baseLabel} (${n})${idleMark}`
@@ -1440,14 +1440,14 @@ export function renderApp(container) {
                     })
                     if (hasTftpSession) {
                       // アクティブな TFTP セッションがある場合は OFF にできない。
-                      window.alert('この TFTP サーバーにはアクティブな TFTP セッションがあるため、OFF にできません。先にセッションを終了してください。')
+                      window.alert(t('app.tftpHasActiveAlert'))
                       chk.checked = true
                       return
                     }
                   } catch (e) {
                     console.error('Failed to check TFTP sessions', e)
                     // セッション状態が確認できない場合は、安全のため OFF を拒否する。
-                    window.alert('アクティブな TFTP セッションの確認に失敗しました。後でもう一度お試しください。')
+                    window.alert(t('app.tftpCheckFailed'))
                     chk.checked = true
                     return
                   }
@@ -1514,7 +1514,7 @@ export function renderApp(container) {
         // 未対応プロトコル (tftp/ftp 等) はアラート表示。
         mainContent.querySelectorAll('.connect-btn-in-group:not(.terminal-open-btn):not(.vnc-open-btn):not([data-popup-protocol]):not(a)').forEach((btn) => {
           btn.addEventListener('click', () => {
-            alert('このターゲットは SSH / Telnet / VNC / RDP のみ対応しています。')
+            alert(t('app.unsupportedProtoAlert'))
           })
         })
       }
@@ -1558,7 +1558,7 @@ export function renderApp(container) {
               const sshTarget = targets.find((t) => t.id === targetId)
               if (tftpTarget && sshTarget) {
                 actions.push({
-                  label: 'TFTP（TFTP + コンソール）',
+                  label: t('app.tftpProtoLabel'),
                   onSelect: () => {
                     const name = tftpTarget.name || hostForTftp
                     const urlOpts = {
@@ -1608,7 +1608,7 @@ export function renderApp(container) {
             return
           }
           showFileProtocolModal({
-            title: 'ファイル転送プロトコルの選択',
+            title: t('app.fileProtoTitle'),
             targetName,
             actions,
           })
@@ -1639,10 +1639,10 @@ export function renderApp(container) {
         <div class="w-full flex-1 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col min-h-0">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
             <h2 class="text-sm font-semibold text-slate-800">${escapeHtml(pageTitle)}</h2>
-            ${isManageMode ? `<button type="button" id="btn-add-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">追加</button>` : ''}
+            ${isManageMode ? `<button type="button" id="btn-add-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.add')}</button>` : ''}
           </div>
           <div class="px-5 py-6 text-center">
-            <p class="text-sm text-red-600">${escapeHtml(e.message || '取得に失敗しました')}</p>
+            <p class="text-sm text-red-600">${escapeHtml(e.message || t('app.fetchFailed'))}</p>
           </div>
         </div>
       `
@@ -1659,30 +1659,30 @@ export function renderApp(container) {
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-xl mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">サーバーを追加</h3>
+            <h3 class="font-semibold text-slate-800">${t('app.addTargetTitle')}</h3>
             <button id="add-target-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="add-target-form">
             <div class="px-6 py-5 space-y-5 max-h-[70vh] overflow-y-auto">
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">名前</label>
-                <input type="text" id="add-target-name" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="例: My Server" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldName')}</label>
+                <input type="text" id="add-target-name" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.placeholderTargetName')}" />
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">登録先サーバー管理グループ</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetGroupLabel')}</label>
                 <div class="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-800 bg-slate-50 font-mono">${escapeHtml(selectedGroupId || 'root')}</div>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ホスト</label>
-                <input type="text" id="add-target-host" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400 font-mono" placeholder="例: 192.168.1.1" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetHost')}</label>
+                <input type="text" id="add-target-host" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400 font-mono" placeholder="${t('app.placeholderHost')}" />
               </div>
               <div class="grid grid-cols-2 gap-4">
                 <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">ポート</label>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetPort')}</label>
                   <input type="number" id="add-target-port" min="1" max="65535" value="22" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
                 </div>
                 <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">プロトコル</label>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetProto')}</label>
                   <select id="add-target-protocol" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
                     <option value="ssh">SSH</option>
                     <option value="telnet">Telnet</option>
@@ -1695,20 +1695,20 @@ export function renderApp(container) {
               </div>
               <div id="add-target-rdp-res-wrap" class="grid grid-cols-2 gap-4 hidden">
                 <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">RDP 解像度（幅）</label>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpWidth')}</label>
                   <input type="number" id="add-target-rdp-width" min="640" max="3840" value="1920" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
                 </div>
                 <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">RDP 解像度（高さ）</label>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpHeight')}</label>
                   <input type="number" id="add-target-rdp-height" min="480" max="2160" value="1080" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
                 </div>
               </div>
               <div id="add-target-file-protocols-wrap" class="space-y-3 hidden">
-                <p class="text-xs font-medium text-slate-700">ファイル転送で使用するプロトコル</p>
+                <p class="text-xs font-medium text-slate-700">${t('app.fileProtocolHeading')}</p>
                 <div class="space-y-2 pl-0">
                   <label id="add-target-sftp-label" class="flex items-start gap-2 cursor-pointer hidden">
                     <input type="checkbox" id="add-target-enable-sftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-                    <span class="text-sm text-slate-800">SFTP（SSH で利用可）</span>
+                    <span class="text-sm text-slate-800">${t('app.sftpLabel')}</span>
                   </label>
                   <label class="flex items-start gap-2 cursor-pointer">
                     <input type="checkbox" id="add-target-enable-ftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
@@ -1716,52 +1716,52 @@ export function renderApp(container) {
                   </label>
                   <label class="flex items-start gap-2 cursor-pointer">
                     <input type="checkbox" id="add-target-enable-tftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-                    <span class="text-sm text-slate-800">TFTP（Cisco などからのコンフィグ転送用）</span>
+                    <span class="text-sm text-slate-800">${t('app.tftpLabel')}</span>
                   </label>
                 </div>
               </div>
               <div id="add-target-cred-fields">
                 <div id="add-target-auth-type-wrap" class="space-y-3 hidden">
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">認証方法</label>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.authMethodLabel')}</label>
                   <div class="space-y-2">
                     <label class="flex items-center gap-2 cursor-pointer">
                       <input type="radio" name="add-target-auth-type" value="password" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" checked />
-                      <span class="text-sm text-slate-800">パスワード認証</span>
+                      <span class="text-sm text-slate-800">${t('app.authPassword')}</span>
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
                       <input type="radio" name="add-target-auth-type" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">公開鍵認証（パスフレーズなし）</span>
+                      <span class="text-sm text-slate-800">${t('app.authPublicKey')}</span>
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
                       <input type="radio" name="add-target-auth-type" value="key_passphrase" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">公開鍵認証（パスフレーズあり）</span>
+                      <span class="text-sm text-slate-800">${t('app.authPublicKeyWithPp')}</span>
                     </label>
                   </div>
                 </div>
                 <div class="space-y-5 mt-4">
                   <div id="add-target-username-wrap">
-                    <label id="add-target-username-label" class="block text-xs font-medium text-slate-600 mb-1.5">ユーザー名（任意）</label>
-                    <input type="text" id="add-target-ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="例: root" />
+                    <label id="add-target-username-label" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetUsernameOpt')}</label>
+                    <input type="text" id="add-target-ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.placeholderRoot')}" />
                   </div>
                   <div id="add-target-password-wrap">
-                    <label id="add-target-password-label" class="block text-xs font-medium text-slate-600 mb-1.5">パスワード（任意）</label>
-                    <input type="password" id="add-target-ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="保存すると接続時に利用できます" />
+                    <label id="add-target-password-label" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetPasswordOpt')}</label>
+                    <input type="password" id="add-target-ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.targetPasswordHint')}" />
                   </div>
                   <div id="add-target-key-wrap" class="hidden">
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH 秘密鍵（PEM）</label>
-                    <textarea id="add-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono placeholder-slate-400" placeholder="-----BEGIN ... 形式の秘密鍵を貼り付け"></textarea>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetPrivateKeyLabel')}</label>
+                    <textarea id="add-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono placeholder-slate-400" placeholder="${t('app.targetPrivateKeyPlaceholder')}"></textarea>
                   </div>
                   <div id="add-target-passphrase-wrap" class="hidden">
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ</label>
-                    <input type="password" id="add-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="暗号化された秘密鍵のパスフレーズ" />
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetKeyPassphraseLabel')}</label>
+                    <input type="password" id="add-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.targetKeyPassphrasePlaceholder')}" />
                   </div>
                 </div>
               </div>
               <p id="add-target-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="add-target-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-              <button type="submit" id="add-target-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">追加</button>
+              <button type="button" id="add-target-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.addTargetCancel')}</button>
+              <button type="submit" id="add-target-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.addTargetSubmit')}</button>
             </div>
           </form>
         </div>
@@ -1805,15 +1805,15 @@ export function renderApp(container) {
       addCredFields.style.display = hasCreds ? '' : 'none'
       addAuthTypeWrap.classList.toggle('hidden', proto !== 'ssh')
       addUsernameLabel.textContent =
-        proto === 'telnet' ? 'Telnet ユーザー名（任意）'
-          : proto === 'rdp' ? 'RDP ユーザー名（任意）'
-            : proto === 'ftp' ? 'FTP ユーザー名（任意）'
-              : 'SSH ユーザー名（任意）'
+        proto === 'telnet' ? t('app.telnetUsernameOpt')
+          : proto === 'rdp' ? t('app.rdpUsernameOpt')
+            : proto === 'ftp' ? t('app.ftpUsernameOpt')
+              : t('app.sshUsernameOpt')
       addPasswordLabel.textContent =
-        proto === 'telnet' ? 'Telnet パスワード（任意）'
-          : proto === 'rdp' ? 'RDP パスワード（任意）'
-            : proto === 'ftp' ? 'FTP パスワード（任意）'
-              : 'SSH パスワード（任意）'
+        proto === 'telnet' ? t('app.telnetPasswordOpt')
+          : proto === 'rdp' ? t('app.rdpPasswordOpt')
+            : proto === 'ftp' ? t('app.ftpPasswordOpt')
+              : t('app.sshPasswordOpt')
       addRdpResWrap.classList.toggle('hidden', proto !== 'rdp')
       const canEditFileProtocols = proto === 'ssh' || proto === 'telnet'
       addFileProtocolsWrap.classList.toggle('hidden', !canEditFileProtocols)
@@ -1870,12 +1870,12 @@ export function renderApp(container) {
         }
       }
       if (!name || !host) {
-        errorEl.textContent = '名前とホストを入力してください'
+        errorEl.textContent = t('app.nameHostRequired')
         errorEl.classList.remove('hidden')
         return
       }
       if (!group_id) {
-        errorEl.textContent = '登録先のサーバー管理グループを左ツリーで選択してください'
+        errorEl.textContent = t('app.chooseGroupFirst')
         errorEl.classList.remove('hidden')
         return
       }
@@ -1924,7 +1924,7 @@ export function renderApp(container) {
         groupsCache = null
         await showTreeView('manage')
       } catch (err) {
-        errorEl.textContent = err.message || '追加に失敗しました'
+        errorEl.textContent = err.message || t('app.addUserFailed')
         errorEl.classList.remove('hidden')
       } finally {
         submitBtn.disabled = false
@@ -1939,26 +1939,26 @@ export function renderApp(container) {
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-xl mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">サーバーを編集</h3>
+            <h3 class="font-semibold text-slate-800">${t('app.editTargetTitle')}</h3>
             <button id="edit-target-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="edit-target-form" data-edit-target-id="${escapeHtml(target.id)}">
             <div class="px-6 py-5 space-y-5 max-h-[70vh] overflow-y-auto">
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">名前</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldName')}</label>
                 <input type="text" id="edit-target-name" required value="${escapeHtml(target.name)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">ホスト</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetHost')}</label>
                 <input type="text" id="edit-target-host" required value="${escapeHtml(target.host)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
               </div>
               <div class="grid grid-cols-2 gap-4">
                 <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">ポート</label>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetPort')}</label>
                   <input type="number" id="edit-target-port" min="1" max="65535" value="${target.port || 22}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
                 </div>
                 <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">プロトコル</label>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetProto')}</label>
                   <select id="edit-target-protocol" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
                     <option value="ssh" ${(target.protocol || 'ssh') === 'ssh' ? 'selected' : ''}>SSH</option>
                     <option value="telnet" ${target.protocol === 'telnet' ? 'selected' : ''}>Telnet</option>
@@ -1971,53 +1971,53 @@ export function renderApp(container) {
               </div>
               <div id="edit-target-cred-fields">
                 <div id="edit-target-auth-type-wrap" class="space-y-3 hidden">
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">認証方法</label>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.authMethodLabel')}</label>
                   <div class="space-y-2">
                     <label class="flex items-center gap-2 cursor-pointer">
                       <input type="radio" name="edit-target-auth-type" value="password" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">パスワード認証</span>
+                      <span class="text-sm text-slate-800">${t('app.authPassword')}</span>
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
                       <input type="radio" name="edit-target-auth-type" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">公開鍵認証（パスフレーズなし）</span>
+                      <span class="text-sm text-slate-800">${t('app.authPublicKey')}</span>
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
                       <input type="radio" name="edit-target-auth-type" value="key_passphrase" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">公開鍵認証（パスフレーズあり）</span>
+                      <span class="text-sm text-slate-800">${t('app.authPublicKeyWithPp')}</span>
                     </label>
                   </div>
                 </div>
                 <div class="space-y-5 mt-4">
                   <div id="edit-target-username-wrap">
-                    <label id="edit-target-username-label" class="block text-xs font-medium text-slate-600 mb-1.5">ユーザー名（任意）</label>
-                    <input type="text" id="edit-target-ssh-username" value="${escapeHtml(target.ssh_username || '')}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="例: root" />
+                    <label id="edit-target-username-label" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetUsernameOpt')}</label>
+                    <input type="text" id="edit-target-ssh-username" value="${escapeHtml(target.ssh_username || '')}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.placeholderRoot')}" />
                   </div>
                   <div id="edit-target-password-wrap">
-                    <label id="edit-target-password-label" class="block text-xs font-medium text-slate-600 mb-1.5">パスワード（任意）</label>
-                    <input type="password" id="edit-target-ssh-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="変更する場合のみ入力（空のままなら変更しません）" />
+                    <label id="edit-target-password-label" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetPasswordOpt')}</label>
+                    <input type="password" id="edit-target-ssh-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.editTargetPasswordHint')}" />
                   </div>
                   <div id="edit-target-key-wrap" class="hidden">
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH 秘密鍵（PEM）</label>
-                    <textarea id="edit-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono placeholder-slate-400" placeholder="${target.has_ssh_key ? '設定済み。上書きする場合は新しい鍵を貼り付け' : '-----BEGIN ... 形式の秘密鍵を貼り付け'}" autocomplete="off"></textarea>
-                    ${target.has_ssh_key ? '<label class="mt-1.5 flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" id="edit-target-clear-ssh-key" class="rounded border-slate-300" /> 保存済み秘密鍵をクリア</label>' : ''}
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetPrivateKeyLabel')}</label>
+                    <textarea id="edit-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono placeholder-slate-400" placeholder="${target.has_ssh_key ? t('app.editTargetKeyPlaceholderConfigured') : t('app.targetPrivateKeyPlaceholder')}" autocomplete="off"></textarea>
+                    ${target.has_ssh_key ? `<label class="mt-1.5 flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" id="edit-target-clear-ssh-key" class="rounded border-slate-300" /> ${t('app.editTargetClearKey')}</label>` : ''}
                   </div>
                   <div id="edit-target-passphrase-wrap" class="hidden">
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ</label>
-                    <input type="password" id="edit-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="変更する場合のみ入力" />
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetKeyPassphraseLabel')}</label>
+                    <input type="password" id="edit-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.editTargetKeyPassphraseHint')}" />
                   </div>
                 </div>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">タグ（カンマ区切り）</label>
-                <input type="text" id="edit-target-tags" value="${escapeHtml((target.tags || []).join(', '))}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: prod, network, ops" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldTagsCsv')}</label>
+                <input type="text" id="edit-target-tags" value="${escapeHtml((target.tags || []).join(', '))}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderTagsCsv')}" />
                 <div id="edit-target-tags-picker" class="mt-2"></div>
               </div>
               <div id="edit-target-file-protocols-wrap" class="space-y-3 hidden">
-                <p class="text-xs font-medium text-slate-700">ファイル転送で使用するプロトコル</p>
+                <p class="text-xs font-medium text-slate-700">${t('app.fileProtocolHeading')}</p>
                 <div class="space-y-2 pl-0">
                   <label id="edit-target-sftp-label" class="flex items-start gap-2 cursor-pointer hidden">
                     <input type="checkbox" id="edit-target-enable-sftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-                    <span class="text-sm text-slate-800">SFTP（SSH で利用可）</span>
+                    <span class="text-sm text-slate-800">${t('app.sftpLabel')}</span>
                   </label>
                   <label class="flex items-start gap-2 cursor-pointer">
                     <input type="checkbox" id="edit-target-enable-ftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
@@ -2025,25 +2025,25 @@ export function renderApp(container) {
                   </label>
                   <label class="flex items-start gap-2 cursor-pointer">
                     <input type="checkbox" id="edit-target-enable-tftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-                    <span class="text-sm text-slate-800">TFTP（Cisco などからのコンフィグ転送用）</span>
+                    <span class="text-sm text-slate-800">${t('app.tftpLabel')}</span>
                   </label>
                 </div>
               </div>
               <div id="edit-target-rdp-res-wrap" class="grid grid-cols-2 gap-4 hidden">
                 <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">RDP 解像度（幅）</label>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpWidth')}</label>
                   <input type="number" id="edit-target-rdp-width" min="640" max="3840" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
                 </div>
                 <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">RDP 解像度（高さ）</label>
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpHeight')}</label>
                   <input type="number" id="edit-target-rdp-height" min="480" max="2160" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
                 </div>
               </div>
               <p id="edit-target-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="edit-target-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-              <button type="submit" id="edit-target-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">更新</button>
+              <button type="button" id="edit-target-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
+              <button type="submit" id="edit-target-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.editTargetUpdate')}</button>
             </div>
           </form>
         </div>
@@ -2095,15 +2095,15 @@ export function renderApp(container) {
       editCredFields.style.display = hasCreds ? '' : 'none'
       editAuthTypeWrap.classList.toggle('hidden', proto !== 'ssh')
       editUsernameLabel.textContent =
-        proto === 'telnet' ? 'Telnet ユーザー名（任意）'
-          : proto === 'rdp' ? 'RDP ユーザー名（任意）'
-            : proto === 'ftp' ? 'FTP ユーザー名（任意）'
-              : 'SSH ユーザー名（任意）'
+        proto === 'telnet' ? t('app.telnetUsernameOpt')
+          : proto === 'rdp' ? t('app.rdpUsernameOpt')
+            : proto === 'ftp' ? t('app.ftpUsernameOpt')
+              : t('app.sshUsernameOpt')
       editPasswordLabel.textContent =
-        proto === 'telnet' ? 'Telnet パスワード（任意）'
-          : proto === 'rdp' ? 'RDP パスワード（任意）'
-            : proto === 'ftp' ? 'FTP パスワード（任意）'
-              : 'SSH パスワード（任意）'
+        proto === 'telnet' ? t('app.telnetPasswordOpt')
+          : proto === 'rdp' ? t('app.rdpPasswordOpt')
+            : proto === 'ftp' ? t('app.ftpPasswordOpt')
+              : t('app.sshPasswordOpt')
       editRdpResWrap.classList.toggle('hidden', proto !== 'rdp')
       const canEditFileProtocols = proto === 'ssh' || proto === 'telnet'
       if (editFileProtocolsWrap) {
@@ -2199,7 +2199,7 @@ export function renderApp(container) {
       const prevFtpEnabled = !!target.has_ftp_for_host
       const prevTftpEnabled = !!target.has_tftp_for_host
       if (!name || !host) {
-        errorEl.textContent = '名前とホストを入力してください'
+        errorEl.textContent = t('app.nameHostRequired')
         errorEl.classList.remove('hidden')
         return
       }
@@ -2253,7 +2253,7 @@ export function renderApp(container) {
         groupsCache = null
         await showTreeView('manage')
       } catch (err) {
-        errorEl.textContent = err.message || '更新に失敗しました'
+        errorEl.textContent = err.message || t('app.updateFailed')
         errorEl.classList.remove('hidden')
       } finally {
         submitBtn.disabled = false
@@ -2304,7 +2304,7 @@ export function renderApp(container) {
             <div class="w-3 h-3 rounded-sm bg-slate-200 border border-slate-300 shrink-0 mt-0.5"></div>
             <div class="flex-1 min-w-0 pl-2">
               <div class="text-xs font-medium text-slate-800">root</div>
-              <div class="text-[10px] text-slate-500 leading-snug">${keys.length} グループ</div>
+              <div class="text-[10px] text-slate-500 leading-snug">${t('app.treeGroupCount', { n: keys.length })}</div>
             </div>
           </div>
         </li>
@@ -2331,7 +2331,7 @@ export function renderApp(container) {
               <div class="w-3 h-3 rounded-sm bg-slate-200 border border-slate-300 shrink-0 mt-0.5"></div>
               <div class="flex-1 min-w-0 pl-2">
                 <div class="text-xs font-medium text-slate-800 break-words">${escapeHtml(child.name)}</div>
-                <div class="text-[10px] text-slate-500 leading-snug break-words">${escapeHtml(child.id)}${count ? ` · ${count} 台` : ''}</div>
+                <div class="text-[10px] text-slate-500 leading-snug break-words">${escapeHtml(child.id)}${count ? ` · ${t('app.treeTargetCount', { n: count })}` : ''}</div>
               </div>
             </div>
             ${hasChildren && isExpanded ? renderGroupTree(child, depth + 1) : ''}

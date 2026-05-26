@@ -1,0 +1,60 @@
+name: CI weekly
+
+# Slow / informational jobs that do not need to gate every PR for a
+# single-maintainer project. Run on a weekly schedule and on demand via
+# the GitHub UI ("Run workflow"). Failures here are not blockers; treat
+# them as a backlog of things to look at.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  link-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check Markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # Only fail on broken links inside the repository's Markdown
+          # tree; external links are reported but not fatal so a flaky
+          # third-party site cannot block the weekly run.
+          args: >-
+            --no-progress
+            --offline
+            --include-fragments
+            './**/*.md'
+          fail: true
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Trivy FS scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          exit-code: "1"
+          severity: "HIGH,CRITICAL"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Install gosec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+      - name: Run gosec
+        run: gosec -exclude=G703,G304,G706,G104 ./...
+
+  build-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build Docker image
+        run: docker build -t vantyx:ci .

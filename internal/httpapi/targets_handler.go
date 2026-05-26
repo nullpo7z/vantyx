@@ -289,10 +289,14 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 			writeServiceUnavailableError(w, err)
 			return
 		}
-		if !errors.Is(err, access.ErrTargetExists) {
-			writeInternalError(w, err)
+		if errors.Is(err, access.ErrTargetExists) {
+			continue
+		}
+		if writeAccessValidationError(w, r, err) {
 			return
 		}
+		writeInternalError(w, err)
+		return
 	}
 	if err := a.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID(req.GroupID), access.TargetID(id)); err != nil {
 		writeJSONErrorKey(w, r, "targets.assignFailed", http.StatusInternalServerError)
@@ -381,6 +385,9 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, access.ErrEncryptionKeyRequired) {
 			writeServiceUnavailableError(w, err)
+			return
+		}
+		if writeAccessValidationError(w, r, err) {
 			return
 		}
 		writeInternalError(w, err)
@@ -499,14 +506,16 @@ func (a *App) handleSetTargetTags(w http.ResponseWriter, r *http.Request) {
 		req.Tags = []string{}
 	}
 	if err := a.TargetStore.SetTargetTags(ctx, access.TargetID(targetID), req.Tags); err != nil {
-		if errors.Is(err, access.ErrTargetNotFound) {
+		switch {
+		case errors.Is(err, access.ErrTargetNotFound):
 			writeJSONErrorKey(w, r, "common.targetNotFound", http.StatusNotFound)
-			return
+		case errors.Is(err, access.ErrTagLength):
+			writeJSONErrorKey(w, r, "tags.lengthInvalid", http.StatusBadRequest)
+		case errors.Is(err, access.ErrTagChars):
+			writeJSONErrorKey(w, r, "tags.charsInvalid", http.StatusBadRequest)
+		default:
+			writeInternalError(w, err)
 		}
-		// Per-tag validation errors come from the access package;
-		// see handleSetGroupTags for the rationale of returning the
-		// raw message untranslated.
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

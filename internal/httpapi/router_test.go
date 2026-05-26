@@ -3968,6 +3968,15 @@ func TestApp_ErrorMessage_LocalizedHandlers(t *testing.T) {
 		t.Fatalf("SessionStore.Create: %v", err)
 	}
 
+	// Pre-create resources needed by the validation-error subtests.
+	ctx := context.Background()
+	if _, err := app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1"); err != nil {
+		t.Fatalf("Create g1: %v", err)
+	}
+	if err := app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1")); err != nil {
+		t.Fatalf("AddUserToGroup: %v", err)
+	}
+
 	cases := []struct {
 		name     string
 		method   string
@@ -4095,6 +4104,30 @@ func TestApp_ErrorMessage_LocalizedHandlers(t *testing.T) {
 			body:     `{"current_password":"admin","new_password":"Abcdefg1"}`,
 			wantCode: http.StatusBadRequest,
 			wantSub:  "記号",
+		},
+		{
+			name:     "tags: groups invalid tag chars",
+			method:   http.MethodPut,
+			path:     "/api/groups/g1/tags",
+			body:     `{"tags":["bad tag!"]}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "タグ",
+		},
+		{
+			name:     "users: createUser empty username",
+			method:   http.MethodPost,
+			path:     "/api/users",
+			body:     `{"id":"u1","username":"","password":"Abcdef1!"}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "ユーザー名",
+		},
+		{
+			name:     "users: tag length invalid (empty)",
+			method:   http.MethodPut,
+			path:     "/api/users/admin/tags",
+			body:     `{"tags":[""]}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "タグ",
 		},
 	}
 	for _, tc := range cases {

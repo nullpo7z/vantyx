@@ -25,7 +25,7 @@ func NewSQLiteUserStore(db *sql.DB) *SQLiteUserStore {
 // CreateUser inserts a new user with hashed password and role.
 func (s *SQLiteUserStore) CreateUser(id, username, plainPassword, role string) (*User, error) {
 	if id == "" || username == "" {
-		return nil, errors.New("id and username must not be empty")
+		return nil, ErrIDOrUsernameEmpty
 	}
 	if role == "" {
 		role = RoleUser
@@ -178,11 +178,11 @@ const maxUserTagLen = 64
 
 func validateUserTag(tag string) error {
 	if tag == "" || len(tag) > maxUserTagLen {
-		return errors.New("tag must be 1–64 characters")
+		return ErrTagLength
 	}
 	for _, r := range tag {
 		if r != '-' && r != '_' && !unicode.IsLetter(r) && !unicode.IsNumber(r) {
-			return errors.New("tag may only contain letters, numbers, hyphen, underscore")
+			return ErrTagChars
 		}
 	}
 	return nil

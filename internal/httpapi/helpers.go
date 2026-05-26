@@ -3,11 +3,13 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/i18n"
 	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 )
@@ -81,6 +83,49 @@ func writeProxyError(w http.ResponseWriter, r *http.Request, err error, code int
 		return
 	}
 	writeJSONError(w, proxyerrors.BridgeErrorMessage(err), code)
+}
+
+// writeAccessValidationError responds with a localized 400 when err is
+// one of the [access.Err*] validation sentinels. The boolean reports
+// whether the error matched: callers should fall back to
+// [writeInternalError] when it returns false so DB / encryption / I/O
+// failures are not surfaced verbatim.
+func writeAccessValidationError(w http.ResponseWriter, r *http.Request, err error) bool {
+	switch {
+	case errors.Is(err, access.ErrGroupIDEmpty):
+		writeJSONErrorKey(w, r, "validation.groupIDEmpty", http.StatusBadRequest)
+	case errors.Is(err, access.ErrGroupIDTooLong):
+		writeJSONErrorKey(w, r, "validation.groupIDTooLong", http.StatusBadRequest)
+	case errors.Is(err, access.ErrGroupIDInvalid):
+		writeJSONErrorKey(w, r, "validation.groupIDInvalid", http.StatusBadRequest)
+	case errors.Is(err, access.ErrTargetIDEmpty):
+		writeJSONErrorKey(w, r, "validation.targetIDEmpty", http.StatusBadRequest)
+	case errors.Is(err, access.ErrTargetIDTooLong):
+		writeJSONErrorKey(w, r, "validation.targetIDTooLong", http.StatusBadRequest)
+	case errors.Is(err, access.ErrTargetIDInvalid):
+		writeJSONErrorKey(w, r, "validation.targetIDInvalid", http.StatusBadRequest)
+	case errors.Is(err, access.ErrNameEmpty):
+		writeJSONErrorKey(w, r, "validation.nameEmpty", http.StatusBadRequest)
+	case errors.Is(err, access.ErrNameTooLong):
+		writeJSONErrorKey(w, r, "validation.nameTooLong", http.StatusBadRequest)
+	case errors.Is(err, access.ErrNameInvalid):
+		writeJSONErrorKey(w, r, "validation.nameInvalid", http.StatusBadRequest)
+	case errors.Is(err, access.ErrHostEmpty):
+		writeJSONErrorKey(w, r, "validation.hostEmpty", http.StatusBadRequest)
+	case errors.Is(err, access.ErrHostTooLong):
+		writeJSONErrorKey(w, r, "validation.hostTooLong", http.StatusBadRequest)
+	case errors.Is(err, access.ErrHostInvalid):
+		writeJSONErrorKey(w, r, "validation.hostInvalid", http.StatusBadRequest)
+	case errors.Is(err, access.ErrProtocolInvalid):
+		writeJSONErrorKey(w, r, "targets.protocolInvalid", http.StatusBadRequest)
+	case errors.Is(err, access.ErrTagLength):
+		writeJSONErrorKey(w, r, "tags.lengthInvalid", http.StatusBadRequest)
+	case errors.Is(err, access.ErrTagChars):
+		writeJSONErrorKey(w, r, "tags.charsInvalid", http.StatusBadRequest)
+	default:
+		return false
+	}
+	return true
 }
 
 // localizedBridgeMessage returns the locale-appropriate user-facing

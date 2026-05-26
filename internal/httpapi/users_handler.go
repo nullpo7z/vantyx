@@ -96,11 +96,26 @@ func (a *App) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := a.UserStore.CreateUser(req.ID, req.Username, req.Password, req.Role)
 	if err != nil {
-		if errors.Is(err, auth.ErrUserExists) {
+		switch {
+		case errors.Is(err, auth.ErrUserExists):
 			writeJSONErrorKey(w, r, "users.alreadyExists", http.StatusConflict)
-			return
+		case errors.Is(err, auth.ErrIDOrUsernameEmpty):
+			writeJSONErrorKey(w, r, "validation.idUsernameEmpty", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrEmptyPassword):
+			writeJSONErrorKey(w, r, "auth.passwordEmpty", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordTooShort):
+			writeJSONErrorKey(w, r, "auth.passwordTooShort", http.StatusBadRequest, "min", auth.MinPasswordLength)
+		case errors.Is(err, auth.ErrPasswordNoUpper):
+			writeJSONErrorKey(w, r, "auth.passwordNoUpper", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordNoLower):
+			writeJSONErrorKey(w, r, "auth.passwordNoLower", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordNoDigit):
+			writeJSONErrorKey(w, r, "auth.passwordNoDigit", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordNoSpecial):
+			writeJSONErrorKey(w, r, "auth.passwordNoSpecial", http.StatusBadRequest)
+		default:
+			writeInternalError(w, err)
 		}
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	role := u.Role
@@ -157,11 +172,16 @@ func (a *App) handleSetUserTags(w http.ResponseWriter, r *http.Request) {
 		req.Tags = []string{}
 	}
 	if err := a.UserStore.SetUserTags(userID, req.Tags); err != nil {
-		if errors.Is(err, auth.ErrUserNotFound) {
+		switch {
+		case errors.Is(err, auth.ErrUserNotFound):
 			writeJSONErrorKey(w, r, "users.userNotFound", http.StatusNotFound)
-			return
+		case errors.Is(err, auth.ErrTagLength):
+			writeJSONErrorKey(w, r, "tags.lengthInvalid", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrTagChars):
+			writeJSONErrorKey(w, r, "tags.charsInvalid", http.StatusBadRequest)
+		default:
+			writeInternalError(w, err)
 		}
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

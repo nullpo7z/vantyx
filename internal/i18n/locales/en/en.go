@@ -140,6 +140,25 @@ var Messages = map[string]string{
 	"transfers.invalidDirection":      "direction must be upload or download",
 	"transfers.invalidBackend":        "backend must be remote or tftp_server",
 
+	// Validation (access / auth identifier and field constraints).
+	"validation.groupIDEmpty":    "group id must not be empty",
+	"validation.groupIDTooLong":  "group id too long",
+	"validation.groupIDInvalid":  "group id contains invalid characters",
+	"validation.targetIDEmpty":   "target id must not be empty",
+	"validation.targetIDTooLong": "target id too long",
+	"validation.targetIDInvalid": "target id contains invalid characters",
+	"validation.nameEmpty":       "name must not be empty",
+	"validation.nameTooLong":     "name too long",
+	"validation.nameInvalid":     "name contains invalid characters",
+	"validation.hostEmpty":       "host must not be empty",
+	"validation.hostTooLong":     "host too long",
+	"validation.hostInvalid":     "host must be a valid hostname or IP address",
+	"validation.idUsernameEmpty": "id and username must not be empty",
+
+	// Tag validation (group / target / user tags share these keys).
+	"tags.lengthInvalid": "tag must be 1–64 characters",
+	"tags.charsInvalid":  "tag may only contain letters, numbers, hyphen, underscore",
+
 	// Proxy / bridge dial failures (see internal/proxyerrors).
 	"proxy.tcpTimeout":         "TCP connection to {proto} timed out. Check that the service is enabled, firewall/ACL/port settings, and network path from Vantyx to the target.",
 	"proxy.connectionRefused":  "Connection to {proto} was refused. Check that the service is running and the port number is correct.",

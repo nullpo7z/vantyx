@@ -132,6 +132,25 @@ var Messages = map[string]string{
 	"transfers.invalidDirection":      "direction は upload または download である必要があります",
 	"transfers.invalidBackend":        "backend は remote または tftp_server である必要があります",
 
+	// Validation (access / auth identifier and field constraints).
+	"validation.groupIDEmpty":    "group_id は必須です",
+	"validation.groupIDTooLong":  "group_id が長すぎます",
+	"validation.groupIDInvalid":  "group_id に使用できない文字が含まれています",
+	"validation.targetIDEmpty":   "target_id は必須です",
+	"validation.targetIDTooLong": "target_id が長すぎます",
+	"validation.targetIDInvalid": "target_id に使用できない文字が含まれています",
+	"validation.nameEmpty":       "name は必須です",
+	"validation.nameTooLong":     "name が長すぎます",
+	"validation.nameInvalid":     "name に使用できない文字が含まれています",
+	"validation.hostEmpty":       "host は必須です",
+	"validation.hostTooLong":     "host が長すぎます",
+	"validation.hostInvalid":     "host は有効なホスト名または IP アドレスである必要があります",
+	"validation.idUsernameEmpty": "id と username は必須です",
+
+	// Tag validation (group / target / user tags share these keys).
+	"tags.lengthInvalid": "タグは 1〜64 文字で入力してください",
+	"tags.charsInvalid":  "タグには英数字、ハイフン、アンダースコアのみ使用できます",
+
 	// Proxy / bridge dial failures (see internal/proxyerrors).
 	"proxy.tcpTimeout":         "{proto} への TCP 接続がタイムアウトしました。サービスが有効か、ファイアウォール/ACL/ポート設定、および Vantyx からターゲットへのネットワーク経路を確認してください。",
 	"proxy.connectionRefused":  "{proto} への接続が拒否されました。サービスが起動しているかとポート番号を確認してください。",

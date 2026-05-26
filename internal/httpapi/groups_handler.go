@@ -154,10 +154,14 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			break
 		}
-		if !errors.Is(err, access.ErrGroupExists) {
-			writeInternalError(w, err)
+		if errors.Is(err, access.ErrGroupExists) {
+			continue
+		}
+		if writeAccessValidationError(w, r, err) {
 			return
 		}
+		writeInternalError(w, err)
+		return
 	}
 	if err := a.AccessGroupStore.AddUserToGroup(ctx, access.UserID(userID), access.GroupID(id)); err != nil {
 		writeInternalError(w, err)
@@ -319,15 +323,16 @@ func (a *App) handleSetGroupTags(w http.ResponseWriter, r *http.Request) {
 		req.Tags = []string{}
 	}
 	if err := a.AccessGroupStore.SetGroupTags(ctx, access.GroupID(groupID), req.Tags); err != nil {
-		if errors.Is(err, access.ErrGroupNotFound) {
+		switch {
+		case errors.Is(err, access.ErrGroupNotFound):
 			writeJSONErrorKey(w, r, "groups.notFound", http.StatusNotFound)
-			return
+		case errors.Is(err, access.ErrTagLength):
+			writeJSONErrorKey(w, r, "tags.lengthInvalid", http.StatusBadRequest)
+		case errors.Is(err, access.ErrTagChars):
+			writeJSONErrorKey(w, r, "tags.charsInvalid", http.StatusBadRequest)
+		default:
+			writeInternalError(w, err)
 		}
-		// Keep raw error.Error() here: validation messages from the
-		// store layer (invalid tag character / too many tags) are
-		// already human-readable and dynamic; localizing them belongs
-		// to the access package, not this HTTP wrapper.
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

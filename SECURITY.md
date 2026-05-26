@@ -14,14 +14,12 @@ receives security fixes. Older `0.y` versions are not maintained.
 
 ## Reporting a vulnerability
 
-**Please do not open a public GitHub issue for security problems.** Use one
-of the private channels below so we can investigate and ship a fix before
+**Please do not open a public GitHub issue for security problems.** Please
+use the private channel below so we can investigate and ship a fix before
 public disclosure.
 
-1. **Preferred — GitHub private advisory:**
-   <https://github.com/nullpo7z/vantyx/security/advisories/new>
-2. **Fallback — email** the maintainers listed in
-   [AUTHORS.md](AUTHORS.md).
+- **GitHub private advisory:**
+  <https://github.com/nullpo7z/vantyx/security/advisories/new>
 
 When reporting, please include:
 

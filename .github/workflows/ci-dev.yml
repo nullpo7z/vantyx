@@ -17,18 +17,22 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
-      - name: Install golangci-lint
-        run: |
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-      - name: Run golangci-lint
-        run: |
-          golangci-lint run --config=./configs/golangci.yml --issues-exit-code=1
+          cache: true
       - name: Go fmt check
         run: |
           if [ -n "$(gofmt -l .)" ]; then
             echo "Go files are not formatted. Run gofmt."
             exit 1
           fi
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          # Build the linter with the runner's Go toolchain so it
+          # matches the language version targeted by go.mod (the
+          # prebuilt binary lags upstream Go releases).
+          install-mode: goinstall
+          args: --config=./configs/golangci.yml --issues-exit-code=1
 
   lint-fe:
     runs-on: ubuntu-latest
@@ -37,6 +41,8 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Install dependencies
         if: hashFiles('web/package-lock.json') != ''
         run: |
@@ -58,23 +64,6 @@ jobs:
           cd web
           npx tsc --noEmit
 
-  link-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Check Markdown links
-        uses: lycheeverse/lychee-action@v2
-        with:
-          # Only fail on broken links inside the repository's Markdown
-          # tree; external links are reported but not fatal so a flaky
-          # third-party site cannot block CI.
-          args: >-
-            --no-progress
-            --offline
-            --include-fragments
-            './**/*.md'
-          fail: true
-
   test-go:
     runs-on: ubuntu-latest
     steps:
@@ -82,6 +71,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
+          cache: true
       - name: Run tests
         run: |
           go test ./...
@@ -92,32 +82,3 @@ jobs:
         run: |
           chmod +x scripts/check_coverage.sh
           ./scripts/check_coverage.sh coverage.out 78
-
-  security-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Trivy FS scan
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          exit-code: '1'
-          severity: 'HIGH,CRITICAL'
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.26"
-      - name: Install gosec
-        run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-          echo "$HOME/go/bin" >> $GITHUB_PATH
-      - name: Run gosec
-        run: gosec -exclude=G703,G304,G706,G104 ./...
-
-  build-docker:
-    runs-on: ubuntu-latest
-    needs: [lint-go, lint-fe, test-go, security-scan]
-    steps:
-      - uses: actions/checkout@v6
-      - name: Build Docker image
-        run: docker build -t vantyx:ci .

@@ -17,9 +17,8 @@ Vantyx は 1.0 未満の開発段階にあります。セキュリティ修正�
 **セキュリティ問題は GitHub の公開 Issue では報告しないでください。**
 公開前に調査・修正を進められるよう、下記の非公開チャネルを使用してください。
 
-1. **推奨 — GitHub Private Advisory:**
-   <https://github.com/nullpo7z/vantyx/security/advisories/new>
-2. **代替 — メール:** [AUTHORS.md](AUTHORS.md) に記載のメンテナ宛て。
+- **GitHub Private Advisory:**
+  <https://github.com/nullpo7z/vantyx/security/advisories/new>
 
 報告時には以下を含めてください：
 

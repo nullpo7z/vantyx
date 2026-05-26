@@ -8,12 +8,22 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
 
 ## [Unreleased]
 
+### Changed
+
+- CI: split the workflow so per-PR runs only execute the fast gates
+  (`lint-go`, `lint-fe`, `test-go`). The slower `link-check`,
+  `security-scan` (Trivy + gosec), and `build-docker` jobs moved to a
+  new `ci-weekly.yml` that runs on a weekly schedule and on
+  `workflow_dispatch`. `lint-go` now uses
+  `golangci/golangci-lint-action` so the linter binary is cached
+  between runs instead of being `go install`-ed every time. `setup-go`
+  / `setup-node` opt in to module / npm caching.
+
 ### Added
 
 - OSS scaffolding: `LICENSE` (Apache-2.0), `NOTICE`, `CONTRIBUTING.md`
-  (English + Japanese), `CODE_OF_CONDUCT.md`, `SECURITY.md`, `AUTHORS.md`,
-  `.github/` issue / pull request templates, CODEOWNERS, dependabot, and
-  `.editorconfig`.
+  (English + Japanese), `SECURITY.md`, `.github/` bug-report issue template,
+  dependabot, and `.editorconfig`.
 - Bilingual top-level documentation (`README.md` + `README.ja.md`,
   `docs/ARCHITECTURE.md` + `docs/ARCHITECTURE.ja.md`,
   `docs/SECURITY-ASVS-L2.md` + `docs/SECURITY-ASVS-L2.ja.md`).

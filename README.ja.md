@@ -123,10 +123,9 @@ GitHub Private Security Advisory フォームを使用してください。
 
 ## コントリビューション
 
-バグ報告・機能リクエスト・コード・ドキュメント・翻訳を歓迎します。
-[CONTRIBUTING.ja.md](CONTRIBUTING.ja.md) からお読みいただき、
-[行動規範](CODE_OF_CONDUCT.ja.md) を遵守してください。変更履歴は
-[CHANGELOG.md](CHANGELOG.md) で追跡します。
+バグ報告・コード・ドキュメント・翻訳を歓迎します。詳しくは
+[CONTRIBUTING.ja.md](CONTRIBUTING.ja.md) を参照してください。変更履歴は
+[CHANGELOG.md](CHANGELOG.md) で追跡しています。
 
 ## ライセンス
 

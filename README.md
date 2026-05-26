@@ -125,10 +125,9 @@ rather than opening a public issue.
 
 ## Contributing
 
-We welcome bug reports, feature requests, code, docs, and translations.
-Start with [CONTRIBUTING.md](CONTRIBUTING.md) and abide by our
-[Code of Conduct](CODE_OF_CONDUCT.md). Changes are tracked in
-[CHANGELOG.md](CHANGELOG.md).
+Bug reports, code, docs, and translations are all welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the short rundown; changes are tracked
+in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

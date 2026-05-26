@@ -2,12 +2,15 @@
 package sshd
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -878,4 +881,174 @@ func TestServer_Resume_CtrlBracket_Detaches(t *testing.T) {
 		t.Fatalf("expected session to remain after resume detach, got %v", mgr.ActiveIDs())
 	}
 	mgr.Stop(id)
+}
+
+// noopRecordingStore is a RecordingStore for tests that does not write
+// to any DB. It satisfies the metadata-only contract the CLI needs to
+// create cast files.
+type noopRecordingStore struct{}
+
+func (noopRecordingStore) InsertRecording(_ context.Context, _, _, _, _, _, _, _, _, _ string) error {
+	return nil
+}
+
+func (noopRecordingStore) UpdateRecordingEnded(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func setupServerWithTCPTelnetRecording(t *testing.T, port uint16, recDir string) (*Server, string, ssh.Signer) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "sshd_telnet_rec.db")
+	db, err := dbsqlite.Open(dbsqlite.Config{Path: dbPath})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := dbsqlite.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	userStore := auth.NewSQLiteUserStore(db)
+	_, _ = userStore.CreateUser("admin", "admin", testAdminPassword, auth.RoleAdmin)
+	groupStore := access.NewSQLiteAccessGroupStore(db, nil)
+	targetStore := access.NewSQLiteTargetStore(db, nil, nil)
+	ctx := context.Background()
+	_, _ = groupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = groupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = targetStore.CreateWithPath(ctx, access.TargetID("t1"), "telnet-echo", "127.0.0.1", port, access.ProtocolTelnet, access.GroupID("g1"), "g1", "user", "", "", "", false, false, false)
+	_ = groupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+	mgr := session.NewManager()
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	signer, _ := ssh.NewSignerFromKey(key)
+	srv, err := NewServer(Config{
+		UserStore: userStore, TargetStore: targetStore, GroupStore: groupStore,
+		SessionManager: mgr, HostKey: signer,
+		RecordingsDir: recDir, RecordingStore: noopRecordingStore{},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	go func() { _ = srv.Serve(ln) }()
+	return srv, ln.Addr().String(), signer
+}
+
+// TestServer_Connect_WindowChangeBeforeConnect_AppliesNewSize regresses
+// the bug where the CLI session frame was built from the original
+// pty-req row count instead of the latest window-change. The asciinema
+// header records the frame's effective size, so we use it to assert
+// the resize was honored when connect ran.
+func TestServer_Connect_WindowChangeBeforeConnect_AppliesNewSize(t *testing.T) {
+	echo := mock.NewTelnetEchoServer()
+	if err := echo.Start(); err != nil {
+		t.Fatalf("echo start: %v", err)
+	}
+	defer echo.Close()
+	port := echo.Port()
+	if port == 0 {
+		t.Fatal("echo port is 0")
+	}
+	recDir := t.TempDir()
+	srv, addr, signer := setupServerWithTCPTelnetRecording(t, port, recDir)
+
+	config := &ssh.ClientConfig{
+		User:            "admin",
+		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
+		Timeout:         5 * time.Second,
+	}
+	client, err := ssh.Dial("tcp", addr, config)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer client.Close()
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sess.Close()
+	// Initial pty-req with the typical small default. RequestPty's
+	// signature is (term, rows, cols, modes), so this is 80 cols × 24
+	// rows — matching what most SSH clients send by default.
+	if err := sess.RequestPty("xterm", 24, 80, nil); err != nil {
+		t.Fatalf("RequestPty: %v", err)
+	}
+	stdin, _ := sess.StdinPipe()
+	stdout, _ := sess.StdoutPipe()
+	go func() { _, _ = io.Copy(io.Discard, stdout) }()
+	if err := sess.Shell(); err != nil {
+		t.Fatalf("Shell: %v", err)
+	}
+	// Let runMenu start before we resize so the resize lands in the
+	// loop's select and updates screenRows / screenCols.
+	time.Sleep(150 * time.Millisecond)
+	if err := sess.WindowChange(40, 132); err != nil {
+		t.Fatalf("WindowChange: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	// connect 1 1 → session name → description → wait for echo → detach with Ctrl+]
+	_, _ = stdin.Write([]byte("connect 1 1\r\n"))
+	time.Sleep(200 * time.Millisecond)
+	_, _ = stdin.Write([]byte("\r\n"))
+	time.Sleep(200 * time.Millisecond)
+	_, _ = stdin.Write([]byte("\r\n"))
+	time.Sleep(400 * time.Millisecond)
+	_, _ = stdin.Write([]byte{0x1d})
+	time.Sleep(200 * time.Millisecond)
+	_, _ = stdin.Write([]byte("exit\r\n"))
+	_ = stdin.Close()
+	_ = sess.Wait()
+
+	mgr, ok := srv.sessionManager.(*session.Manager)
+	if !ok {
+		t.Fatal("session manager is not *session.Manager")
+	}
+	// Clean up any background sessions to release resources.
+	defer func() {
+		for _, id := range mgr.ActiveIDs() {
+			mgr.Stop(id)
+		}
+	}()
+
+	entries, err := os.ReadDir(recDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("no cast file produced")
+	}
+	var castPath string
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) == ".cast" {
+			castPath = filepath.Join(recDir, e.Name())
+			break
+		}
+	}
+	if castPath == "" {
+		t.Fatalf("no .cast file in %s, entries=%v", recDir, entries)
+	}
+	f, err := os.Open(castPath)
+	if err != nil {
+		t.Fatalf("open cast: %v", err)
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	if !scanner.Scan() {
+		t.Fatal("cast file is empty (no header)")
+	}
+	var header struct {
+		Version int `json:"version"`
+		Width   int `json:"width"`
+		Height  int `json:"height"`
+	}
+	if err := json.Unmarshal(scanner.Bytes(), &header); err != nil {
+		t.Fatalf("parse header: %v (line=%q)", err, scanner.Text())
+	}
+	if header.Width != 132 {
+		t.Errorf("recording width = %d, want 132 (post-resize cols)", header.Width)
+	}
+	// Effective session rows = 40 - headerLines (4 for the connect bar:
+	// Connected to / detach hint / end-session hint / separator).
+	wantRows := 40 - 4
+	if header.Height != wantRows {
+		t.Errorf("recording height = %d, want %d (post-resize rows minus header)", header.Height, wantRows)
+	}
 }

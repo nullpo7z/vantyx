@@ -85,9 +85,16 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 	var lastList []cliGroupEntry
 	// currentGroupIndex is 1-based; 0 means "root" (no group selected).
 	var currentGroupIndex int
+	// screenCols / screenRows track the latest known terminal size.
+	// Both are updated from window-change events so target sessions
+	// started later use the current size — not a stale pty-req snapshot.
 	screenCols := ptyCols
 	if screenCols < 40 {
 		screenCols = 80
+	}
+	screenRows := ptyRows
+	if screenRows < 1 {
+		screenRows = 24
 	}
 	var pendingExtra []string
 	setStatus := func(lines ...string) {
@@ -167,14 +174,34 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 		setStatus(fmt.Sprintf("Error: %v", err))
 	}
 
-	for {
-		select {
-		case sz, ok := <-resizeChan:
-			if ok && sz.Cols > 0 {
-				screenCols = sz.Cols
+	// drainResize consumes every resize event currently waiting in
+	// resizeChan, applying the latest known dimensions to screenCols /
+	// screenRows. We call it at the top of the loop AND right before
+	// connect / resume, because window-change events that arrive while
+	// readLine is blocked on input would otherwise sit unread until the
+	// next iteration — so the just-issued connect would build its frame
+	// with stale dimensions.
+	drainResize := func() {
+		for {
+			select {
+			case sz, ok := <-resizeChan:
+				if !ok {
+					return
+				}
+				if sz.Cols > 0 {
+					screenCols = sz.Cols
+				}
+				if sz.Rows > 0 {
+					screenRows = sz.Rows
+				}
+			default:
+				return
 			}
-		default:
 		}
+	}
+
+	for {
+		drainResize()
 
 		if err := loadLastList(); err != nil {
 			setStatus(fmt.Sprintf("Error: %v", err))
@@ -233,10 +260,12 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			pendingExtra = formatCLIActiveSessionLines(activeSessionsForScope(), cliSessionMgr)
 			continue
 		case "resume":
-			pendingExtra = s.handleResumeCommand(ctx, wr, inputCh, args, activeSessionsForScope(), cliSessionMgr, screenCols, ptyRows, resizeChan)
+			drainResize()
+			pendingExtra = s.handleResumeCommand(ctx, wr, inputCh, args, activeSessionsForScope(), cliSessionMgr, screenCols, screenRows, resizeChan)
 			continue
 		case "connect":
-			pendingExtra = s.handleConnectCommand(wr, inputCh, args, lastList, currentGroupIndex, cliSessionMgr, readLine, prompt, userID, ptyCols, ptyRows, screenCols, resizeChan)
+			drainResize()
+			pendingExtra = s.handleConnectCommand(wr, inputCh, args, lastList, currentGroupIndex, cliSessionMgr, readLine, prompt, userID, screenCols, screenRows, resizeChan)
 			continue
 		default:
 			setStatus(fmt.Sprintf("Unknown command '%s'. Type 'help' for commands.", cmd))
@@ -349,7 +378,11 @@ func newCLILineReader(wr io.Writer, inputCh <-chan byte) func(echo bool, promptF
 
 // handleResumeCommand implements the "resume" menu command. It returns
 // status lines (success / error) intended for the next redraw.
-func (s *Server) handleResumeCommand(ctx context.Context, wr io.Writer, inputCh <-chan byte, args []string, activeSessions []*session.Session, cliSessionMgr *session.Manager, screenCols, ptyRows int, resizeChan <-chan sshproxy.TerminalSize) []string {
+//
+// screenCols and screenRows are the latest known terminal dimensions
+// from runMenu (updated from window-change). prepareCLIFrame uses both
+// so the resumed session honors the user's real terminal size.
+func (s *Server) handleResumeCommand(ctx context.Context, wr io.Writer, inputCh <-chan byte, args []string, activeSessions []*session.Session, cliSessionMgr *session.Manager, screenCols, screenRows int, resizeChan <-chan sshproxy.TerminalSize) []string {
 	var status []string
 	add := func(s string) { status = append(status, s) }
 
@@ -382,7 +415,7 @@ func (s *Server) handleResumeCommand(ctx context.Context, wr io.Writer, inputCh 
 	if targetName == "" {
 		targetName = "(unknown)"
 	}
-	frame, bridgeResize, err := s.prepareCLIFrame(wr, screenCols, ptyRows, targetName, resumeProto, false, resumeStopCh, resizeChan)
+	frame, bridgeResize, err := s.prepareCLIFrame(wr, screenCols, screenRows, targetName, resumeProto, false, resumeStopCh, resizeChan)
 	if err != nil {
 		add(fmt.Sprintf("Error: %v", err))
 		return status
@@ -414,8 +447,13 @@ func (s *Server) handleResumeCommand(ctx context.Context, wr io.Writer, inputCh 
 // credentials, starts the bridge, and returns status lines for the
 // next redraw.
 //
+// screenCols and screenRows are the latest known terminal dimensions
+// from runMenu (updated from window-change). They drive both the
+// session frame (DECSTBM scroll region) and the initial asciinema
+// recording size, so a resize before "connect" is honored.
+//
 //nolint:gocyclo // connect orchestrates session start, recording, and IO.
-func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []string, lastList []cliGroupEntry, currentGroupIndex int, cliSessionMgr *session.Manager, readLine func(bool, string) (string, error), prompt func(string, ...interface{}), userID string, ptyCols, ptyRows, screenCols int, resizeChan <-chan sshproxy.TerminalSize) []string {
+func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []string, lastList []cliGroupEntry, currentGroupIndex int, cliSessionMgr *session.Manager, readLine func(bool, string) (string, error), prompt func(string, ...interface{}), userID string, screenCols, screenRows int, resizeChan <-chan sshproxy.TerminalSize) []string {
 	_ = cliSessionMgr
 	var status []string
 	add := func(s string) { status = append(status, s) }
@@ -495,7 +533,7 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 	}
 
 	connectStopCh := make(chan struct{})
-	frame, bridgeResize, err := s.prepareCLIFrame(wr, screenCols, ptyRows, target.Name, target.Protocol, true, connectStopCh, resizeChan)
+	frame, bridgeResize, err := s.prepareCLIFrame(wr, screenCols, screenRows, target.Name, target.Protocol, true, connectStopCh, resizeChan)
 	if err != nil {
 		add(fmt.Sprintf("Error: %v", err))
 		return status
@@ -536,14 +574,11 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 			if createErr != nil {
 				slog.Warn("CLI recording create failed", "session_id", sessionID, "path", castPath, "error", createErr)
 			} else {
-				w, h := ptyCols, ptyRows
-				if w <= 0 {
-					w = 80
-				}
-				if h <= 0 {
-					h = 24
-				}
-				asc := recording.NewAsciinemaWriter(f, w, h)
+				// Record at the bridge's actual terminal size so the
+				// playback honors the user's real window. sessionCols /
+				// sessionRows come from the frame, which already accounts
+				// for the header lines and the latest window-change.
+				asc := recording.NewAsciinemaWriter(f, sessionCols, sessionRows)
 				tee = asc
 				stdinRecorder = asc
 				startedAt := time.Now().UTC().Format("2006-01-02 15:04:05")

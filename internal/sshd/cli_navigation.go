@@ -23,8 +23,13 @@ func isCLITerminalProtocol(p access.Protocol) bool {
 // prepareCLIFrame draws the session status bar and starts resize
 // forwarding for a target session. The caller is responsible for
 // calling Leave on the returned frame when the bridge ends.
-func (s *Server) prepareCLIFrame(wr io.Writer, screenCols, ptyRows int, targetName string, protocol access.Protocol, showEndSessionHint bool, stopCh <-chan struct{}, resizeChan <-chan sshproxy.TerminalSize) (*cliSessionFrame, chan sshproxy.TerminalSize, error) {
-	frame := newCLISessionFrame(wr, screenCols, ptyRows)
+//
+// screenCols and screenRows are the user's latest known terminal
+// dimensions. Passing stale values (e.g. the initial pty-req snapshot
+// after the user has resized) would make the frame's DECSTBM scroll
+// region shrink to a fixed sub-rectangle of the actual terminal.
+func (s *Server) prepareCLIFrame(wr io.Writer, screenCols, screenRows int, targetName string, protocol access.Protocol, showEndSessionHint bool, stopCh <-chan struct{}, resizeChan <-chan sshproxy.TerminalSize) (*cliSessionFrame, chan sshproxy.TerminalSize, error) {
+	frame := newCLISessionFrame(wr, screenCols, screenRows)
 	bar := cliSessionBarState{
 		TargetName:         targetName,
 		Protocol:           protocol,

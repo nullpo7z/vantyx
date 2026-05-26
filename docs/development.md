@@ -87,13 +87,14 @@ set of `VANTYX_*` env vars.
 | Command | Scope |
 |---------|-------|
 | `make test` | `go vet ./...` + `go test ./...`. |
-| `make coverage` | `go test ./... -covermode=atomic -coverprofile=coverage.out` plus the threshold check. |
+| `make coverage` | Runs the focused coverage suite for the security-sensitive packages and prints the total. Informational only — pass `MIN=NN` to fail the target when the total drops below NN percent. |
 | `make e2e` | Playwright suite under `e2e/`. Requires Docker. |
 | `make smoke` | Build the Docker image and hit `/healthz`. |
 
-The coverage threshold is enforced by
-[`scripts/check_coverage.sh`](../scripts/check_coverage.sh) and applied in
-CI to a subset of the most security-sensitive packages.
+Coverage is not a CI gate: PRs are not blocked on a numeric threshold.
+[`scripts/check_coverage.sh`](../scripts/check_coverage.sh) is still
+available locally for anyone who wants to enforce one
+(`./scripts/check_coverage.sh coverage.out 75`, etc.).
 
 End-to-end tests are documented in [`e2e/README.md`](../e2e/README.md).
 

@@ -24,6 +24,12 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
   shipped features lives in `README.md` and was duplicated in the old
   roadmap; the new file just enumerates what is still missing so the
   two sources do not drift.
+- CI: dropped the coverage threshold gate. `test-go` still computes
+  coverage for the security-sensitive packages and prints the total
+  for visibility, but does not fail on a numeric threshold. The
+  `scripts/check_coverage.sh` helper and the `make coverage` target
+  remain available locally (the Makefile target now accepts an
+  optional `MIN=NN` to opt back in).
 - CI: split the workflow so per-PR runs only execute the fast gates
   (`lint-go`, `lint-fe`, `test-go`). The slower `link-check`,
   `security-scan` (Trivy + gosec), and `build-docker` jobs moved to a

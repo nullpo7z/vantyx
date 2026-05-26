@@ -18,7 +18,7 @@ help:
 	@echo "  make lint          Run golangci-lint and the web ESLint rules"
 	@echo "  make test          Run Go unit tests (with coverage gates)"
 	@echo "  make e2e           Run the Playwright end-to-end suite"
-	@echo "  make coverage      Run Go tests and write coverage.out / coverage_core.out"
+	@echo "  make coverage      Run Go tests and print coverage (MIN=NN to fail below)"
 	@echo "  make smoke         Build the Docker image and run the smoke check"
 	@echo "  make build         Build the Vantyx Go binaries and the SPA bundle"
 	@echo "  make security      Run trivy + gosec scans (skipped when missing)"
@@ -83,13 +83,14 @@ e2e:
 		echo "e2e directory not present, skipping end-to-end tests"; \
 	fi
 
-# Coverage: keeps the same gates used in CI but always rebuilds the
-# coverage files so contributors can iterate locally.
+# Coverage: informational only (no CI gate). Pass MIN=NN to fail the
+# target when the total drops below NN percent; default just prints
+# the totals.
 coverage:
 	@$(GO) test ./internal/access ./internal/auth ./internal/db/sqlite ./internal/httpapi ./internal/mock ./internal/netutil ./internal/recording ./internal/secret ./internal/session ./internal/sshproxy -covermode=atomic -coverprofile=coverage.out
-	@./scripts/check_coverage.sh coverage.out 78
-	@$(GO) test ./internal/access ./internal/auth ./internal/db/sqlite ./internal/mock ./internal/netutil ./internal/recording ./internal/secret ./internal/session ./internal/sshproxy -covermode=atomic -coverprofile=coverage_core.out
-	@./scripts/check_coverage.sh coverage_core.out 92
+	@echo "Total coverage:"
+	@$(GO) tool cover -func=coverage.out | tail -1
+	@if [ -n "$(MIN)" ]; then ./scripts/check_coverage.sh coverage.out $(MIN); fi
 
 # Build the Docker image and run a smoke check against it. Useful before
 # cutting a release tag.

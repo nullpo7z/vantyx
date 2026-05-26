@@ -22,12 +22,21 @@ type loginResponse struct {
 	UserID                string `json:"user_id"`
 	Username              string `json:"username"`
 	Role                  string `json:"role"`
+	Locale                string `json:"locale,omitempty"`
 	RequirePasswordChange bool   `json:"require_password_change,omitempty"`
 }
 
 type changePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
+}
+
+type updateLocaleRequest struct {
+	Locale string `json:"locale"`
+}
+
+type localeResponse struct {
+	Locale string `json:"locale"`
 }
 
 type sshKeyResponse struct {
@@ -117,6 +126,7 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		UserID:                u.ID,
 		Username:              u.Username,
 		Role:                  u.Role,
+		Locale:                u.Locale,
 		RequirePasswordChange: requireChange,
 	})
 }
@@ -165,7 +175,47 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 		UserID:   u.ID,
 		Username: u.Username,
 		Role:     u.Role,
+		Locale:   u.Locale,
 	})
+}
+
+// handleUpdateLocale persists the current user's UI locale preference.
+// Pass {"locale":""} to clear the preference (frontend default applies).
+func (a *App) handleUpdateLocale(w http.ResponseWriter, r *http.Request) {
+	userID := strings.TrimSpace(a.currentUserID(r))
+	if userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req updateLocaleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	loc, err := auth.NormalizeUILocale(req.Locale)
+	if err != nil {
+		writeJSONError(w, "unsupported locale", http.StatusBadRequest)
+		return
+	}
+	if err := a.UserStore.UpdateLocale(userID, loc); err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if errors.Is(err, auth.ErrInvalidLocale) {
+			writeJSONError(w, "unsupported locale", http.StatusBadRequest)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	audit("user_locale_update", auditFields{
+		"user_id": userID,
+		"locale":  loc,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(localeResponse{Locale: loc})
 }
 
 // handleChangePassword updates the current user's password.

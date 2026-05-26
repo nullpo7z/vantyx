@@ -65,10 +65,10 @@ func (s *SQLiteUserStore) Authenticate(username, plainPassword string) (*User, e
 
 	var u User
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, username, password_hash, COALESCE(role, 'user')
+		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, '')
 		FROM users
 		WHERE username = ?
-	`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role)
+	`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale)
 	if err == sql.ErrNoRows {
 		return nil, ErrInvalidSecret
 	}
@@ -88,10 +88,10 @@ func (s *SQLiteUserStore) GetByID(id string) (*User, error) {
 
 	var u User
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, username, password_hash, COALESCE(role, 'user')
+		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, '')
 		FROM users
 		WHERE id = ?
-	`, id).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role)
+	`, id).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale)
 	if err == sql.ErrNoRows {
 		return nil, ErrUserNotFound
 	}
@@ -113,7 +113,7 @@ func (s *SQLiteUserStore) ListUsers(limit, offset int) ([]*User, error) {
 	defer cancel()
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, username, password_hash, COALESCE(role, 'user')
+		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, '')
 		FROM users
 		ORDER BY username
 		LIMIT ? OFFSET ?
@@ -126,12 +126,52 @@ func (s *SQLiteUserStore) ListUsers(limit, offset int) ([]*User, error) {
 	var out []*User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale); err != nil {
 			return nil, err
 		}
 		out = append(out, &u)
 	}
 	return out, rows.Err()
+}
+
+// supportedUILocales lists the locale codes the UI currently ships translations for.
+// An empty string ("") means "no preference" and is always accepted.
+var supportedUILocales = map[string]struct{}{
+	"":   {},
+	"en": {},
+	"ja": {},
+}
+
+// NormalizeUILocale returns a canonical, validated locale code or ErrInvalidLocale.
+// Callers receive an empty string when the user clears their preference.
+func NormalizeUILocale(locale string) (string, error) {
+	loc := strings.ToLower(strings.TrimSpace(locale))
+	if _, ok := supportedUILocales[loc]; !ok {
+		return "", ErrInvalidLocale
+	}
+	return loc, nil
+}
+
+// UpdateLocale persists the user's UI locale preference. Pass "" to clear it.
+func (s *SQLiteUserStore) UpdateLocale(userID, locale string) error {
+	if strings.TrimSpace(userID) == "" {
+		return ErrUserNotFound
+	}
+	loc, err := NormalizeUILocale(locale)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET locale = ? WHERE id = ?`, loc, userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return ErrUserNotFound
+	}
+	return nil
 }
 
 const maxUserTagLen = 64
@@ -298,7 +338,7 @@ func (s *SQLiteUserStore) AuthenticateByPublicKey(username string, key ssh.Publi
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var u User
-	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, COALESCE(role, 'user') FROM users WHERE username = ?`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role)
+	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, '') FROM users WHERE username = ?`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale)
 	if err == sql.ErrNoRows {
 		return nil, ErrInvalidSecret
 	}

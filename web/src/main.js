@@ -8,7 +8,7 @@
  */
 
 import { applyStoredTheme } from './theme.js'
-import { applyHtmlLangAttribute, t } from './i18n.js'
+import { applyHtmlLangAttribute, applyServerLocale, registerServerSync, t } from './i18n.js'
 import API from './api.js'
 import { initFileTransferManager } from './file_transfer_manager.js'
 import { renderLogin } from './login.js'
@@ -21,6 +21,26 @@ import { renderRdpPage } from './rdp_page.js'
 
 applyStoredTheme()
 applyHtmlLangAttribute()
+
+// User-driven locale changes (settings page / header switcher) are
+// persisted to the server so the preference follows the user across
+// devices. The handler is best-effort: server failures fall back to
+// the local-only behaviour.
+registerServerSync((locale) => API.updateLocale(locale).catch(() => undefined))
+
+/**
+ * Apply the locale value returned by `/api/login` or `/api/me` if one
+ * is present. Server-supplied locale overrides what was cached in
+ * localStorage from a previous browser, so the user sees the same UI
+ * language they last picked even on a fresh device.
+ *
+ * @param {{locale?: string} | null | undefined} me
+ */
+function syncLocaleFromServer(me) {
+  if (me && typeof me.locale === 'string' && me.locale) {
+    applyServerLocale(me.locale)
+  }
+}
 
 /** Render the shared "you must log in first" screen used by every
  *  full-window page when {@link API.me} returns an unauthorised error.
@@ -42,7 +62,8 @@ const appEl = document.getElementById('app')
 async function init() {
   const bootTransfers = async () => {
     try {
-      await API.me()
+      const me = await API.me()
+      syncLocaleFromServer(me)
       initFileTransferManager()
     } catch {
       /* not logged in */
@@ -53,7 +74,8 @@ async function init() {
   // Standalone full-screen terminal page (opened in a new tab).
   if (window.location.pathname === '/terminal') {
     try {
-      await API.me()
+      const me = await API.me()
+      syncLocaleFromServer(me)
       renderTerminalPage(appEl)
     } catch {
       renderLoginRequired(appEl)
@@ -64,7 +86,8 @@ async function init() {
   // VNC viewer page (noVNC; requires target_id in query).
   if (window.location.pathname === '/vnc') {
     try {
-      await API.me()
+      const me = await API.me()
+      syncLocaleFromServer(me)
       renderVncPage(appEl)
     } catch {
       renderLoginRequired(appEl)
@@ -75,7 +98,8 @@ async function init() {
   // RDP connection page (requires target_id in query).
   if (window.location.pathname === '/rdp') {
     try {
-      await API.me()
+      const me = await API.me()
+      syncLocaleFromServer(me)
       renderRdpPage(appEl)
     } catch {
       renderLoginRequired(appEl)
@@ -86,7 +110,8 @@ async function init() {
   // File manager page (SFTP/FTP; requires target_id in query).
   if (window.location.pathname === '/files') {
     try {
-      await API.me()
+      const me = await API.me()
+      syncLocaleFromServer(me)
       renderFilesPage(appEl)
     } catch {
       renderLoginRequired(appEl)
@@ -97,7 +122,8 @@ async function init() {
   // TFTP console page: top = Vantyx TFTP directory, bottom = SSH terminal.
   if (window.location.pathname === '/tftp-console') {
     try {
-      await API.me()
+      const me = await API.me()
+      syncLocaleFromServer(me)
       renderTFTPConsolePage(appEl)
     } catch {
       renderLoginRequired(appEl)
@@ -106,7 +132,8 @@ async function init() {
   }
 
   try {
-    await API.me()
+    const me = await API.me()
+    syncLocaleFromServer(me)
     renderApp(appEl)
   } catch {
     renderLogin(appEl)

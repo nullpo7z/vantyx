@@ -259,6 +259,7 @@ func (a *App) NewRouter() http.Handler {
 	r.Post("/api/logout", a.handleLogout)
 	r.Get("/api/me", a.handleMe)
 	r.Post("/api/me/password", a.handleChangePassword)
+	r.Put("/api/me/locale", a.handleUpdateLocale)
 	r.Get("/api/me/ssh-keys", a.handleListSSHKeys)
 	r.Post("/api/me/ssh-keys", a.handleAddSSHKey)
 	r.Delete("/api/me/ssh-keys/{key_id}", a.handleDeleteSSHKey)

@@ -40,6 +40,17 @@ export const SUPPORTED_LOCALES = [
 let activeLocale = readStoredLocale()
 
 /**
+ * Optional hook invoked when the user explicitly switches locale.
+ * The host application (main.js) registers a function that PUTs the new
+ * locale to `/api/me/locale` so the preference persists across devices.
+ * Keep this module dependency-free: the hook is registered from
+ * outside, not imported here.
+ *
+ * @type {((locale: string) => void | Promise<void>) | null}
+ */
+let serverSyncHandler = null
+
+/**
  * @returns {string} The locale read from localStorage, or
  *   {@link DEFAULT_LOCALE} when nothing valid is stored.
  */
@@ -65,14 +76,17 @@ export function getLocale() {
 }
 
 /**
- * Switch the active locale, persist it, update `<html lang>`, and emit
- * an `i18nchange` event so listeners can re-render.
+ * Apply a locale change locally: update the active code, persist it to
+ * localStorage (so the FOUC bootstrap can pick it up next reload),
+ * reflect it on `<html lang>`, and emit an `i18nchange` event.
  *
- * @param {string} code - Locale code (e.g. `'en'`, `'ja'`).
- * @returns {string} The locale that ended up active (unchanged when the
- *   requested code is unknown).
+ * Returns the locale that ended up active (unchanged when `code` is
+ * unknown).
+ *
+ * @param {string} code
+ * @returns {string}
  */
-export function setLocale(code) {
+function applyLocaleLocal(code) {
   if (!Object.prototype.hasOwnProperty.call(LOCALES, code)) {
     return activeLocale
   }
@@ -92,6 +106,59 @@ export function setLocale(code) {
     /* very old browsers — nothing to do */
   }
   return activeLocale
+}
+
+/**
+ * Switch the active locale because the **user** chose it from a UI
+ * control. Persists locally and notifies the server (via the handler
+ * registered with {@link registerServerSync}), so the preference
+ * follows the user across devices.
+ *
+ * @param {string} code - Locale code (e.g. `'en'`, `'ja'`).
+ * @returns {string} The locale that ended up active.
+ */
+export function setLocale(code) {
+  const next = applyLocaleLocal(code)
+  if (next === code && serverSyncHandler) {
+    try {
+      const ret = serverSyncHandler(code)
+      if (ret && typeof ret.catch === 'function') {
+        ret.catch(() => {
+          /* server failures shouldn't block local UI */
+        })
+      }
+    } catch {
+      /* defensive: handler errors shouldn't bubble into UI code */
+    }
+  }
+  return next
+}
+
+/**
+ * Apply a locale supplied by the server (e.g. via the login or
+ * GET /api/me response). Behaves like {@link setLocale} **but does not
+ * round-trip back to the server**, so the same value isn't written
+ * twice when the SPA boots.
+ *
+ * Pass an empty string / null / `undefined` to keep the current locale.
+ *
+ * @param {string | null | undefined} code
+ * @returns {string}
+ */
+export function applyServerLocale(code) {
+  if (!code) return activeLocale
+  return applyLocaleLocal(code)
+}
+
+/**
+ * Register a function to be called when the user explicitly switches
+ * locale. The host application uses this to PUT the new locale to
+ * `/api/me/locale` without coupling this module to the API layer.
+ *
+ * @param {((locale: string) => void | Promise<void>) | null} fn
+ */
+export function registerServerSync(fn) {
+  serverSyncHandler = typeof fn === 'function' ? fn : null
 }
 
 /**

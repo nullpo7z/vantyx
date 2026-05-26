@@ -17,6 +17,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/auth"
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
 	"github.com/nullpo7z/vantyx/internal/filetransfer"
+	"github.com/nullpo7z/vantyx/internal/i18n"
 	"github.com/nullpo7z/vantyx/internal/logging"
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
 	"github.com/nullpo7z/vantyx/internal/secret"
@@ -224,19 +225,41 @@ func NewApp() *App {
 	}
 }
 
-// sessionMiddleware is currently a placeholder that resolves the
-// session cookie so future middlewares can attach the session to the
-// request context.
+// sessionMiddleware resolves the session cookie and, for both
+// authenticated and anonymous callers, picks a UI locale that the
+// downstream handlers can use to localize error responses.
+//
+// Resolution order:
+//  1. Authenticated user's saved preference (users.locale), when set.
+//  2. The request's Accept-Language header (lightweight RFC 9110 parse).
+//  3. The default locale (English).
+//
+// The chosen locale is attached to the request context via
+// i18n.WithLocale so writeJSONErrorKey / i18n.TR can pick it up
+// without touching individual handlers.
 func (a *App) sessionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie("vantyx_session")
-		if err != nil || c.Value == "" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		_, _ = a.SessionStore.Get(c.Value)
-		next.ServeHTTP(w, r)
+		locale := a.resolveLocale(r)
+		ctx := i18n.WithLocale(r.Context(), locale)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// resolveLocale picks the best locale for the current request. Errors
+// from the session or user stores fall through to the Accept-Language
+// header, mirroring the "best effort" contract of the original
+// placeholder middleware.
+func (a *App) resolveLocale(r *http.Request) i18n.Locale {
+	if c, err := r.Cookie("vantyx_session"); err == nil && c.Value != "" {
+		if sess, err := a.SessionStore.Get(c.Value); err == nil && sess != nil {
+			if u, err := a.UserStore.GetByID(sess.UserID); err == nil && u != nil && u.Locale != "" {
+				if i18n.IsSupported(u.Locale) {
+					return i18n.Normalise(u.Locale)
+				}
+			}
+		}
+	}
+	return i18n.ParseAcceptLanguage(r.Header.Get("Accept-Language"))
 }
 
 // NewRouter constructs the main HTTP router for the Vantyx API.

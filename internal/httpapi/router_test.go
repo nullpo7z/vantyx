@@ -3816,3 +3816,107 @@ func TestApp_ListUsers_InvalidPagination(t *testing.T) {
 		t.Fatalf("expected 200 (ignores bad params), got %d", w.Result().StatusCode)
 	}
 }
+
+// decodeErrorMessage returns the `message` field of an error response
+// body so locale-sensitive tests can read it concisely.
+func decodeErrorMessage(t *testing.T, body []byte) string {
+	t.Helper()
+	var er struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &er); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	return er.Message
+}
+
+// TestApp_ErrorMessage_AcceptLanguageJapanese exercises the locale
+// middleware via the Accept-Language header on an anonymous request.
+func TestApp_ErrorMessage_AcceptLanguageJapanese(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req.Header.Set("Accept-Language", "ja-JP, en;q=0.5")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Result().StatusCode)
+	}
+	msg := decodeErrorMessage(t, w.Body.Bytes())
+	// The Japanese phrase intentionally contains characters absent from
+	// the English message, so a simple containment check is enough.
+	if !strings.Contains(msg, "認証") {
+		t.Fatalf("expected Japanese 'unauthorized' message, got %q", msg)
+	}
+}
+
+// TestApp_ErrorMessage_AcceptLanguageEnglish ensures Accept-Language=en
+// continues to receive the English wording (default fallback).
+func TestApp_ErrorMessage_AcceptLanguageEnglish(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req.Header.Set("Accept-Language", "en-US")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if msg := decodeErrorMessage(t, w.Body.Bytes()); msg != "unauthorized" {
+		t.Fatalf("expected English message 'unauthorized', got %q", msg)
+	}
+}
+
+// TestApp_ErrorMessage_UserLocaleOverridesHeader pins the behavior
+// where an authenticated user's saved locale wins over the request's
+// Accept-Language header.
+func TestApp_ErrorMessage_UserLocaleOverridesHeader(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	// Default admin is created by NewApp(); persist a Japanese locale
+	// for them and reuse the cookie below.
+	if err := app.UserStore.UpdateLocale("admin", "ja"); err != nil {
+		t.Fatalf("UpdateLocale: %v", err)
+	}
+	sess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("SessionStore.Create: %v", err)
+	}
+
+	// Hit an admin-only path while pretending to be a regular user so
+	// the response is `forbidden: admin only`. Setting Accept-Language
+	// to English should be ignored in favor of the saved Japanese
+	// preference.
+	if _, err := app.UserStore.CreateUser("u1", "alice", "Alice1!x", "user"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	uSess, _ := app.SessionStore.Create("u1")
+	if err := app.UserStore.UpdateLocale("u1", "ja"); err != nil {
+		t.Fatalf("UpdateLocale u1: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req.Header.Set("Accept-Language", "en-US")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: uSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Result().StatusCode)
+	}
+	if msg := decodeErrorMessage(t, w.Body.Bytes()); !strings.Contains(msg, "管理者") {
+		t.Fatalf("expected Japanese 'admin only' message, got %q", msg)
+	}
+
+	// And the admin session continues to receive Japanese too, even
+	// without an Accept-Language header.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/users", bytes.NewReader([]byte("not json")))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w2.Result().StatusCode)
+	}
+	if msg := decodeErrorMessage(t, w2.Body.Bytes()); !strings.Contains(msg, "リクエスト") {
+		t.Fatalf("expected Japanese 'invalid request body', got %q", msg)
+	}
+}

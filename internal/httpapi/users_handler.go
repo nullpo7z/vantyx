@@ -74,18 +74,18 @@ func (a *App) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	var req createUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	req.Username = strings.TrimSpace(req.Username)
 	req.ID = strings.TrimSpace(req.ID)
 	req.Role = strings.TrimSpace(req.Role)
 	if req.Username == "" {
-		writeJSONError(w, "username is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "users.usernameRequired", http.StatusBadRequest)
 		return
 	}
 	if req.Password == "" {
-		writeJSONError(w, "password is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "users.passwordRequired", http.StatusBadRequest)
 		return
 	}
 	if req.ID == "" {
@@ -97,7 +97,7 @@ func (a *App) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	u, err := a.UserStore.CreateUser(req.ID, req.Username, req.Password, req.Role)
 	if err != nil {
 		if errors.Is(err, auth.ErrUserExists) {
-			writeJSONError(w, "user already exists (id or username)", http.StatusConflict)
+			writeJSONErrorKey(w, r, "users.alreadyExists", http.StatusConflict)
 			return
 		}
 		writeJSONError(w, err.Error(), http.StatusBadRequest)
@@ -120,13 +120,13 @@ func (a *App) handleUserTags(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "user_id")
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
-		writeJSONError(w, "user_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "users.idRequired", http.StatusBadRequest)
 		return
 	}
 	tags, err := a.UserStore.TagsForUser(userID)
 	if err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
-			writeJSONError(w, "user not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "users.userNotFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)
@@ -145,12 +145,12 @@ func (a *App) handleSetUserTags(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "user_id")
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
-		writeJSONError(w, "user_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "users.idRequired", http.StatusBadRequest)
 		return
 	}
 	var req setTagsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	if req.Tags == nil {
@@ -158,7 +158,7 @@ func (a *App) handleSetUserTags(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := a.UserStore.SetUserTags(userID, req.Tags); err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
-			writeJSONError(w, "user not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "users.userNotFound", http.StatusNotFound)
 			return
 		}
 		writeJSONError(w, err.Error(), http.StatusBadRequest)

@@ -1,6 +1,7 @@
 import API from './api.js'
 import { renderLogin } from './login.js'
 import { applyStoredTheme, toggleStoredTheme } from './theme.js'
+import { setLocale, onLocaleChange } from './i18n.js'
 import { initNav, setActiveNav, showAuthenticatedNav } from './nav.js'
 import { renderUsersPage } from './users_page.js'
 import { renderRecordingsPage } from './recordings_page.js'
@@ -2413,5 +2414,20 @@ export function renderApp(container) {
       toggleStoredTheme()
     })
   }
+
+  // Language switcher: persist via i18n, then re-render the whole shell
+  // so every `t(...)` lookup in the chrome and the active page picks up
+  // the new dictionary. We rely on the i18nchange event so the same
+  // re-render happens for other surfaces (e.g. settings page select).
+  const languageSwitch = document.getElementById('language-switch')
+  if (languageSwitch) {
+    languageSwitch.addEventListener('change', () => {
+      setLocale(languageSwitch.value)
+    })
+  }
+  const unsubscribeLocale = onLocaleChange(() => {
+    if (typeof unsubscribeLocale === 'function') unsubscribeLocale()
+    renderApp(container)
+  })
 }
 

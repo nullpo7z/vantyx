@@ -5,6 +5,7 @@
  */
 import RFB from '@novnc/novnc'
 import API from './api.js'
+import { t } from './i18n.js'
 function escapeHtml(s) {
   if (s == null) return ''
   const div = document.createElement('div')
@@ -23,8 +24,8 @@ export function renderRdpPage(container) {
     container.innerHTML = `
       <div class="min-h-screen flex flex-col bg-slate-100 font-sans text-slate-900 items-center justify-center p-6">
         <div class="text-center text-slate-600">
-          <p class="mb-4">target_id が指定されていません。</p>
-          <a href="/" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm">ホームに戻る</a>
+          <p class="mb-4">${t('rdp.noTargetId')}</p>
+          <a href="/" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm">${t('rdp.backHome')}</a>
         </div>
       </div>
     `
@@ -40,29 +41,29 @@ export function renderRdpPage(container) {
           <div class="vantyx-header-start">
             <h1 class="vantyx-brand">Vantyx</h1>
             <div class="vantyx-page-context">
-              <span class="vantyx-page-context-label">RDP（ブラウザ）</span>
+              <span class="vantyx-page-context-label">${t('rdp.pageLabel')}</span>
               <span class="vantyx-page-context-target">${escapeHtml(targetName)}</span>
             </div>
           </div>
           <div class="vantyx-header-end">
-            <button id="rdp-back" type="button" class="vantyx-page-btn">戻る</button>
-            <button id="rdp-disconnect" type="button" class="vantyx-page-btn vantyx-page-btn-danger hidden">切断</button>
+            <button id="rdp-back" type="button" class="vantyx-page-btn">${t('rdp.back')}</button>
+            <button id="rdp-disconnect" type="button" class="vantyx-page-btn vantyx-page-btn-danger hidden">${t('rdp.disconnect')}</button>
           </div>
         </div>
       </header>
       <!-- Connecting spinner -->
       <div id="rdp-connecting" class="flex-1 flex flex-col items-center justify-center p-4 gap-4 text-slate-600">
-        <p class="text-sm">RDP に接続しています…</p>
+        <p class="text-sm">${t('rdp.connecting')}</p>
         <div class="animate-spin h-8 w-8 border-2 border-sky-500 border-t-transparent rounded-full"></div>
-        <p class="text-xs text-slate-400">初回接続には数秒かかります。</p>
+        <p class="text-xs text-slate-400">${t('rdp.connectingHint')}</p>
       </div>
 
       <!-- Error display -->
       <div id="rdp-error" class="hidden flex-1 flex flex-col items-center justify-center p-4 gap-4 text-red-600">
         <p id="rdp-error-msg" class="text-sm"></p>
         <div class="flex gap-2">
-          <button id="rdp-retry" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">再試行</button>
-          <button id="rdp-error-close" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">閉じる</button>
+          <button id="rdp-retry" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">${t('rdp.retry')}</button>
+          <button id="rdp-error-close" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">${t('rdp.close')}</button>
         </div>
       </div>
 
@@ -71,7 +72,7 @@ export function renderRdpPage(container) {
         <div id="rdp-screen" class="relative flex-1 min-h-0 w-full overflow-hidden">
           <button id="rdp-fullscreen" type="button"
             class="absolute right-3 bottom-3 z-10 rounded bg-black/60 px-2 py-1 text-[11px] text-white hover:bg-black/80">
-            全画面
+            ${t('rdp.fullscreen')}
           </button>
         </div>
       </div>
@@ -171,19 +172,19 @@ export function renderRdpPage(container) {
       })
       rfb.addEventListener('disconnect', (e) => {
         if (e.detail && !e.detail.clean) {
-          showError('接続が切断されました。')
+          showError(t('rdp.connectionLost'))
         } else {
-          showError('切断されました。')
+          showError(t('rdp.disconnectedClean'))
         }
         rfb = null
       })
       rfb.addEventListener('securityfailure', (e) => {
-        const reason = (e.detail && e.detail.reason) ? e.detail.reason : 'セキュリティネゴシエーションに失敗しました。'
+        const reason = (e.detail && e.detail.reason) ? e.detail.reason : t('rdp.securityFailure')
         showError(reason)
         rfb = null
       })
     } catch (err) {
-      showError('noVNC の初期化に失敗しました: ' + (err.message || String(err)))
+      showError(t('rdp.initFailed', { error: err.message || String(err) }))
     }
   }
 

@@ -8,6 +8,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
+import { t } from './i18n.js'
 
 function escapeHtml(s) {
   if (s == null) return ''
@@ -67,7 +68,7 @@ export function renderTFTPConsolePage(container) {
 
   async function loadList() {
     if (!tftpTargetId) {
-      setError('TFTP ターゲット ID が指定されていません。')
+      setError(t('tftpConsole.targetIdMissing'))
       renderList([])
       return
     }
@@ -76,13 +77,13 @@ export function renderTFTPConsolePage(container) {
     setError('')
     const listEl = container.querySelector('#tftp-files-list')
     if (listEl) {
-      listEl.innerHTML = '<div class="py-6 text-center text-slate-500 text-sm">読み込み中…</div>'
+      listEl.innerHTML = `<div class="py-6 text-center text-slate-500 text-sm">${t('tftpConsole.listLoading')}</div>`
     }
     try {
       const entries = await API.tftpServerFilesList(tftpTargetId, currentPath || '/')
       renderList(entries || [])
     } catch (e) {
-      setError(e.message || '一覧の取得に失敗しました')
+      setError(e.message || t('tftpConsole.listFailed'))
       renderList([])
     } finally {
       loading = false
@@ -93,7 +94,7 @@ export function renderTFTPConsolePage(container) {
     const listEl = container.querySelector('#tftp-files-list')
     if (!listEl) return
     if (!entries || !entries.length) {
-      listEl.innerHTML = '<div class="py-6 text-center text-slate-500 text-sm">このディレクトリにはファイルがありません</div>'
+      listEl.innerHTML = `<div class="py-6 text-center text-slate-500 text-sm">${t('tftpConsole.emptyDir')}</div>`
       return
     }
     const rows = entries
@@ -116,9 +117,9 @@ export function renderTFTPConsolePage(container) {
             </div>
             ${!isDir ? `
             <div class="flex items-center gap-1 flex-shrink-0">
-              <button type="button" class="tftp-download text-[11px] px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100" data-path="${escapeHtml(pathNext)}">ダウンロード</button>
-              <button type="button" class="tftp-copy-name text-[11px] px-2 py-1 rounded border border-slate-200 bg-slate-50 hover:bg-slate-100" data-name="${escapeHtml(e.name)}">名前をコピー</button>
-              <button type="button" class="tftp-delete text-[11px] px-2 py-1 rounded border border-red-200 bg-white hover:bg-red-50 text-red-700" data-path="${escapeHtml(pathNext)}" data-name="${escapeHtml(e.name)}">削除</button>
+              <button type="button" class="tftp-download text-[11px] px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100" data-path="${escapeHtml(pathNext)}">${t('tftpConsole.download')}</button>
+              <button type="button" class="tftp-copy-name text-[11px] px-2 py-1 rounded border border-slate-200 bg-slate-50 hover:bg-slate-100" data-name="${escapeHtml(e.name)}">${t('tftpConsole.copyName')}</button>
+              <button type="button" class="tftp-delete text-[11px] px-2 py-1 rounded border border-red-200 bg-white hover:bg-red-50 text-red-700" data-path="${escapeHtml(pathNext)}" data-name="${escapeHtml(e.name)}">${t('tftpConsole.delete')}</button>
             </div>
             ` : ''}
           </div>
@@ -138,18 +139,18 @@ export function renderTFTPConsolePage(container) {
             <div class="vantyx-header-start">
               <h1 class="vantyx-brand">Vantyx</h1>
               <div class="vantyx-page-context">
-                <span class="vantyx-page-context-label">TFTP ファイル + コンソール</span>
+                <span class="vantyx-page-context-label">${t('tftpConsole.pageLabel')}</span>
                 <span class="vantyx-page-context-target">${escapeHtml(targetName || '')}</span>
               </div>
             </div>
             <div class="vantyx-header-end">
               <div class="flex items-center gap-2 text-xs">
-                <span class="opacity-70">TFTP サーバー:</span>
-                <span id="tftp-server-addr" class="font-mono text-[11px] bg-white/10 rounded px-2 py-0.5">${escapeHtml(tftpServerAddr || '(不明)')}</span>
-                <button type="button" id="tftp-copy-addr" class="vantyx-page-btn">コピー</button>
+                <span class="opacity-70">${t('tftpConsole.serverLabel')}</span>
+                <span id="tftp-server-addr" class="font-mono text-[11px] bg-white/10 rounded px-2 py-0.5">${escapeHtml(tftpServerAddr || t('tftpConsole.serverUnknown'))}</span>
+                <button type="button" id="tftp-copy-addr" class="vantyx-page-btn">${t('tftpConsole.copy')}</button>
               </div>
-              <button type="button" id="tftp-back" class="vantyx-page-btn">戻る</button>
-              <button type="button" id="tftp-disconnect" class="vantyx-page-btn vantyx-page-btn-danger">切断</button>
+              <button type="button" id="tftp-back" class="vantyx-page-btn">${t('tftpConsole.back')}</button>
+              <button type="button" id="tftp-disconnect" class="vantyx-page-btn vantyx-page-btn-danger">${t('tftpConsole.disconnect')}</button>
             </div>
           </div>
         </header>
@@ -158,13 +159,13 @@ export function renderTFTPConsolePage(container) {
           <section class="flex-1 min-h-0 min-h-[30vh] flex flex-col bg-slate-50 overflow-hidden">
             <div class="flex items-center justify-between px-4 pt-3 pb-2">
               <div>
-                <h2 class="text-xs font-semibold text-slate-700">TFTP ディレクトリ</h2>
-                <p class="text-[11px] text-slate-500 mt-0.5">上でアップロードしたファイル名をコピーし、下のコンソールから TFTP コマンドを実行します。</p>
+                <h2 class="text-xs font-semibold text-slate-700">${t('tftpConsole.dirHeading')}</h2>
+                <p class="text-[11px] text-slate-500 mt-0.5">${t('tftpConsole.dirHint')}</p>
               </div>
               <div class="flex items-center gap-2">
-                <button type="button" id="tftp-refresh" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50 shadow-sm">更新</button>
+                <button type="button" id="tftp-refresh" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50 shadow-sm">${t('tftpConsole.refresh')}</button>
                 <label class="inline-flex items-center gap-2 px-3 py-1.5 rounded border border-slate-300 bg-white text-[11px] font-medium text-slate-700 hover:bg-slate-50 shadow-sm cursor-pointer">
-                  アップロード
+                  ${t('tftpConsole.upload')}
                   <input type="file" id="tftp-upload-input" class="sr-only" />
                 </label>
               </div>
@@ -175,37 +176,37 @@ export function renderTFTPConsolePage(container) {
 
           <section class="flex-1 min-h-0 flex flex-col bg-slate-900 shrink-0">
             <div class="shrink-0 px-4 py-2 flex items-center justify-between">
-              <h2 class="text-xs font-semibold text-slate-100">コンソール</h2>
+              <h2 class="text-xs font-semibold text-slate-100">${t('tftpConsole.consoleHeading')}</h2>
               ${sshTargetId
-    ? '<span class="text-[11px] text-slate-400">対象機器側で TFTP コマンドを実行してください。</span>'
-    : '<span class="text-[11px] text-red-300">SSH ターゲット ID が指定されていません。</span>'}
+    ? `<span class="text-[11px] text-slate-400">${t('tftpConsole.runHint')}</span>`
+    : `<span class="text-[11px] text-red-300">${t('tftpConsole.noSshTargetWarn')}</span>`}
             </div>
             <div id="tftp-xterm-wrap" class="flex-1 min-h-0 bg-black flex flex-col relative">
               ${sshTargetId
     ? `
               <div id="tftp-ssh-creds" class="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/95 p-4 overflow-auto">
                 <form id="tftp-ssh-cred-form" class="w-full max-w-md bg-slate-800 border border-slate-600 rounded-lg shadow-lg p-5 space-y-4">
-                  <p id="tftp-ssh-cred-prompt" class="text-sm text-slate-200">SSH 認証情報を入力してコンソールに接続します。</p>
-                  <p id="tftp-ssh-stored-hint" class="text-sm text-slate-300 hidden">保存済み認証を使用します。不足がある場合は入力してください。</p>
+                  <p id="tftp-ssh-cred-prompt" class="text-sm text-slate-200">${t('tftpConsole.credPrompt')}</p>
+                  <p id="tftp-ssh-stored-hint" class="text-sm text-slate-300 hidden">${t('tftpConsole.credStoredHint')}</p>
                   <div id="tftp-ssh-username-wrap">
-                    <label class="block text-xs text-slate-400 mb-1">SSH ユーザー名</label>
+                    <label class="block text-xs text-slate-400 mb-1">${t('tftpConsole.sshUsername')}</label>
                     <input type="text" id="tftp-ssh-username" autocomplete="username" class="w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white" />
                   </div>
                   <div id="tftp-ssh-password-wrap">
-                    <label class="block text-xs text-slate-400 mb-1">SSH パスワード</label>
+                    <label class="block text-xs text-slate-400 mb-1">${t('tftpConsole.sshPassword')}</label>
                     <input type="password" id="tftp-ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white" />
                   </div>
                   <div id="tftp-ssh-passphrase-wrap" class="hidden">
-                    <label class="block text-xs text-slate-400 mb-1">秘密鍵のパスフレーズ</label>
+                    <label class="block text-xs text-slate-400 mb-1">${t('tftpConsole.sshPassphrase')}</label>
                     <input type="password" id="tftp-ssh-passphrase" autocomplete="off" class="w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white" />
                   </div>
                   <p id="tftp-ssh-cred-error" class="text-xs text-red-400 hidden"></p>
-                  <button type="submit" id="tftp-ssh-connect" class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700">接続</button>
+                  <button type="submit" id="tftp-ssh-connect" class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700">${t('tftpConsole.connect')}</button>
                 </form>
               </div>
               <div id="tftp-xterm" class="flex-1 min-h-0 w-full hidden" style="height: 100%;"></div>
               `
-    : '<div class="h-full flex items-center justify-center text-xs text-slate-300">SSH ターゲットが指定されていないため、コンソールを表示できません。</div>'}
+    : `<div class="h-full flex items-center justify-center text-xs text-slate-300">${t('tftpConsole.noSshTargetBody')}</div>`}
             </div>
           </section>
         </main>
@@ -274,7 +275,7 @@ export function renderTFTPConsolePage(container) {
           setError('')
           setTimeout(() => loadList(), 2000)
         } catch (e) {
-          setError(e.message || 'アップロードに失敗しました')
+          setError(e.message || t('tftpConsole.uploadFailed'))
         }
       })
     }
@@ -301,7 +302,7 @@ export function renderTFTPConsolePage(container) {
             path,
           })
         } catch (err) {
-          setError(err.message || 'ダウンロードに失敗しました')
+          setError(err.message || t('tftpConsole.downloadFailed'))
         }
       } else if (copyName) {
         e.preventDefault()
@@ -318,13 +319,13 @@ export function renderTFTPConsolePage(container) {
         const path = delBtn.dataset.path || ''
         const name = delBtn.dataset.name || ''
         if (!path || !tftpTargetId) return
-        if (!confirm(`「${name}」を削除しますか？`)) return
+        if (!confirm(t('tftpConsole.confirmDelete', { name }))) return
         setError('')
         try {
           await API.tftpServerDelete(tftpTargetId, path)
           await loadList()
         } catch (err) {
-          setError(err.message || '削除に失敗しました')
+          setError(err.message || t('tftpConsole.deleteFailed'))
         }
       }
     })
@@ -471,10 +472,10 @@ export function renderTFTPConsolePage(container) {
             }
           }
           ws.onclose = () => {
-            term.write('\r\n[接続が閉じられました]\r\n')
+            term.write(`\r\n${t('tftpConsole.connectionClosed')}\r\n`)
           }
           ws.onerror = () => {
-            term.write('\r\n[WebSocket エラー]\r\n')
+            term.write(`\r\n${t('tftpConsole.wsError')}\r\n`)
           }
           term.onData((data) => {
             if (ws.readyState === WebSocket.OPEN) {
@@ -501,11 +502,11 @@ export function renderTFTPConsolePage(container) {
             const password = needsPassword ? (passwordInput?.value ?? '') : ''
             const passphrase = needsPassphrase ? (passphraseInput?.value ?? '') : ''
             if (needsPassword && !password) {
-              showCredError('パスワードを入力してください。')
+              showCredError(t('tftpConsole.enterPassword'))
               return
             }
             if (needsPassphrase && !passphrase) {
-              showCredError('秘密鍵のパスフレーズを入力してください。')
+              showCredError(t('tftpConsole.enterPassphrase'))
               return
             }
             startConnect(buildAuthPayload({
@@ -521,7 +522,7 @@ export function renderTFTPConsolePage(container) {
           const password = passwordInput?.value ?? ''
           const passphrase = passphraseInput?.value ?? ''
           if (!username) {
-            showCredError('ユーザー名を入力してください。')
+            showCredError(t('tftpConsole.enterUsername'))
             return
           }
           startConnect(buildAuthPayload({
@@ -540,13 +541,13 @@ export function renderTFTPConsolePage(container) {
         } else if (channelToken) {
           if (credPrompt) credPrompt.classList.add('hidden')
           if (storedHint) {
-            storedHint.textContent = '親タブから認証情報を受信中…'
+            storedHint.textContent = t('tftpConsole.parentTabReceiving')
             storedHint.classList.remove('hidden')
           }
           const bc = new BroadcastChannel(`vantyx-terminal-${channelToken}`)
           const timeoutId = window.setTimeout(() => {
             try { bc.close() } catch { /* ignore */ }
-            showCredError('認証情報を受信できませんでした。この画面で入力して接続してください。')
+            showCredError(t('tftpConsole.parentTabTimeout'))
             if (credPrompt) credPrompt.classList.remove('hidden')
           }, 10_000)
           bc.onmessage = (ev) => {
@@ -575,7 +576,7 @@ export function renderTFTPConsolePage(container) {
               if (usernameInput) usernameInput.value = typeof u === 'string' ? u : ''
               if (passwordInput) passwordInput.value = typeof p === 'string' ? p : ''
               if (passphraseInput && passphrase) passphraseInput.value = passphrase
-              showCredError('認証情報が不足しています。入力して接続してください。')
+              showCredError(t('tftpConsole.credsIncomplete'))
               if (credPrompt) credPrompt.classList.remove('hidden')
               return
             }

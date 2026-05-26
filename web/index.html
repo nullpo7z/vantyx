@@ -1,18 +1,28 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vantyx</title>
     <link rel="stylesheet" href="/src/style.css" />
     <script>
-      // テーマ初期化: ペイント前に <html class="dark"> を確定させて FOUC を防ぐ。
+      // Theme + locale bootstrap. Pinning <html class="dark"> and
+      // <html lang="..."> before paint avoids FOUC and keeps screen
+      // readers / CSS :lang(...) consistent with the SPA's choice.
       (function () {
         try {
           var saved = localStorage.getItem('vantyx_theme');
           var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
           if (saved === 'dark' || (!saved && prefersDark)) {
             document.documentElement.classList.add('dark');
+          }
+        } catch (_) {
+          /* ignore */
+        }
+        try {
+          var locale = localStorage.getItem('vantyx_locale');
+          if (locale === 'en' || locale === 'ja') {
+            document.documentElement.lang = locale;
           }
         } catch (_) {
           /* ignore */

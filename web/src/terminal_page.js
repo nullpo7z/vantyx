@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import API from './api.js'
+import { t } from './i18n.js'
 
 function escapeHtml(s) {
   const div = document.createElement('div')
@@ -37,66 +38,66 @@ export function renderTerminalPage(container) {
           <div class="vantyx-header-start">
             <h1 class="vantyx-brand">Vantyx</h1>
             <div class="vantyx-page-context">
-              <span class="vantyx-page-context-label">${isTelnet ? 'Telnet ターミナル' : 'SSH ターミナル'}</span>
+              <span class="vantyx-page-context-label">${isTelnet ? t('terminal.pageLabelTelnet') : t('terminal.pageLabelSsh')}</span>
               <span class="vantyx-page-context-target">${escapeHtml(targetName)}</span>
             </div>
           </div>
           <div class="vantyx-header-end">
-            <button id="term-back" type="button" class="vantyx-page-btn">戻る</button>
-            <button id="term-close" type="button" class="vantyx-page-btn">セッション終了</button>
+            <button id="term-back" type="button" class="vantyx-page-btn">${t('terminal.back')}</button>
+            <button id="term-close" type="button" class="vantyx-page-btn">${t('terminal.endSessionBtn')}</button>
           </div>
         </div>
       </header>
 
       <div id="term-disconnected" class="hidden flex-1 flex flex-col items-center justify-center p-4 gap-4 bg-slate-100">
-        <p class="text-sm text-slate-600">セッションはバックエンドで継続しています。</p>
+        <p class="text-sm text-slate-600">${t('terminal.sessionContinues')}</p>
         <div class="flex gap-3">
-          <button id="term-reconnect" type="button" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm">再接続</button>
-          <button id="term-back-from-disconnect" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">ホームに戻る</button>
+          <button id="term-reconnect" type="button" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm">${t('terminal.reconnect')}</button>
+          <button id="term-back-from-disconnect" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">${t('terminal.backHome')}</button>
         </div>
       </div>
       <div id="term-session-ended" class="hidden flex-1 flex flex-col items-center justify-center p-4 gap-4 bg-slate-100">
-        <p class="text-sm text-slate-600">セッションが終了しました。サーバー側でログアウトしたため、再接続はできません。</p>
-        <button id="term-back-from-ended" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">ホームに戻る</button>
+        <p class="text-sm text-slate-600">${t('terminal.sessionEnded')}</p>
+        <button id="term-back-from-ended" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">${t('terminal.backHome')}</button>
       </div>
       <div id="term-credentials" class="flex-1 flex items-center justify-center p-4 bg-slate-100">
         <form class="w-full max-w-md bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
           <div class="px-5 py-5 space-y-5">
-            <p id="term-auth-prompt" class="text-sm text-slate-600">ターゲットの ${authLabel} 認証情報を入力してください。</p>
-            <p id="term-stored-cred-hint" class="text-sm text-slate-600 hidden">セッション名と説明を入力してください（任意）。接続で保存済み認証を使って接続します。</p>
-            <p id="term-needs-password-hint" class="text-sm text-slate-600 hidden">ユーザー名は保存済みです。パスワードを入力してください。</p>
-            <p id="term-needs-passphrase-hint" class="text-sm text-slate-600 hidden">秘密鍵は保存済みです。パスフレーズを入力してください。</p>
+            <p id="term-auth-prompt" class="text-sm text-slate-600">${t('terminal.authPrompt', { auth: authLabel })}</p>
+            <p id="term-stored-cred-hint" class="text-sm text-slate-600 hidden">${t('terminal.storedCredHint')}</p>
+            <p id="term-needs-password-hint" class="text-sm text-slate-600 hidden">${t('terminal.needsPasswordHint')}</p>
+            <p id="term-needs-passphrase-hint" class="text-sm text-slate-600 hidden">${t('terminal.needsPassphraseHint')}</p>
             <div id="term-auth-fields" class="space-y-5">
               <div id="term-username-wrap">
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${authLabel} ユーザー名</label>
-                <input type="text" id="ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="例: root" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('terminal.fieldUsername', { auth: authLabel })}</label>
+                <input type="text" id="ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('terminal.fieldUsernamePlaceholder')}" />
               </div>
               <div id="term-password-wrap">
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${authLabel} パスワード</label>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('terminal.fieldPassword', { auth: authLabel })}</label>
                 <input type="password" id="ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" />
               </div>
               <div id="term-passphrase-wrap" class="hidden">
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ</label>
-                <input type="password" id="ssh-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="暗号化された秘密鍵のパスフレーズ" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('terminal.fieldPassphrase')}</label>
+                <input type="password" id="ssh-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('terminal.fieldPassphrasePlaceholder')}" />
               </div>
               ${isTelnet ? '' : `<div id="term-passphrase-optional-wrap">
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">秘密鍵のパスフレーズ（任意）</label>
-                <input type="password" id="ssh-passphrase-optional" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="保存済み鍵が暗号化されている場合のみ入力" />
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('terminal.fieldPassphraseOptional')}</label>
+                <input type="password" id="ssh-passphrase-optional" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('terminal.fieldPassphraseOptionalPlaceholder')}" />
               </div>`}
             </div>
             <div>
-              <label class="block text-xs font-medium text-slate-600 mb-1.5">セッション名（任意）</label>
-              <input type="text" id="ssh-session-name" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="例: 本番デプロイ用" />
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('terminal.fieldSessionName')}</label>
+              <input type="text" id="ssh-session-name" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('terminal.fieldSessionNamePlaceholder')}" />
             </div>
             <div>
-              <label class="block text-xs font-medium text-slate-600 mb-1.5">説明（任意）</label>
-              <input type="text" id="ssh-session-desc" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="例: リリース作業用" />
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('terminal.fieldSessionDesc')}</label>
+              <input type="text" id="ssh-session-desc" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('terminal.fieldSessionDescPlaceholder')}" />
             </div>
             <p id="term-error" class="text-sm text-red-600 hidden"></p>
           </div>
           <div class="px-5 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-            <button type="button" id="term-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">キャンセル</button>
-            <button type="submit" id="term-connect" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm">接続</button>
+            <button type="button" id="term-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">${t('terminal.cancel')}</button>
+            <button type="submit" id="term-connect" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm">${t('terminal.connect')}</button>
           </div>
         </form>
       </div>
@@ -140,8 +141,8 @@ export function renderTerminalPage(container) {
   /** WebSocket メッセージ共通処理。session_id 受信時も xterm を必ず接続する。 */
   function handleTerminalWsMessage(ws, ev, { onError, onSessionEnded } = {}) {
     if (typeof ev.data === 'string' && ev.data.startsWith('session_ended:')) {
-      const msg = ev.data.slice('session_ended:'.length).trim() || 'セッションが終了しました'
-      if (term) term.write('\r\n\n[セッション終了] ' + msg + '\r\n')
+      const msg = ev.data.slice('session_ended:'.length).trim() || t('terminal.sessionEndedSuffix')
+      if (term) term.write(`\r\n\n${t('terminal.sessionEndedPrefix')} ${msg}\r\n`)
       currentSessionId = null
       shellWrap.classList.add('hidden')
       sessionEndedWrap.classList.remove('hidden')
@@ -152,7 +153,7 @@ export function renderTerminalPage(container) {
     if (typeof ev.data === 'string' && ev.data.startsWith('error:')) {
       const msg = ev.data.slice(6).trim()
       onError?.(msg)
-      if (term) term.write('\r\n\n[エラー] ' + msg + '\r\n')
+      if (term) term.write(`\r\n\n${t('terminal.errorPrefix')} ${msg}\r\n`)
       try { ws.close() } catch { /* ignore */ }
       return true
     }
@@ -244,17 +245,17 @@ export function renderTerminalPage(container) {
     wrap.innerHTML = `
       <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
         <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-          <h3 class="font-semibold text-slate-800">セッション終了</h3>
+          <h3 class="font-semibold text-slate-800">${t('terminal.confirmEndTitle')}</h3>
           <button type="button" data-end-session-close="1" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
         </div>
         <div class="px-6 py-5 space-y-4">
-          <p class="text-sm text-slate-700">このターミナルセッションを終了します。よろしいですか？</p>
-          <p class="text-xs text-slate-500">「戻る」はセッションを維持しますが、「セッション終了」はバックエンド側のセッションも終了します。</p>
+          <p class="text-sm text-slate-700">${t('terminal.confirmEndQuestion')}</p>
+          <p class="text-xs text-slate-500">${t('terminal.confirmEndHint')}</p>
           <p data-end-session-error="1" class="text-sm text-red-600 hidden"></p>
         </div>
         <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-          <button type="button" data-end-session-cancel="1" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">キャンセル</button>
-          <button type="button" data-end-session-confirm="1" class="rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 shadow-sm">セッション終了</button>
+          <button type="button" data-end-session-cancel="1" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">${t('terminal.cancel')}</button>
+          <button type="button" data-end-session-confirm="1" class="rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 shadow-sm">${t('terminal.endSessionBtn')}</button>
         </div>
       </div>
     `
@@ -279,16 +280,16 @@ export function renderTerminalPage(container) {
         if (!currentSessionId) {
           await Promise.race([
             currentSessionIdReady,
-            new Promise((_, rej) => setTimeout(() => rej(new Error('セッションIDを取得中です。接続完了まで数秒お待ちください。')), 5000)),
+            new Promise((_, rej) => setTimeout(() => rej(new Error(t('terminal.sessionIdTimeout'))), 5000)),
           ])
         }
-        if (!currentSessionId) throw new Error('セッションIDを取得できませんでした。接続完了までお待ちください。')
+        if (!currentSessionId) throw new Error(t('terminal.sessionIdMissing'))
         leavingPage = true
         await API.terminalSessionDelete(currentSessionId)
         closeWindow()
       } catch (err) {
         leavingPage = false
-        errEl.textContent = err?.message || 'セッションの終了に失敗しました。もう一度お試しください。'
+        errEl.textContent = err?.message || t('terminal.endSessionFailedRetry')
         errEl.classList.remove('hidden')
         btn.disabled = false
       }
@@ -354,12 +355,12 @@ export function renderTerminalPage(container) {
       })
     }
     ws.onerror = () => {
-      errorEl.textContent = 'WebSocket 接続に失敗しました。'
+      errorEl.textContent = t('terminal.wsConnectFailedShort')
       errorEl.classList.remove('hidden')
     }
     ws.onclose = () => {
       if (leavingPage) return
-      if (term) term.write('\r\n\n[接続が閉じられました]\r\n')
+      if (term) term.write(`\r\n\n${t('terminal.connectionClosed')}\r\n`)
       if (currentSessionId) {
         shellWrap.classList.add('hidden')
         disconnectedWrap.classList.remove('hidden')
@@ -376,12 +377,12 @@ export function renderTerminalPage(container) {
 
   function connectWithCredentials(username, password, sessionName, sessionDescription, privateKeyPassphrase) {
     if (!targetId) {
-      errorEl.textContent = 'target_id が指定されていません。ホーム画面から開き直してください。'
+      errorEl.textContent = t('terminal.targetIdMissingFromHome')
       errorEl.classList.remove('hidden')
       return
     }
     if (!username || !username.trim()) {
-      errorEl.textContent = 'ユーザー名を入力してください'
+      errorEl.textContent = t('terminal.usernameRequiredShort')
       errorEl.classList.remove('hidden')
       return
     }
@@ -400,7 +401,7 @@ export function renderTerminalPage(container) {
     const connectTimeout = window.setTimeout(() => {
       if (sawFirstMessage) return
       sawError = true
-      errorEl.textContent = '接続がタイムアウトしました。ターゲットに到達できるか、認証情報を確認してください。'
+      errorEl.textContent = t('terminal.connectTimedOutNew')
       errorEl.classList.remove('hidden')
       connectBtn.disabled = false
       credsWrap.classList.remove('hidden')
@@ -431,7 +432,7 @@ export function renderTerminalPage(container) {
 
     ws.onerror = () => {
       sawError = true
-      errorEl.textContent = 'WebSocket 接続に失敗しました。バックエンドが起動しているか確認してください。'
+      errorEl.textContent = t('terminal.wsConnectFailed')
       errorEl.classList.remove('hidden')
       connectBtn.disabled = false
       credsWrap.classList.remove('hidden')
@@ -441,11 +442,11 @@ export function renderTerminalPage(container) {
     ws.onclose = () => {
       if (leavingPage) return
       window.clearTimeout(connectTimeout)
-      if (term) term.write('\r\n\n[接続が閉じられました]\r\n')
+      if (term) term.write(`\r\n\n${t('terminal.connectionClosed')}\r\n`)
       connectBtn.disabled = false
       if (!sawFirstMessage && !sawError) {
         sawError = true
-        errorEl.textContent = '接続が閉じられました。ターゲット・ネットワーク・認証情報を確認してください。'
+        errorEl.textContent = t('terminal.closedNoFirstNew')
         errorEl.classList.remove('hidden')
         credsWrap.classList.remove('hidden')
         shellWrap.classList.add('hidden')
@@ -476,7 +477,7 @@ export function renderTerminalPage(container) {
     const connectTimeout = window.setTimeout(() => {
       if (sawFirstMessage) return
       sawError = true
-      errorEl.textContent = '接続がタイムアウトしました。ターゲットに到達できるか、保存済み認証情報を確認してください。'
+      errorEl.textContent = t('terminal.connectTimedOutStored')
       errorEl.classList.remove('hidden')
       credsWrap.classList.remove('hidden')
       shellWrap.classList.add('hidden')
@@ -503,7 +504,7 @@ export function renderTerminalPage(container) {
 
     ws.onerror = () => {
       sawError = true
-      errorEl.textContent = 'WebSocket 接続に失敗しました。保存済み認証で接続できない場合は、認証情報の入力をお試しください。'
+      errorEl.textContent = t('terminal.wsConnectFailedStored')
       errorEl.classList.remove('hidden')
       credsWrap.classList.remove('hidden')
       shellWrap.classList.add('hidden')
@@ -512,10 +513,10 @@ export function renderTerminalPage(container) {
     ws.onclose = () => {
       if (leavingPage) return
       window.clearTimeout(connectTimeout)
-      if (term) term.write('\r\n\n[接続が閉じられました]\r\n')
+      if (term) term.write(`\r\n\n${t('terminal.connectionClosed')}\r\n`)
       if (!sawFirstMessage && !sawError) {
         sawError = true
-        errorEl.textContent = '接続が閉じられました。ターゲット・ネットワーク・保存済み認証情報を確認してください。'
+        errorEl.textContent = t('terminal.closedNoFirstStored')
         errorEl.classList.remove('hidden')
         credsWrap.classList.remove('hidden')
         shellWrap.classList.add('hidden')
@@ -531,7 +532,7 @@ export function renderTerminalPage(container) {
   container.querySelector('form').addEventListener('submit', (e) => {
     e.preventDefault()
     if (waitingBroadcastCreds) {
-      errorEl.textContent = '認証情報を受信中です。少し待ってください。'
+      errorEl.textContent = t('terminal.waitingCredsBlocked')
       errorEl.classList.remove('hidden')
       return
     }
@@ -541,12 +542,12 @@ export function renderTerminalPage(container) {
       const password = needsPassword ? (passwordInput?.value ?? '') : ''
       const passphrase = needsPassphrase ? (passphraseInput?.value ?? '') : ''
       if (needsPassword && !password) {
-        errorEl.textContent = 'パスワードを入力してください。'
+        errorEl.textContent = t('terminal.enterPasswordPrompt')
         errorEl.classList.remove('hidden')
         return
       }
       if (needsPassphrase && !passphrase) {
-        errorEl.textContent = '秘密鍵のパスフレーズを入力してください。'
+        errorEl.textContent = t('terminal.enterPassphrasePrompt')
         errorEl.classList.remove('hidden')
         return
       }
@@ -609,7 +610,7 @@ export function renderTerminalPage(container) {
     if (channelToken && targetId) {
     const infoEl = document.createElement('p')
     infoEl.className = 'text-xs text-slate-500'
-    infoEl.textContent = '親タブから認証情報を受信中…（数秒かかる場合があります）'
+    infoEl.textContent = t('terminal.parentTabReceiving')
     container.querySelector('#term-credentials .px-5')?.appendChild(infoEl)
 
     // 認証情報受信中は「送信」させない（Enter 送信やブラウザの自動入力で誤接続しないようにする）
@@ -631,7 +632,7 @@ export function renderTerminalPage(container) {
         usernameInput.readOnly = false
         passwordInput.readOnly = false
       }
-      infoEl.textContent = '認証情報を受信できませんでした。必要ならこの画面で入力して接続してください。'
+      infoEl.textContent = t('terminal.parentTabTimeout')
     }, 10_000)
 
     bc.onmessage = (ev) => {
@@ -648,7 +649,7 @@ export function renderTerminalPage(container) {
       if (typ === 'stored_credentials') {
         const p = ev.data.password != null ? ev.data.password : ''
         const passphrase = typeof ev.data.private_key_passphrase === 'string' ? ev.data.private_key_passphrase : ''
-        infoEl.textContent = `親タブから認証情報を受信しました。接続中…`
+        infoEl.textContent = t('terminal.parentTabReceived')
         usedPendingCreds = true
         credsWrap.classList.add('hidden')
         shellWrap.classList.remove('hidden')
@@ -668,16 +669,16 @@ export function renderTerminalPage(container) {
 
       if (!usernameInput.value.trim()) {
         connectBtn.disabled = false
-        infoEl.textContent = '親タブから認証情報を受信しましたが、ユーザー名が空でした。入力して接続してください。'
+        infoEl.textContent = t('terminal.parentTabReceivedNoUser')
         return
       }
       if (!passwordInput.value) {
         connectBtn.disabled = false
-        infoEl.textContent = `親タブからユーザー名「${usernameInput.value.trim()}」を受信しました。パスワードが空のため、この画面で入力して接続してください。`
+        infoEl.textContent = t('terminal.parentTabReceivedNoPassword', { user: usernameInput.value.trim() })
         return
       }
 
-      infoEl.textContent = `親タブから認証情報を受信しました。接続中…`
+      infoEl.textContent = t('terminal.parentTabReceived')
       connectWithCredentials(usernameInput.value, passwordInput.value, name, desc, passphrase)
     }
 
@@ -738,7 +739,7 @@ export function renderTerminalPage(container) {
     attachWsToTerm(ws)
     if (isTelnet && term && !term._vantyxTelnetHint) {
       term._vantyxTelnetHint = true
-      term.write('\r\n\x1b[33m[接続済み]\x1b[0m Telnet に接続しました。ログイン画面が表示されない場合はキーボードで Enter を押すか、保存済み認証のユーザー名・パスワードを確認してください。\r\n')
+      term.write(`\r\n\x1b[33m${t('terminal.telnetHint')}\x1b[0m\r\n`)
     }
   }
 

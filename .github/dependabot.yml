@@ -1,45 +1,75 @@
+# Dependabot configuration tuned for a single-maintainer project:
+# group all minor/patch updates per ecosystem into one PR, keep open
+# PR limits low, and only open separate PRs for major upgrades.
 version: 2
 updates:
   - package-ecosystem: gomod
     directory: "/"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
     labels:
       - dependencies
       - go
+    groups:
+      go-deps:
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: npm
     directory: "/web"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
     labels:
       - dependencies
       - javascript
+    groups:
+      web-deps:
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: npm
     directory: "/e2e"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
     labels:
       - dependencies
       - javascript
       - e2e
+    groups:
+      e2e-deps:
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
     labels:
       - dependencies
       - ci
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: docker
     directory: "/"
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
     labels:
       - dependencies
       - docker
+    groups:
+      docker:
+        update-types:
+          - minor
+          - patch

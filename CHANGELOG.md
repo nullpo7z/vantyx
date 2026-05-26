@@ -36,6 +36,10 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
   style linters (`revive` godoc requirements, `gocyclo`, `unparam`,
   `nilerr`) are off so PRs are not blocked on style nits unrelated to
   the change.
+- Deps: `.github/dependabot.yml` now groups all minor/patch updates
+  per ecosystem (gomod / npm web / npm e2e / github-actions / docker)
+  into a single PR each, and lowers `open-pull-requests-limit` from
+  10/10/5/—/— to 3/3/2/2/2. Major upgrades still open separate PRs.
 - CI: split the workflow so per-PR runs only execute the fast gates
   (`lint-go`, `lint-fe`, `test-go`). The slower `link-check`,
   `security-scan` (Trivy + gosec), and `build-docker` jobs moved to a

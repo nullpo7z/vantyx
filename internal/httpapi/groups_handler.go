@@ -41,7 +41,7 @@ type setTagsRequest struct {
 func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -130,13 +130,13 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 
 	var req createGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	req.Path = normalizeTargetPath(req.Path)
 	if req.Name == "" {
-		writeJSONError(w, "name is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "groups.nameRequired", http.StatusBadRequest)
 		return
 	}
 
@@ -154,10 +154,14 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			break
 		}
-		if !errors.Is(err, access.ErrGroupExists) {
-			writeInternalError(w, err)
+		if errors.Is(err, access.ErrGroupExists) {
+			continue
+		}
+		if writeAccessValidationError(w, r, err) {
 			return
 		}
+		writeInternalError(w, err)
+		return
 	}
 	if err := a.AccessGroupStore.AddUserToGroup(ctx, access.UserID(userID), access.GroupID(id)); err != nil {
 		writeInternalError(w, err)
@@ -176,7 +180,7 @@ func (a *App) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	groupID := chi.URLParam(r, "group_id")
 	if groupID == "" {
-		writeJSONError(w, "group_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()
@@ -211,27 +215,27 @@ func (a *App) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 	groupID := chi.URLParam(r, "group_id")
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
-		writeJSONError(w, "group_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
 	}
 	var req addGroupMemberRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	req.UserID = strings.TrimSpace(req.UserID)
 	if req.UserID == "" {
-		writeJSONError(w, "user_id is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "groups.userIDRequired", http.StatusBadRequest)
 		return
 	}
 	if _, err := a.UserStore.GetByID(req.UserID); err != nil {
-		writeJSONError(w, "user not found", http.StatusNotFound)
+		writeJSONErrorKey(w, r, "users.userNotFound", http.StatusNotFound)
 		return
 	}
 	ctx := r.Context()
 	if _, err := a.AccessGroupStore.Get(ctx, access.GroupID(groupID)); err != nil {
 		if errors.Is(err, access.ErrGroupNotFound) {
-			writeJSONError(w, "group not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "groups.notFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)
@@ -255,13 +259,13 @@ func (a *App) handleRemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 	groupID = strings.TrimSpace(groupID)
 	userID = strings.TrimSpace(userID)
 	if groupID == "" || userID == "" {
-		writeJSONError(w, "group_id and user_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "groups.groupAndUserIDRequired", http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()
 	if err := a.AccessGroupStore.RemoveUserFromGroup(ctx, access.UserID(userID), access.GroupID(groupID)); err != nil {
 		if errors.Is(err, access.ErrGroupNotFound) {
-			writeJSONError(w, "group not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "groups.notFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)
@@ -276,7 +280,7 @@ func (a *App) handleGroupTags(w http.ResponseWriter, r *http.Request) {
 	groupID := chi.URLParam(r, "group_id")
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
-		writeJSONError(w, "group_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()
@@ -286,7 +290,7 @@ func (a *App) handleGroupTags(w http.ResponseWriter, r *http.Request) {
 	tags, err := a.AccessGroupStore.TagsForGroup(ctx, access.GroupID(groupID))
 	if err != nil {
 		if errors.Is(err, access.ErrGroupNotFound) {
-			writeJSONError(w, "group not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "groups.notFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)
@@ -303,7 +307,7 @@ func (a *App) handleSetGroupTags(w http.ResponseWriter, r *http.Request) {
 	groupID := chi.URLParam(r, "group_id")
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
-		writeJSONError(w, "group_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()
@@ -312,18 +316,23 @@ func (a *App) handleSetGroupTags(w http.ResponseWriter, r *http.Request) {
 	}
 	var req setTagsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	if req.Tags == nil {
 		req.Tags = []string{}
 	}
 	if err := a.AccessGroupStore.SetGroupTags(ctx, access.GroupID(groupID), req.Tags); err != nil {
-		if errors.Is(err, access.ErrGroupNotFound) {
-			writeJSONError(w, "group not found", http.StatusNotFound)
-			return
+		switch {
+		case errors.Is(err, access.ErrGroupNotFound):
+			writeJSONErrorKey(w, r, "groups.notFound", http.StatusNotFound)
+		case errors.Is(err, access.ErrTagLength):
+			writeJSONErrorKey(w, r, "tags.lengthInvalid", http.StatusBadRequest)
+		case errors.Is(err, access.ErrTagChars):
+			writeJSONErrorKey(w, r, "tags.charsInvalid", http.StatusBadRequest)
+		default:
+			writeInternalError(w, err)
 		}
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

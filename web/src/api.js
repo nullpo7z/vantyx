@@ -54,6 +54,27 @@ const API = {
   },
 
   /**
+   * Persist the current user's UI locale preference. Pass an empty
+   * string to clear the preference (the SPA then uses its own default).
+   *
+   * @param {string} locale - One of `''`, `'en'`, `'ja'`.
+   * @returns {Promise<{locale: string}>}
+   */
+  async updateLocale(locale) {
+    const res = await fetch('/api/me/locale', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ locale: locale || '' }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to update locale')
+    }
+    return res.json()
+  },
+
+  /**
    * Invalidate the current session server-side and clear the cookie.
    *
    * @returns {Promise<void>}

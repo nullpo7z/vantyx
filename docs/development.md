@@ -163,5 +163,13 @@ emitting code.
 
 ## Releases
 
-See [`CHANGELOG.md`](../CHANGELOG.md) and the **Releases** section in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md#releases).
+Releases follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
+[Semantic Versioning](https://semver.org/). To cut one:
+
+1. Move the entries under `Unreleased` in [`CHANGELOG.md`](../CHANGELOG.md)
+   into a new dated `X.Y.Z` section.
+2. Tag the commit `vX.Y.Z`.
+3. Draft a GitHub Release with the changelog section as the description.
+
+Until `1.0.0`, the project uses `0.y.z` pre-release versioning and breaking
+changes can land in any `0.y` bump.

@@ -3,6 +3,8 @@
  * app.js のホーム「接続」と同様に BroadcastChannel + use_stored_credentials を使う。
  */
 
+import { t } from './i18n.js'
+
 export function randomToken() {
   const b = new Uint8Array(16)
   crypto.getRandomValues(b)
@@ -143,7 +145,7 @@ export async function openTerminalForTarget(API, opts) {
     const items = Array.isArray(res?.items) ? res.items : []
     target = items.find((t) => t.id === targetId) || null
   } catch (err) {
-    alert(err.message || 'ターゲット情報の取得に失敗しました')
+    alert(err.message || t('terminalLaunch.targetFetchFailed'))
     return
   }
 

@@ -11,7 +11,10 @@ import (
 // bcryptCost is the cost passed to bcrypt; may be overridden in tests to trigger error paths.
 var bcryptCost = bcrypt.DefaultCost
 
-const minPasswordLength = 8
+// MinPasswordLength is the minimum acceptable length for a user
+// password (ASVS V2.3). HTTP handlers reference this when formatting
+// the localized "password too short" message.
+const MinPasswordLength = 8
 
 var (
 	ErrEmptyPassword     = errors.New("password must not be empty")
@@ -27,7 +30,7 @@ func ValidatePassword(plain string) error {
 	if plain == "" {
 		return ErrEmptyPassword
 	}
-	if len(plain) < minPasswordLength {
+	if len(plain) < MinPasswordLength {
 		return ErrPasswordTooShort
 	}
 	var hasUpper, hasLower, hasDigit, hasSpecial bool

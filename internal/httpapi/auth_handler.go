@@ -22,12 +22,21 @@ type loginResponse struct {
 	UserID                string `json:"user_id"`
 	Username              string `json:"username"`
 	Role                  string `json:"role"`
+	Locale                string `json:"locale,omitempty"`
 	RequirePasswordChange bool   `json:"require_password_change,omitempty"`
 }
 
 type changePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
+}
+
+type updateLocaleRequest struct {
+	Locale string `json:"locale"`
+}
+
+type localeResponse struct {
+	Locale string `json:"locale"`
 }
 
 type sshKeyResponse struct {
@@ -51,7 +60,7 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 			audit("login_rate_limited", auditFields{
 				"ip": ip,
 			})
-			writeJSONError(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
+			writeJSONErrorKey(w, r, "auth.tooManyAttempts", http.StatusTooManyRequests)
 			return
 		}
 	}
@@ -62,7 +71,7 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 			"username": req.Username,
 			"reason":   "invalid_request_body",
 		})
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	u, err := a.UserStore.Authenticate(req.Username, req.Password)
@@ -74,7 +83,7 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 			"username": req.Username,
 			"reason":   "invalid_credentials",
 		})
-		writeJSONError(w, "invalid credentials", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "auth.invalidCredentials", http.StatusUnauthorized)
 		return
 	}
 
@@ -85,7 +94,7 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 			"reason":   "session_create_failed",
 			"error":    err.Error(),
 		})
-		writeJSONError(w, "failed to create session", http.StatusInternalServerError)
+		writeJSONErrorKey(w, r, "auth.sessionCreateFailed", http.StatusInternalServerError)
 		return
 	}
 	audit("login_success", auditFields{
@@ -117,6 +126,7 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		UserID:                u.ID,
 		Username:              u.Username,
 		Role:                  u.Role,
+		Locale:                u.Locale,
 		RequirePasswordChange: requireChange,
 	})
 }
@@ -147,12 +157,12 @@ func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	u, err := a.UserStore.GetByID(userID)
 	if err != nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if u.Role == "" {
@@ -165,37 +175,86 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 		UserID:   u.ID,
 		Username: u.Username,
 		Role:     u.Role,
+		Locale:   u.Locale,
 	})
+}
+
+// handleUpdateLocale persists the current user's UI locale preference.
+// Pass {"locale":""} to clear the preference (frontend default applies).
+func (a *App) handleUpdateLocale(w http.ResponseWriter, r *http.Request) {
+	userID := strings.TrimSpace(a.currentUserID(r))
+	if userID == "" {
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req updateLocaleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
+		return
+	}
+	loc, err := auth.NormalizeUILocale(req.Locale)
+	if err != nil {
+		writeJSONErrorKey(w, r, "auth.unsupportedLocale", http.StatusBadRequest)
+		return
+	}
+	if err := a.UserStore.UpdateLocale(userID, loc); err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if errors.Is(err, auth.ErrInvalidLocale) {
+			writeJSONErrorKey(w, r, "auth.unsupportedLocale", http.StatusBadRequest)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	audit("user_locale_update", auditFields{
+		"user_id": userID,
+		"locale":  loc,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(localeResponse{Locale: loc})
 }
 
 // handleChangePassword updates the current user's password.
 func (a *App) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	userID := a.currentUserID(r)
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	var req changePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	err := a.UserStore.UpdatePassword(userID, req.CurrentPassword, req.NewPassword)
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrWrongPassword):
-			writeJSONError(w, "current password is wrong", http.StatusUnauthorized)
-			return
+			writeJSONErrorKey(w, r, "auth.currentPasswordWrong", http.StatusUnauthorized)
 		case errors.Is(err, auth.ErrPasswordUnchanged):
-			writeJSONError(w, "new password must differ from current", http.StatusBadRequest)
-			return
+			writeJSONErrorKey(w, r, "auth.passwordUnchanged", http.StatusBadRequest)
 		case errors.Is(err, auth.ErrUserNotFound):
-			writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-			return
+			writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
+		case errors.Is(err, auth.ErrEmptyPassword):
+			writeJSONErrorKey(w, r, "auth.passwordEmpty", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordTooShort):
+			writeJSONErrorKey(w, r, "auth.passwordTooShort", http.StatusBadRequest, "min", auth.MinPasswordLength)
+		case errors.Is(err, auth.ErrPasswordNoUpper):
+			writeJSONErrorKey(w, r, "auth.passwordNoUpper", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordNoLower):
+			writeJSONErrorKey(w, r, "auth.passwordNoLower", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordNoDigit):
+			writeJSONErrorKey(w, r, "auth.passwordNoDigit", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordNoSpecial):
+			writeJSONErrorKey(w, r, "auth.passwordNoSpecial", http.StatusBadRequest)
 		default:
-			writeJSONError(w, err.Error(), http.StatusBadRequest)
-			return
+			writeInternalError(w, err)
 		}
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -234,21 +293,21 @@ func (a *App) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	userID := a.currentUserID(r)
 	var req addSSHKeyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	if req.AuthorizedKey == "" {
-		writeJSONError(w, "authorized_key is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "auth.sshKeyAuthorizedKeyReq", http.StatusBadRequest)
 		return
 	}
 	id, err := a.UserStore.AddPublicKey(userID, req.AuthorizedKey)
 	if err != nil {
 		if errors.Is(err, auth.ErrInvalidPublicKey) {
-			writeJSONError(w, "invalid SSH public key", http.StatusBadRequest)
+			writeJSONErrorKey(w, r, "auth.invalidSSHKey", http.StatusBadRequest)
 			return
 		}
 		if errors.Is(err, auth.ErrUserNotFound) {
-			writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+			writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 			return
 		}
 		writeInternalError(w, err)
@@ -269,13 +328,13 @@ func (a *App) handleDeleteSSHKey(w http.ResponseWriter, r *http.Request) {
 	keyIDStr := chi.URLParam(r, "key_id")
 	keyID, err := strconv.ParseInt(keyIDStr, 10, 64)
 	if err != nil || keyID <= 0 {
-		writeJSONError(w, "invalid key_id", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "auth.sshKeyIDInvalid", http.StatusBadRequest)
 		return
 	}
 	err = a.UserStore.DeletePublicKey(userID, keyID)
 	if err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
-			writeJSONError(w, "key not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "auth.sshKeyNotFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)
@@ -292,7 +351,7 @@ func (a *App) handleListUserSSHKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := strings.TrimSpace(chi.URLParam(r, "user_id"))
 	if userID == "" {
-		writeJSONError(w, "user_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "users.idRequired", http.StatusBadRequest)
 		return
 	}
 	keys, err := a.UserStore.ListPublicKeys(userID)
@@ -321,26 +380,26 @@ func (a *App) handleAddUserSSHKey(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := strings.TrimSpace(chi.URLParam(r, "user_id"))
 	if userID == "" {
-		writeJSONError(w, "user_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "users.idRequired", http.StatusBadRequest)
 		return
 	}
 	var req addSSHKeyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	if req.AuthorizedKey == "" {
-		writeJSONError(w, "authorized_key is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "auth.sshKeyAuthorizedKeyReq", http.StatusBadRequest)
 		return
 	}
 	id, err := a.UserStore.AddPublicKey(userID, req.AuthorizedKey)
 	if err != nil {
 		if errors.Is(err, auth.ErrInvalidPublicKey) {
-			writeJSONError(w, "invalid SSH public key", http.StatusBadRequest)
+			writeJSONErrorKey(w, r, "auth.invalidSSHKey", http.StatusBadRequest)
 			return
 		}
 		if errors.Is(err, auth.ErrUserNotFound) {
-			writeJSONError(w, "user not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "users.userNotFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)
@@ -359,19 +418,19 @@ func (a *App) handleDeleteUserSSHKey(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := strings.TrimSpace(chi.URLParam(r, "user_id"))
 	if userID == "" {
-		writeJSONError(w, "user_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "users.idRequired", http.StatusBadRequest)
 		return
 	}
 	keyIDStr := chi.URLParam(r, "key_id")
 	keyID, err := strconv.ParseInt(keyIDStr, 10, 64)
 	if err != nil || keyID <= 0 {
-		writeJSONError(w, "invalid key_id", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "auth.sshKeyIDInvalid", http.StatusBadRequest)
 		return
 	}
 	err = a.UserStore.DeletePublicKey(userID, keyID)
 	if err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
-			writeJSONError(w, "key not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "auth.sshKeyNotFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)

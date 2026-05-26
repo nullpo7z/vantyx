@@ -1,4 +1,5 @@
 import API from './api.js'
+import { t } from './i18n.js'
 import {
   buildSessionsTableHTML,
   bindSessionListActions,
@@ -24,15 +25,15 @@ function isActiveTransfer(state) {
 function transferStateLabel(state) {
   switch (state) {
     case 'receiving':
-      return '受信中…'
+      return t('sessions.transferReceiving')
     case 'running':
-      return '転送中…'
+      return t('sessions.transferRunning')
     case 'completed':
-      return '完了'
+      return t('sessions.transferCompleted')
     case 'failed':
-      return 'エラー'
+      return t('sessions.transferFailed')
     case 'cancelled':
-      return 'キャンセル'
+      return t('sessions.transferCancelled')
     default:
       return state
   }
@@ -83,27 +84,27 @@ export async function renderSessionsPage({
     <div class="w-full max-w-6xl mx-auto flex flex-col gap-4">
       <div class="flex items-start justify-between gap-4">
         <div class="min-w-0">
-          <h2 class="text-lg font-semibold text-slate-800 leading-normal">継続中のセッション</h2>
-          <p class="text-sm text-slate-500 mt-1 leading-normal">バックグラウンドで動作中のターミナル・RDP セッションとファイル転送です。再接続・終了・転送の中止ができます。</p>
+          <h2 class="text-lg font-semibold text-slate-800 leading-normal">${t('sessions.pageTitle')}</h2>
+          <p class="text-sm text-slate-500 mt-1 leading-normal">${t('sessions.pageIntro')}</p>
         </div>
-        <button type="button" id="sessions-refresh-btn" class="shrink-0 rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm">更新</button>
+        <button type="button" id="sessions-refresh-btn" class="shrink-0 rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm">${t('sessions.refresh')}</button>
       </div>
       <div id="sessions-idle-banner" class="hidden rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 leading-normal"></div>
       <section class="bg-white rounded-lg border border-slate-200 shadow-sm">
         <div class="px-4 py-3 border-b border-slate-200">
-          <h3 class="text-sm font-semibold text-slate-800">ターミナル / RDP</h3>
+          <h3 class="text-sm font-semibold text-slate-800">${t('sessions.sectionTerminalRdp')}</h3>
         </div>
         <div id="sessions-table-wrap">
-          <p class="text-slate-500 p-6 text-sm leading-normal">読み込み中…</p>
+          <p class="text-slate-500 p-6 text-sm leading-normal">${t('common.loading')}</p>
         </div>
       </section>
       <section class="bg-white rounded-lg border border-slate-200 shadow-sm">
         <div class="px-4 py-3 border-b border-slate-200">
-          <h3 class="text-sm font-semibold text-slate-800">ファイル転送</h3>
-          <p class="text-xs text-slate-500 mt-0.5 leading-normal">画面を離脱しても転送中（running）はサーバー側で継続します。アップロードの受信（receiving）中は離脱に注意してください。</p>
+          <h3 class="text-sm font-semibold text-slate-800">${t('sessions.sectionFileTransfers')}</h3>
+          <p class="text-xs text-slate-500 mt-0.5 leading-normal">${t('sessions.fileTransfersIntro')}</p>
         </div>
         <div id="file-transfers-table-wrap">
-          <p class="text-slate-500 p-6 text-sm leading-normal">読み込み中…</p>
+          <p class="text-slate-500 p-6 text-sm leading-normal">${t('common.loading')}</p>
         </div>
       </section>
     </div>
@@ -118,13 +119,13 @@ export async function renderSessionsPage({
     const jobs = transfersToShow(getFileTransferJobs())
     if (jobs.length === 0) {
       transfersWrap.innerHTML =
-        '<p class="text-slate-500 p-8 text-center text-sm leading-normal">進行中または直近のファイル転送はありません。</p>'
+        `<p class="text-slate-500 p-8 text-center text-sm leading-normal">${t('sessions.noTransfers')}</p>`
       return
     }
     const rows = jobs
       .map((j) => {
         const pct = transferPercent(j)
-        const dir = j.direction === 'upload' ? '↑ アップロード' : '↓ ダウンロード'
+        const dir = j.direction === 'upload' ? t('sessions.directionUpload') : t('sessions.directionDownload')
         const active = isActiveTransfer(j.state)
         const errCls = j.state === 'failed' ? 'text-red-600' : 'text-slate-700'
         return `
@@ -144,7 +145,7 @@ export async function renderSessionsPage({
               ${j.error ? `<div class="text-xs text-red-600 mt-0.5 truncate" title="${escapeHtml(j.error)}">${escapeHtml(j.error)}</div>` : ''}
             </td>
             <td class="px-4 py-2.5 text-sm whitespace-nowrap">
-              ${active ? `<button type="button" class="cancel-file-transfer text-xs text-slate-600 hover:text-red-600" data-id="${escapeHtml(j.id)}">中止</button>` : ''}
+              ${active ? `<button type="button" class="cancel-file-transfer text-xs text-slate-600 hover:text-red-600" data-id="${escapeHtml(j.id)}">${t('sessions.cancelTransfer')}</button>` : ''}
             </td>
           </tr>
         `
@@ -155,10 +156,10 @@ export async function renderSessionsPage({
         <table class="w-full text-left text-sm border-collapse">
           <thead class="bg-slate-50 border-b border-slate-200">
             <tr>
-              <th class="px-4 py-2 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">方向</th>
-              <th class="px-4 py-2 text-left text-xs font-semibold text-slate-700">ファイル / ターゲット</th>
-              <th class="px-4 py-2 text-left text-xs font-semibold text-slate-700">進捗</th>
-              <th class="px-4 py-2 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">操作</th>
+              <th class="px-4 py-2 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">${t('sessions.headerDirection')}</th>
+              <th class="px-4 py-2 text-left text-xs font-semibold text-slate-700">${t('sessions.headerFileTarget')}</th>
+              <th class="px-4 py-2 text-left text-xs font-semibold text-slate-700">${t('sessions.headerProgress')}</th>
+              <th class="px-4 py-2 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">${t('common.actions')}</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
@@ -173,7 +174,7 @@ export async function renderSessionsPage({
           await cancelBackgroundTransfer(id)
           renderTransfers()
         } catch (err) {
-          alert(err.message || '転送の中止に失敗しました')
+          alert(err.message || t('sessions.cancelTransferFailed'))
         }
       })
     })
@@ -190,14 +191,14 @@ export async function renderSessionsPage({
       if (idleBanner) {
         if (idleN > 0) {
           idleBanner.classList.remove('hidden')
-          idleBanner.textContent = `${idleN} 件のセッションが長時間無活動です。必要に応じて再接続するか、終了してください。`
+          idleBanner.textContent = t('sessions.idleBanner', { count: idleN })
         } else {
           idleBanner.classList.add('hidden')
         }
       }
       if (sessions.length === 0 && rdpSessions.length === 0) {
         tableWrap.innerHTML =
-          '<p class="text-slate-500 p-8 text-center text-sm leading-normal">継続中のターミナル / RDP セッションはありません。</p>'
+          `<p class="text-slate-500 p-8 text-center text-sm leading-normal">${t('sessions.noTerminalRdp')}</p>`
       } else {
         const { body } = buildSessionsTableHTML(sessions, rdpSessions, escapeHtml)
         tableWrap.innerHTML = `
@@ -205,12 +206,12 @@ export async function renderSessionsPage({
           <table class="w-full text-left text-sm border-collapse">
             <thead class="bg-slate-50 border-b border-slate-200">
               <tr>
-                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">名前</th>
-                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-700 min-w-[8rem]">説明</th>
-                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-700 whitespace-nowrap" title="階層パスとターゲット名（例: prod/network/router1）">ターゲット</th>
-                <th class="sessions-col-shrink px-2 py-3 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">種別</th>
-                <th class="sessions-col-shrink px-2 py-3 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">最終活動</th>
-                <th class="sessions-col-actions px-2 py-3 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">操作</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">${t('common.name')}</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-700 min-w-[8rem]">${t('common.description')}</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-700 whitespace-nowrap" title="prod/network/router1">${t('common.target')}</th>
+                <th class="sessions-col-shrink px-2 py-3 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">${t('sessions.headerType')}</th>
+                <th class="sessions-col-shrink px-2 py-3 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">${t('sessions.headerLastActivity')}</th>
+                <th class="sessions-col-actions px-2 py-3 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">${t('common.actions')}</th>
               </tr>
             </thead>
             <tbody>${body}</tbody>
@@ -228,7 +229,7 @@ export async function renderSessionsPage({
       await refreshFileTransfers()
       renderTransfers()
     } catch (err) {
-      tableWrap.innerHTML = `<p class="text-red-600 p-6 text-sm leading-normal">${escapeHtml(err.message || 'セッション一覧の取得に失敗しました。')}</p>`
+      tableWrap.innerHTML = `<p class="text-red-600 p-6 text-sm leading-normal">${escapeHtml(err.message || t('sessions.loadFailed', { error: '' }).replace(/:\s*$/, ''))}</p>`
     }
   }
 

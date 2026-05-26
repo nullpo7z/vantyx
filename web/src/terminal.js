@@ -2,6 +2,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
+import { t } from './i18n.js'
 
 /**
  * Opens a terminal modal: first shows a form for target SSH credentials,
@@ -26,20 +27,20 @@ export function openTerminal(container, targetId, targetName) {
         
         <form id="terminal-credentials" class="flex flex-col">
           <div class="px-6 py-5 space-y-5">
-            <p class="text-sm text-slate-600">ターゲットの SSH 認証情報を入力してください。</p>
+            <p class="text-sm text-slate-600">${t('terminal.legacyIntro')}</p>
             <div>
-              <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH ユーザー名</label>
-              <input type="text" id="term-username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="例: root" />
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('terminal.sshUsername')}</label>
+              <input type="text" id="term-username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="root" />
             </div>
             <div>
-              <label class="block text-xs font-medium text-slate-600 mb-1.5">SSH パスワード</label>
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('terminal.sshPassword')}</label>
               <input type="password" id="term-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
             </div>
             <p id="terminal-connect-error" class="text-sm text-red-600 hidden"></p>
           </div>
           <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-            <button type="button" id="terminal-cancel-btn" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">キャンセル</button>
-            <button type="submit" id="terminal-connect-btn" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">接続</button>
+            <button type="button" id="terminal-cancel-btn" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('terminal.cancel')}</button>
+            <button type="submit" id="terminal-connect-btn" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('terminal.connect')}</button>
           </div>
         </form>
         
@@ -73,7 +74,7 @@ export function openTerminal(container, targetId, targetName) {
     const username = modal.querySelector('#term-username').value.trim()
     const password = modal.querySelector('#term-password').value
     if (!username) {
-      errorEl.textContent = 'ユーザー名を入力してください'
+      errorEl.textContent = t('terminal.usernameRequired')
       errorEl.classList.remove('hidden')
       return
     }
@@ -113,13 +114,13 @@ export function openTerminal(container, targetId, targetName) {
     }
 
     ws.onerror = () => {
-      errorEl.textContent = 'WebSocket 接続に失敗しました。バックエンドが起動しているか確認してください。'
+      errorEl.textContent = t('terminal.wsConnectFailed')
       errorEl.classList.remove('hidden')
       connectBtn.disabled = false
     }
 
     ws.onclose = () => {
-      if (term) term.write('\r\n\n[接続が閉じられました]\r\n')
+      if (term) term.write(`\r\n\n${t('terminal.closed')}\r\n`)
       connectBtn.disabled = false
     }
   })

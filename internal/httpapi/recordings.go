@@ -26,7 +26,7 @@ import (
 func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if a.DB == nil {
@@ -44,7 +44,7 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if u == nil || u.Role != auth.RoleAdmin {
-			writeJSONError(w, "forbidden: admin only", http.StatusForbidden)
+			writeJSONErrorKey(w, r, "common.forbiddenAdminOnly", http.StatusForbidden)
 			return
 		}
 		filterUserID = requestedUser
@@ -52,7 +52,7 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 
 	from, to, err := parseTimeRange(q.Get("from"), q.Get("to"), time.Now().UTC())
 	if err != nil {
-		writeTimeRangeError(w, err)
+		writeTimeRangeError(w, r, err)
 		return
 	}
 
@@ -123,12 +123,12 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	rawID := chi.URLParam(r, "recording_id")
 	if rawID == "" {
-		writeJSONError(w, "recording_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "recordings.idRequired", http.StatusBadRequest)
 		return
 	}
 	recordingID := rawID
@@ -142,17 +142,17 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 	switch format {
 	case "cast", "gif", "webm":
 	default:
-		writeJSONError(w, "format must be cast, gif, or webm", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "recordings.formatInvalid", http.StatusBadRequest)
 		return
 	}
 	if a.DB == nil {
-		writeJSONError(w, "recordings not available", http.StatusServiceUnavailable)
+		writeJSONErrorKey(w, r, "recordings.notAvailable", http.StatusServiceUnavailable)
 		return
 	}
 	var filePath string
 	err := a.DB.QueryRowContext(r.Context(), `SELECT file_path FROM recordings WHERE id = ? AND user_id = ?`, recordingID, userID).Scan(&filePath)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeJSONError(w, "recording not found", http.StatusNotFound)
+		writeJSONErrorKey(w, r, "recordings.notFound", http.StatusNotFound)
 		return
 	}
 	if err != nil {
@@ -161,22 +161,22 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 	}
 	recordingDir := os.Getenv("VANTYX_RECORDINGS_DIR")
 	if recordingDir == "" {
-		writeJSONError(w, "recordings not configured", http.StatusServiceUnavailable)
+		writeJSONErrorKey(w, r, "recordings.notConfigured", http.StatusServiceUnavailable)
 		return
 	}
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
-		writeJSONError(w, "invalid path", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidPath", http.StatusBadRequest)
 		return
 	}
 	absDir, err := filepath.Abs(recordingDir)
 	if err != nil {
-		writeJSONError(w, "invalid path", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidPath", http.StatusBadRequest)
 		return
 	}
 	rel, err := filepath.Rel(absDir, absPath)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		writeJSONError(w, "invalid path", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidPath", http.StatusBadRequest)
 		return
 	}
 	tryOpen := func(path string) (*os.File, error) {
@@ -204,7 +204,7 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
-		writeJSONError(w, "recording file not found", http.StatusNotFound)
+		writeJSONErrorKey(w, r, "recordings.fileNotFound", http.StatusNotFound)
 		return
 	}
 	if format == "cast" {
@@ -223,13 +223,13 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 			"format": format,
 			"error":  err.Error(),
 		})
-		writeJSONError(w, "video export unavailable: "+err.Error(), http.StatusServiceUnavailable)
+		writeJSONErrorKey(w, r, "recordings.videoUnavailable", http.StatusServiceUnavailable, "error", err)
 		return
 	}
 	defer os.Remove(outPath)
 	out, err := os.Open(outPath) // #nosec G304 -- path from convertCastToVideo (temp file we created).
 	if err != nil {
-		writeJSONError(w, "failed to read converted file", http.StatusInternalServerError)
+		writeJSONErrorKey(w, r, "recordings.convertReadFailed", http.StatusInternalServerError)
 		return
 	}
 	defer out.Close()

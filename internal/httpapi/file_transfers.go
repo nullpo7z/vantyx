@@ -28,12 +28,12 @@ const maxFileTransferMB = 64
 //nolint:gocyclo // listing builds up a multi-field filter from the query string.
 func (a *App) handleFileTransfersList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -81,27 +81,27 @@ func (a *App) handleFileTransfersList(w http.ResponseWriter, r *http.Request) {
 
 	states, err := parseFileTransferStates(q["state"])
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.invalidState", http.StatusBadRequest)
 		return
 	}
 	dir, err := parseFileTransferDirection(q.Get("direction"))
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.invalidDirection", http.StatusBadRequest)
 		return
 	}
 	backend, err := parseFileTransferBackend(q.Get("backend"))
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.invalidBackend", http.StatusBadRequest)
 		return
 	}
 	afterUpdated, afterID, err := decodeFileTransferCursor(q.Get("after_cursor"))
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.invalidCursor", http.StatusBadRequest)
 		return
 	}
 	from, to, err := parseTimeRange(q.Get("from"), q.Get("to"), time.Now().UTC())
 	if err != nil {
-		writeTimeRangeError(w, err)
+		writeTimeRangeError(w, r, err)
 		return
 	}
 
@@ -144,18 +144,18 @@ func (a *App) handleFileTransfersList(w http.ResponseWriter, r *http.Request) {
 // owner may read it.
 func (a *App) handleFileTransferGet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	id := chi.URLParam(r, "transfer_id")
 	j, ok := a.FileTransferManager.Get(id)
 	if !ok || j.UserID != userID {
-		writeJSONError(w, "not found", http.StatusNotFound)
+		writeJSONErrorKey(w, r, "common.notFound", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, j.Snapshot())
@@ -165,22 +165,22 @@ func (a *App) handleFileTransferGet(w http.ResponseWriter, r *http.Request) {
 // file. Only the owner may delete it.
 func (a *App) handleFileTransferDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	id := chi.URLParam(r, "transfer_id")
 	if err := a.FileTransferManager.Cancel(id, userID); err != nil {
 		if errors.Is(err, filetransfer.ErrNotFound) {
-			writeJSONError(w, "not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "common.notFound", http.StatusNotFound)
 			return
 		}
 		if errors.Is(err, filetransfer.ErrForbidden) {
-			writeJSONError(w, "forbidden", http.StatusForbidden)
+			writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 			return
 		}
 		writeInternalError(w, err)
@@ -197,33 +197,33 @@ func (a *App) handleFileTransferDelete(w http.ResponseWriter, r *http.Request) {
 // file. GET /api/file-transfers/{transfer_id}/content.
 func (a *App) handleFileTransferContent(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	id := chi.URLParam(r, "transfer_id")
 	j, ok := a.FileTransferManager.Get(id)
 	if !ok || j.UserID != userID {
-		writeJSONError(w, "not found", http.StatusNotFound)
+		writeJSONErrorKey(w, r, "common.notFound", http.StatusNotFound)
 		return
 	}
 	snap := j.Snapshot()
 	if snap.Direction != string(filetransfer.DirectionDownload) {
-		writeJSONError(w, "not a download transfer", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.notADownload", http.StatusBadRequest)
 		return
 	}
 	if snap.State != string(filetransfer.StateCompleted) {
-		writeJSONError(w, "transfer not ready", http.StatusConflict)
+		writeJSONErrorKey(w, r, "transfers.notReady", http.StatusConflict)
 		return
 	}
 	tempPath := j.GetTempPath()
 	fileName := j.GetFileName()
 	if tempPath == "" {
-		writeJSONError(w, "transfer not ready", http.StatusConflict)
+		writeJSONErrorKey(w, r, "transfers.notReady", http.StatusConflict)
 		return
 	}
 	f, err := os.Open(tempPath)
@@ -258,28 +258,28 @@ type fileTransferDownloadRequest struct {
 // POST /api/file-transfers/download.
 func (a *App) handleFileTransferStartDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	var req fileTransferDownloadRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid JSON", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidJSON", http.StatusBadRequest)
 		return
 	}
 	backend := filetransfer.Backend(strings.TrimSpace(req.Backend))
 	if backend != filetransfer.BackendRemote && backend != filetransfer.BackendTFTPServer {
-		writeJSONError(w, "backend must be remote or tftp_server", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.backendInvalid", http.StatusBadRequest)
 		return
 	}
 	targetID := strings.TrimSpace(req.TargetID)
 	pathParam := strings.TrimSpace(req.Path)
 	if targetID == "" || pathParam == "" {
-		writeJSONError(w, "target_id and path are required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.targetAndPathReq", http.StatusBadRequest)
 		return
 	}
 	if !path.IsAbs(pathParam) {
@@ -324,28 +324,28 @@ func (a *App) handleFileTransferStartDownload(w http.ResponseWriter, r *http.Req
 // POST /api/file-transfers/upload (multipart: backend, target_id, path, file).
 func (a *App) handleFileTransferUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxFileTransferMB<<20)
 	if err := r.ParseMultipartForm(maxFileTransferMB << 20); err != nil { // #nosec G120
-		writeJSONError(w, "invalid multipart form: "+err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "files.invalidMultipart", http.StatusBadRequest, "error", err)
 		return
 	}
 	backend := filetransfer.Backend(strings.TrimSpace(r.FormValue("backend")))
 	if backend != filetransfer.BackendRemote && backend != filetransfer.BackendTFTPServer {
-		writeJSONError(w, "backend must be remote or tftp_server", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.backendInvalid", http.StatusBadRequest)
 		return
 	}
 	targetID := strings.TrimSpace(r.FormValue("target_id"))
 	pathParam := strings.TrimSpace(r.FormValue("path"))
 	if targetID == "" || pathParam == "" {
-		writeJSONError(w, "target_id and path are required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.targetAndPathReq", http.StatusBadRequest)
 		return
 	}
 	if !path.IsAbs(pathParam) {
@@ -354,7 +354,7 @@ func (a *App) handleFileTransferUpload(w http.ResponseWriter, r *http.Request) {
 	pathParam = path.Clean(pathParam)
 	file, hdr, err := r.FormFile("file")
 	if err != nil {
-		writeJSONError(w, "file is required: "+err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "files.fileRequired", http.StatusBadRequest, "error", err)
 		return
 	}
 	defer file.Close()
@@ -363,11 +363,11 @@ func (a *App) handleFileTransferUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if backend == filetransfer.BackendRemote && !protocols.SupportsFileTransfer(target.Protocol) {
-		writeJSONError(w, "file transfer not supported for this target", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.notSupportedForTarget", http.StatusBadRequest)
 		return
 	}
 	if backend == filetransfer.BackendTFTPServer && !protocols.Supports(target.Protocol, protocols.CapabilityTFTPServer) {
-		writeJSONError(w, "target is not a TFTP server", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "tftp.notTFTPServer", http.StatusBadRequest)
 		return
 	}
 	fileName := path.Base(pathParam)
@@ -403,7 +403,7 @@ func (a *App) handleFileTransferUpload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		cancel()
 		a.failTransferJob(job, err.Error())
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 	job.SetTempPath(tempPath)

@@ -10,6 +10,8 @@ info:
     - ローカルユーザー認証 (POST /api/login) と Cookie セッション
     - 自己情報取得 (GET /api/me)。応答に user_id, username, role を含む。
     - パスワード変更 (POST /api/me/password)。認証済みユーザーが自分のパスワードを変更。
+    - UI ロケール設定 (PUT /api/me/locale)。`'' | en | ja` から選択し、サーバー側に永続化（ログイン応答 / GET /api/me の `locale` で取得）。
+    - エラーレスポンスの本文 (`message`) は呼び出し元のロケールで返ります。解決順は (1) 認証済みユーザーの保存済みロケール、(2) `Accept-Language` ヘッダー、(3) デフォルト英語、です。
     - SSH 公開鍵（管理者のみ）: ユーザー管理でユーザーに紐づけて登録。GET/POST/DELETE /api/users/{user_id}/ssh-keys（一覧・追加・削除）。従来の /api/me/ssh-keys は自分用（管理者のみ）。Vantyx CLI（ssh user@vantyx）の公開鍵認証用。
     - アクセスグループの一覧・作成 (GET/POST /api/groups)。一覧は limit / after_id でキーセットページネーション対応。
     - グループメンバー管理（管理者のみ）: GET/POST /api/groups/{group_id}/members、DELETE /api/groups/{group_id}/members/{user_id}。
@@ -44,9 +46,24 @@ components:
   schemas:
     ErrorResponse:
       type: object
+      description: |
+        エラー応答の汎用形式。`message` の文言は呼び出し元のロケール
+        (`users.locale` → `Accept-Language` → 既定 `en`) で localize されて返ります。
+        現在サポートしているロケールは `en` / `ja` です。
+        全ての API ハンドラ（auth, users, groups, targets, sessions, recordings,
+        files / file-transfers, tftp, settings など）の主要なエラー文言は
+        i18n カタログ経由で生成されます。time_range クエリ (from/to)、
+        protocol バリデーション、file-transfers の state/direction/backend/
+        after_cursor バリデーション、`/api/me/password` のポリシーチェック、
+        `proxyerrors`（TCP 接続失敗の SFTP / Telnet / SSH ターミナル
+        メッセージ）、および `internal/access` / `internal/auth` の
+        identifier / tag バリデーション (`validation.*`, `tags.*` キー群)
+        も localize されます。残余のシステム / DB エラーは
+        `common.internalError` で localize された 500 として返ります。
       properties:
         message:
           type: string
+          description: 人間可読のエラーメッセージ（ロケーライズ済み）。
       required:
         - message
     AuditEntry:
@@ -186,6 +203,13 @@ components:
           type: string
           enum: [admin, user]
           description: GET /api/me で返る。ログイン応答では省略される場合あり。
+        locale:
+          type: string
+          enum: ['', en, ja]
+          description: ユーザーが UI 設定として保存したロケール。空文字なら未設定で、クライアントは自身のデフォルト（英語）を使用する。
+        require_password_change:
+          type: boolean
+          description: 初期 admin パスワード等で要強制変更の場合 true。
       required:
         - user_id
         - username
@@ -258,6 +282,10 @@ components:
           type: string
           enum: [admin, user]
           description: 一覧で返る。作成応答では省略される場合あり。
+        locale:
+          type: string
+          enum: ['', en, ja]
+          description: 一覧で返る。ユーザーが UI 設定として保存したロケール。空文字なら未設定。
         tags:
           type: array
           items:
@@ -634,6 +662,50 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: 未認証または現在のパスワードが誤り
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/me/locale:
+    put:
+      summary: UI ロケール設定の更新
+      description: |
+        認証済みユーザーが自分の UI ロケール設定を更新します。
+        サポートする値は空文字（未設定。クライアントは自身のデフォルトを使用）、`en`、`ja` です。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [locale]
+              properties:
+                locale:
+                  type: string
+                  enum: ['', en, ja]
+      responses:
+        '200':
+          description: 保存されたロケール
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [locale]
+                properties:
+                  locale:
+                    type: string
+                    enum: ['', en, ja]
+        '400':
+          description: 未サポートのロケール
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
           content:
             application/json:
               schema:

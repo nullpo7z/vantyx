@@ -21,6 +21,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
+	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 )
 
 func newTestApp(t *testing.T) *App {
@@ -1150,6 +1151,93 @@ func TestApp_ChangePassword_Unauthorized(t *testing.T) {
 	}
 }
 
+// TestApp_UpdateLocale_RoundTrip verifies that PUT /api/me/locale persists the
+// user's locale and that subsequent login / GET /api/me reflect it.
+func TestApp_UpdateLocale_RoundTrip(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/me/locale", bytes.NewReader([]byte(`{"locale":"ja"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("PUT /api/me/locale expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+	var resp struct {
+		Locale string `json:"locale"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Locale != "ja" {
+		t.Fatalf("expected locale=ja in response, got %q", resp.Locale)
+	}
+
+	meReq := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	meReq.AddCookie(cookie)
+	meW := httptest.NewRecorder()
+	router.ServeHTTP(meW, meReq)
+	if meW.Result().StatusCode != http.StatusOK {
+		t.Fatalf("/api/me expected 200, got %d", meW.Result().StatusCode)
+	}
+	var me struct {
+		Locale string `json:"locale"`
+	}
+	_ = json.Unmarshal(meW.Body.Bytes(), &me)
+	if me.Locale != "ja" {
+		t.Fatalf("expected /api/me locale=ja, got %q", me.Locale)
+	}
+
+	clearReq := httptest.NewRequest(http.MethodPut, "/api/me/locale", bytes.NewReader([]byte(`{"locale":""}`)))
+	clearReq.Header.Set("Content-Type", "application/json")
+	clearReq.AddCookie(cookie)
+	clearW := httptest.NewRecorder()
+	router.ServeHTTP(clearW, clearReq)
+	if clearW.Result().StatusCode != http.StatusOK {
+		t.Fatalf("clearing locale expected 200, got %d", clearW.Result().StatusCode)
+	}
+}
+
+// TestApp_UpdateLocale_Validation rejects unsupported locale codes and
+// unauthenticated callers.
+func TestApp_UpdateLocale_Validation(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/me/locale", bytes.NewReader([]byte(`{"locale":"fr"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("unsupported locale expected 400, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+
+	bad := httptest.NewRequest(http.MethodPut, "/api/me/locale", bytes.NewReader([]byte("not json")))
+	bad.Header.Set("Content-Type", "application/json")
+	bad.AddCookie(cookie)
+	badW := httptest.NewRecorder()
+	router.ServeHTTP(badW, bad)
+	if badW.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid body expected 400, got %d", badW.Result().StatusCode)
+	}
+
+	unauthed := httptest.NewRequest(http.MethodPut, "/api/me/locale", bytes.NewReader([]byte(`{"locale":"ja"}`)))
+	unauthed.Header.Set("Content-Type", "application/json")
+	uw := httptest.NewRecorder()
+	router.ServeHTTP(uw, unauthed)
+	if uw.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated expected 401, got %d", uw.Result().StatusCode)
+	}
+}
+
 const testSSHAuthorizedKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl user@host"
 
 func TestApp_SSHKeys_List_Unauthorized(t *testing.T) {
@@ -1534,6 +1622,36 @@ func TestApp_Files_FactoryReturnsError(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", w.Result().StatusCode)
+	}
+}
+
+// TestApp_Files_FactoryDialErrorLocalized exercises the
+// proxyerrors.WrapTCPDialError → BridgeErrorKey → writeProxyError path
+// to confirm SFTP connect failures honor the caller's resolved locale.
+func TestApp_Files_FactoryDialErrorLocalized(t *testing.T) {
+	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	app.SFTPClientFactory = func(context.Context, *access.Target) (FileTransferClient, error) {
+		return nil, proxyerrors.WrapTCPDialError("SSH",
+			errors.New("dial tcp 10.0.0.1:22: connect: connection refused"))
+	}
+	if err := app.UserStore.UpdateLocale("admin", "ja"); err != nil {
+		t.Fatalf("UpdateLocale: %v", err)
+	}
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/"+targetID+"/files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadGateway {
+		t.Fatalf("status: got %d, want 502 (body=%s)", w.Result().StatusCode, w.Body.String())
+	}
+	msg := decodeErrorMessage(t, w.Body.Bytes())
+	if !strings.Contains(msg, "拒否") {
+		t.Fatalf("expected Japanese 'connection refused' wording, got %q", msg)
 	}
 }
 
@@ -3727,5 +3845,310 @@ func TestApp_ListUsers_InvalidPagination(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 (ignores bad params), got %d", w.Result().StatusCode)
+	}
+}
+
+// decodeErrorMessage returns the `message` field of an error response
+// body so locale-sensitive tests can read it concisely.
+func decodeErrorMessage(t *testing.T, body []byte) string {
+	t.Helper()
+	var er struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &er); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	return er.Message
+}
+
+// TestApp_ErrorMessage_AcceptLanguageJapanese exercises the locale
+// middleware via the Accept-Language header on an anonymous request.
+func TestApp_ErrorMessage_AcceptLanguageJapanese(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req.Header.Set("Accept-Language", "ja-JP, en;q=0.5")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Result().StatusCode)
+	}
+	msg := decodeErrorMessage(t, w.Body.Bytes())
+	// The Japanese phrase intentionally contains characters absent from
+	// the English message, so a simple containment check is enough.
+	if !strings.Contains(msg, "認証") {
+		t.Fatalf("expected Japanese 'unauthorized' message, got %q", msg)
+	}
+}
+
+// TestApp_ErrorMessage_AcceptLanguageEnglish ensures Accept-Language=en
+// continues to receive the English wording (default fallback).
+func TestApp_ErrorMessage_AcceptLanguageEnglish(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req.Header.Set("Accept-Language", "en-US")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if msg := decodeErrorMessage(t, w.Body.Bytes()); msg != "unauthorized" {
+		t.Fatalf("expected English message 'unauthorized', got %q", msg)
+	}
+}
+
+// TestApp_ErrorMessage_UserLocaleOverridesHeader pins the behavior
+// where an authenticated user's saved locale wins over the request's
+// Accept-Language header.
+func TestApp_ErrorMessage_UserLocaleOverridesHeader(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	// Default admin is created by NewApp(); persist a Japanese locale
+	// for them and reuse the cookie below.
+	if err := app.UserStore.UpdateLocale("admin", "ja"); err != nil {
+		t.Fatalf("UpdateLocale: %v", err)
+	}
+	sess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("SessionStore.Create: %v", err)
+	}
+
+	// Hit an admin-only path while pretending to be a regular user so
+	// the response is `forbidden: admin only`. Setting Accept-Language
+	// to English should be ignored in favor of the saved Japanese
+	// preference.
+	if _, err := app.UserStore.CreateUser("u1", "alice", "Alice1!x", "user"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	uSess, _ := app.SessionStore.Create("u1")
+	if err := app.UserStore.UpdateLocale("u1", "ja"); err != nil {
+		t.Fatalf("UpdateLocale u1: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req.Header.Set("Accept-Language", "en-US")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: uSess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Result().StatusCode)
+	}
+	if msg := decodeErrorMessage(t, w.Body.Bytes()); !strings.Contains(msg, "管理者") {
+		t.Fatalf("expected Japanese 'admin only' message, got %q", msg)
+	}
+
+	// And the admin session continues to receive Japanese too, even
+	// without an Accept-Language header.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/users", bytes.NewReader([]byte("not json")))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w2.Result().StatusCode)
+	}
+	if msg := decodeErrorMessage(t, w2.Body.Bytes()); !strings.Contains(msg, "リクエスト") {
+		t.Fatalf("expected Japanese 'invalid request body', got %q", msg)
+	}
+}
+
+// TestApp_ErrorMessage_LocalizedHandlers exercises a handful of
+// recently migrated handlers (groups / recordings / settings) to make
+// sure their error responses honor the locale resolved by the
+// session middleware.
+func TestApp_ErrorMessage_LocalizedHandlers(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	if err := app.UserStore.UpdateLocale("admin", "ja"); err != nil {
+		t.Fatalf("UpdateLocale: %v", err)
+	}
+	sess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("SessionStore.Create: %v", err)
+	}
+
+	// Pre-create resources needed by the validation-error subtests.
+	ctx := context.Background()
+	if _, err := app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1"); err != nil {
+		t.Fatalf("Create g1: %v", err)
+	}
+	if err := app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1")); err != nil {
+		t.Fatalf("AddUserToGroup: %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		method   string
+		path     string
+		body     string
+		wantCode int
+		wantSub  string
+	}{
+		{
+			name:     "groups: name is required (ja)",
+			method:   http.MethodPost,
+			path:     "/api/groups",
+			body:     `{"name":"  "}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "必須",
+		},
+		{
+			name:     "recordings: bad format",
+			method:   http.MethodGet,
+			path:     "/api/recordings/abc/file?format=mp4",
+			body:     "",
+			wantCode: http.StatusBadRequest,
+			wantSub:  "cast",
+		},
+		{
+			name:     "settings: invalid proto",
+			method:   http.MethodPut,
+			path:     "/api/settings/audit-forwarder",
+			body:     `{"config":{"proto":"sctp"}}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "プロトコル",
+		},
+		{
+			name:     "time_range: invalid from format",
+			method:   http.MethodGet,
+			path:     "/api/recordings?from=not-a-date",
+			body:     "",
+			wantCode: http.StatusBadRequest,
+			wantSub:  "RFC3339",
+		},
+		{
+			name:     "time_range: from after to",
+			method:   http.MethodGet,
+			path:     "/api/recordings?from=2026-05-10&to=2026-05-01",
+			body:     "",
+			wantCode: http.StatusBadRequest,
+			wantSub:  "from は to",
+		},
+		{
+			name:     "time_range: range too large",
+			method:   http.MethodGet,
+			path:     "/api/recordings?from=2026-01-01&to=2026-06-01",
+			body:     "",
+			wantCode: http.StatusBadRequest,
+			wantSub:  "90 日",
+		},
+		{
+			name:     "transfers: invalid state",
+			method:   http.MethodGet,
+			path:     "/api/file-transfers?state=bogus",
+			body:     "",
+			wantCode: http.StatusBadRequest,
+			wantSub:  "state",
+		},
+		{
+			name:     "transfers: invalid direction",
+			method:   http.MethodGet,
+			path:     "/api/file-transfers?direction=foo",
+			body:     "",
+			wantCode: http.StatusBadRequest,
+			wantSub:  "upload",
+		},
+		{
+			name:     "transfers: invalid backend",
+			method:   http.MethodGet,
+			path:     "/api/file-transfers?backend=foo",
+			body:     "",
+			wantCode: http.StatusBadRequest,
+			wantSub:  "remote",
+		},
+		{
+			name:     "transfers: invalid cursor",
+			method:   http.MethodGet,
+			path:     "/api/file-transfers?after_cursor=not-base64!!!",
+			body:     "",
+			wantCode: http.StatusBadRequest,
+			wantSub:  "after_id",
+		},
+		{
+			name:     "password: empty",
+			method:   http.MethodPost,
+			path:     "/api/me/password",
+			body:     `{"current_password":"admin","new_password":""}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "必須",
+		},
+		{
+			name:     "password: too short",
+			method:   http.MethodPost,
+			path:     "/api/me/password",
+			body:     `{"current_password":"admin","new_password":"Ab1!"}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "8 文字",
+		},
+		{
+			name:     "password: no upper",
+			method:   http.MethodPost,
+			path:     "/api/me/password",
+			body:     `{"current_password":"admin","new_password":"lowercase1!"}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "大文字",
+		},
+		{
+			name:     "password: no digit",
+			method:   http.MethodPost,
+			path:     "/api/me/password",
+			body:     `{"current_password":"admin","new_password":"Abcdefgh!"}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "数字",
+		},
+		{
+			name:     "password: no special",
+			method:   http.MethodPost,
+			path:     "/api/me/password",
+			body:     `{"current_password":"admin","new_password":"Abcdefg1"}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "記号",
+		},
+		{
+			name:     "tags: groups invalid tag chars",
+			method:   http.MethodPut,
+			path:     "/api/groups/g1/tags",
+			body:     `{"tags":["bad tag!"]}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "タグ",
+		},
+		{
+			name:     "users: createUser empty username",
+			method:   http.MethodPost,
+			path:     "/api/users",
+			body:     `{"id":"u1","username":"","password":"Abcdef1!"}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "ユーザー名",
+		},
+		{
+			name:     "users: tag length invalid (empty)",
+			method:   http.MethodPut,
+			path:     "/api/users/admin/tags",
+			body:     `{"tags":[""]}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "タグ",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var body io.Reader
+			if tc.body != "" {
+				body = bytes.NewReader([]byte(tc.body))
+			}
+			req := httptest.NewRequest(tc.method, tc.path, body)
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Result().StatusCode != tc.wantCode {
+				t.Fatalf("status: got %d, want %d (body=%s)", w.Result().StatusCode, tc.wantCode, w.Body.String())
+			}
+			if msg := decodeErrorMessage(t, w.Body.Bytes()); !strings.Contains(msg, tc.wantSub) {
+				t.Fatalf("expected localized message containing %q, got %q", tc.wantSub, msg)
+			}
+		})
 	}
 }

@@ -66,7 +66,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		audit("terminal_ws_unauthorized", auditFields{
 			"reason": "no_session_cookie",
 		})
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	sess, err := a.SessionStore.Get(cookie.Value)
@@ -74,7 +74,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		audit("terminal_ws_unauthorized", auditFields{
 			"reason": "invalid_session",
 		})
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -96,7 +96,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 			"target_id": targetID,
 			"protocol":  target.Protocol,
 		})
-		writeJSONError(w, "only SSH and Telnet targets supported", http.StatusNotImplemented)
+		writeJSONErrorKey(w, r, "sessions.onlySSHTelnet", http.StatusNotImplemented)
 		return
 	}
 
@@ -107,7 +107,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 			"target_id": targetID,
 			"error":     err.Error(),
 		})
-		writeJSONError(w, "failed to upgrade connection", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.failedUpgradeConnection", http.StatusBadRequest)
 		return
 	}
 
@@ -198,7 +198,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleTerminalAttach(w http.ResponseWriter, r *http.Request, userID, sessionIDParam string) {
 	termSess, ok := a.TerminalSessionManager.Get(session.ID(sessionIDParam))
 	if !ok || termSess.UserID != userID {
-		writeJSONError(w, "session not found or access denied", http.StatusNotFound)
+		writeJSONErrorKey(w, r, "sessions.notFoundOrAccessDenied", http.StatusNotFound)
 		return
 	}
 	canAccess, err := a.userCanAccessTarget(r.Context(), userID, access.TargetID(termSess.TargetID))
@@ -207,7 +207,7 @@ func (a *App) handleTerminalAttach(w http.ResponseWriter, r *http.Request, userI
 		return
 	}
 	if !canAccess {
-		writeJSONError(w, "forbidden", http.StatusForbidden)
+		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 		return
 	}
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
@@ -216,7 +216,7 @@ func (a *App) handleTerminalAttach(w http.ResponseWriter, r *http.Request, userI
 			"session_id": sessionIDParam,
 			"error":      err.Error(),
 		})
-		writeJSONError(w, "failed to upgrade connection", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.failedUpgradeConnection", http.StatusBadRequest)
 		return
 	}
 	_ = conn.WriteMessage(websocket.TextMessage, []byte(""))
@@ -272,7 +272,7 @@ func terminalSessionItemFrom(sess *session.Session, mgr *session.Manager, protoc
 func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -317,18 +317,18 @@ func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	sessionID := chi.URLParam(r, "session_id")
 	if sessionID == "" {
-		writeJSONError(w, "session_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "sessions.idRequired", http.StatusBadRequest)
 		return
 	}
 	id := session.ID(sessionID)
 	termSess, ok := a.TerminalSessionManager.Get(id)
 	if !ok || termSess.UserID != userID {
-		writeJSONError(w, "session not found or access denied", http.StatusNotFound)
+		writeJSONErrorKey(w, r, "sessions.notFoundOrAccessDenied", http.StatusNotFound)
 		return
 	}
 	canAccess, err := a.userCanAccessTarget(r.Context(), userID, access.TargetID(termSess.TargetID))
@@ -337,7 +337,7 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if !canAccess {
-		writeJSONError(w, "forbidden", http.StatusForbidden)
+		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 		return
 	}
 	a.TerminalSessionManager.Stop(id)
@@ -400,7 +400,7 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 			"session_id": id,
 			"error":      proxyerrors.UnwrapForAudit(bridgeErr),
 		})
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+proxyerrors.BridgeErrorMessage(bridgeErr)))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+localizedBridgeMessage(ctx, bridgeErr)))
 	} else {
 		audit("terminal_bridge_end", auditFields{
 			"session_id": id,

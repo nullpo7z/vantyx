@@ -16,6 +16,7 @@ type userResponse struct {
 	ID       string   `json:"id"`
 	Username string   `json:"username"`
 	Role     string   `json:"role"`
+	Locale   string   `json:"locale,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
 }
 
@@ -59,7 +60,7 @@ func (a *App) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		if tags == nil {
 			tags = []string{}
 		}
-		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role, Tags: tags})
+		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role, Locale: u.Locale, Tags: tags})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -73,18 +74,18 @@ func (a *App) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	var req createUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	req.Username = strings.TrimSpace(req.Username)
 	req.ID = strings.TrimSpace(req.ID)
 	req.Role = strings.TrimSpace(req.Role)
 	if req.Username == "" {
-		writeJSONError(w, "username is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "users.usernameRequired", http.StatusBadRequest)
 		return
 	}
 	if req.Password == "" {
-		writeJSONError(w, "password is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "users.passwordRequired", http.StatusBadRequest)
 		return
 	}
 	if req.ID == "" {
@@ -95,11 +96,26 @@ func (a *App) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := a.UserStore.CreateUser(req.ID, req.Username, req.Password, req.Role)
 	if err != nil {
-		if errors.Is(err, auth.ErrUserExists) {
-			writeJSONError(w, "user already exists (id or username)", http.StatusConflict)
-			return
+		switch {
+		case errors.Is(err, auth.ErrUserExists):
+			writeJSONErrorKey(w, r, "users.alreadyExists", http.StatusConflict)
+		case errors.Is(err, auth.ErrIDOrUsernameEmpty):
+			writeJSONErrorKey(w, r, "validation.idUsernameEmpty", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrEmptyPassword):
+			writeJSONErrorKey(w, r, "auth.passwordEmpty", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordTooShort):
+			writeJSONErrorKey(w, r, "auth.passwordTooShort", http.StatusBadRequest, "min", auth.MinPasswordLength)
+		case errors.Is(err, auth.ErrPasswordNoUpper):
+			writeJSONErrorKey(w, r, "auth.passwordNoUpper", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordNoLower):
+			writeJSONErrorKey(w, r, "auth.passwordNoLower", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordNoDigit):
+			writeJSONErrorKey(w, r, "auth.passwordNoDigit", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordNoSpecial):
+			writeJSONErrorKey(w, r, "auth.passwordNoSpecial", http.StatusBadRequest)
+		default:
+			writeInternalError(w, err)
 		}
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	role := u.Role
@@ -108,7 +124,7 @@ func (a *App) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(userResponse{ID: u.ID, Username: u.Username, Role: role})
+	_ = json.NewEncoder(w).Encode(userResponse{ID: u.ID, Username: u.Username, Role: role, Locale: u.Locale})
 }
 
 // handleUserTags returns tags for the user. Admin only.
@@ -119,13 +135,13 @@ func (a *App) handleUserTags(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "user_id")
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
-		writeJSONError(w, "user_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "users.idRequired", http.StatusBadRequest)
 		return
 	}
 	tags, err := a.UserStore.TagsForUser(userID)
 	if err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
-			writeJSONError(w, "user not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "users.userNotFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)
@@ -144,23 +160,28 @@ func (a *App) handleSetUserTags(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "user_id")
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
-		writeJSONError(w, "user_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "users.idRequired", http.StatusBadRequest)
 		return
 	}
 	var req setTagsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	if req.Tags == nil {
 		req.Tags = []string{}
 	}
 	if err := a.UserStore.SetUserTags(userID, req.Tags); err != nil {
-		if errors.Is(err, auth.ErrUserNotFound) {
-			writeJSONError(w, "user not found", http.StatusNotFound)
-			return
+		switch {
+		case errors.Is(err, auth.ErrUserNotFound):
+			writeJSONErrorKey(w, r, "users.userNotFound", http.StatusNotFound)
+		case errors.Is(err, auth.ErrTagLength):
+			writeJSONErrorKey(w, r, "tags.lengthInvalid", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrTagChars):
+			writeJSONErrorKey(w, r, "tags.charsInvalid", http.StatusBadRequest)
+		default:
+			writeInternalError(w, err)
 		}
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

@@ -53,16 +53,16 @@ func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return false
 	}
 	u, err := a.UserStore.GetByID(userID)
 	if err != nil || u == nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return false
 	}
 	if u.Role != auth.RoleAdmin {
-		writeJSONError(w, "forbidden: admin only", http.StatusForbidden)
+		writeJSONErrorKey(w, r, "common.forbiddenAdminOnly", http.StatusForbidden)
 		return false
 	}
 	return true
@@ -83,13 +83,13 @@ func (a *App) requireGroupMemberOrAdmin(w http.ResponseWriter, r *http.Request, 
 	}
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return "", false
 	}
 	ctx := r.Context()
 	u, err := a.UserStore.GetByID(userID)
 	if err != nil || u == nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return "", false
 	}
 	if u.Role == auth.RoleAdmin {
@@ -105,7 +105,7 @@ func (a *App) requireGroupMemberOrAdmin(w http.ResponseWriter, r *http.Request, 
 			return userID, true
 		}
 	}
-	writeJSONError(w, "forbidden", http.StatusForbidden)
+	writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 	return "", false
 }
 
@@ -118,7 +118,7 @@ func (a *App) requireGroupMemberOrAdmin(w http.ResponseWriter, r *http.Request, 
 func (a *App) requireTargetAccess(w http.ResponseWriter, r *http.Request, targetID access.TargetID) (string, bool) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return "", false
 	}
 	ctx := r.Context()
@@ -132,7 +132,7 @@ func (a *App) requireTargetAccess(w http.ResponseWriter, r *http.Request, target
 			return userID, true
 		}
 	}
-	writeJSONError(w, "forbidden", http.StatusForbidden)
+	writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 	return "", false
 }
 
@@ -147,12 +147,12 @@ func (a *App) requireTargetAccess(w http.ResponseWriter, r *http.Request, target
 func (a *App) getSessionAndTargetWithAccess(w http.ResponseWriter, r *http.Request, targetID string) (userID string, target *access.Target, ok bool) {
 	targetID = strings.TrimSpace(targetID)
 	if targetID == "" {
-		writeJSONError(w, "target_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.targetIDRequired", http.StatusBadRequest)
 		return "", nil, false
 	}
 	userID = a.currentUserID(r)
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return "", nil, false
 	}
 	ctx := r.Context()
@@ -162,7 +162,7 @@ func (a *App) getSessionAndTargetWithAccess(w http.ResponseWriter, r *http.Reque
 			"user_id":   userID,
 			"target_id": targetID,
 		})
-		writeJSONError(w, "target not found", http.StatusNotFound)
+		writeJSONErrorKey(w, r, "common.targetNotFound", http.StatusNotFound)
 		return "", nil, false
 	}
 	allowedIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
@@ -182,7 +182,7 @@ func (a *App) getSessionAndTargetWithAccess(w http.ResponseWriter, r *http.Reque
 			"user_id":   userID,
 			"target_id": targetID,
 		})
-		writeJSONError(w, "forbidden", http.StatusForbidden)
+		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 		return "", nil, false
 	}
 	return userID, target, true

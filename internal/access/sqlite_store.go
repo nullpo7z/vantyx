@@ -3,7 +3,6 @@ package access
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"net"
 	"regexp"
 	"sort"
@@ -38,19 +37,19 @@ var (
 func validateGroupID(id GroupID) error {
 	s := string(id)
 	if s == "" {
-		return errors.New("group id must not be empty")
+		return ErrGroupIDEmpty
 	}
 	if len(s) > maxIDLen {
-		return errors.New("group id too long")
+		return ErrGroupIDTooLong
 	}
 	// Access group IDs may contain a hierarchical path (e.g. "parent/child").
 	// Each path segment must match idPattern to keep IDs predictable and safe.
 	for _, seg := range strings.Split(s, "/") {
 		if seg == "" || seg == "." || seg == ".." {
-			return errors.New("group id contains invalid characters")
+			return ErrGroupIDInvalid
 		}
 		if !idPattern.MatchString(seg) {
-			return errors.New("group id contains invalid characters")
+			return ErrGroupIDInvalid
 		}
 	}
 	return nil
@@ -59,27 +58,27 @@ func validateGroupID(id GroupID) error {
 func validateTargetID(id TargetID) error {
 	s := string(id)
 	if s == "" {
-		return errors.New("target id must not be empty")
+		return ErrTargetIDEmpty
 	}
 	if len(s) > maxIDLen {
-		return errors.New("target id too long")
+		return ErrTargetIDTooLong
 	}
 	if !idPattern.MatchString(s) {
-		return errors.New("target id contains invalid characters")
+		return ErrTargetIDInvalid
 	}
 	return nil
 }
 
 func validateName(name string) error {
 	if name == "" {
-		return errors.New("name must not be empty")
+		return ErrNameEmpty
 	}
 	if len(name) > maxNameLen {
-		return errors.New("name too long")
+		return ErrNameTooLong
 	}
 	for _, r := range name {
 		if r != '\t' && unicode.IsControl(r) {
-			return errors.New("name contains invalid characters")
+			return ErrNameInvalid
 		}
 	}
 	return nil
@@ -87,16 +86,16 @@ func validateName(name string) error {
 
 func validateHost(host string) error {
 	if host == "" {
-		return errors.New("host must not be empty")
+		return ErrHostEmpty
 	}
 	if len(host) > maxHostLen {
-		return errors.New("host too long")
+		return ErrHostTooLong
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		return nil
 	}
 	if !hostnamePattern.MatchString(host) {
-		return errors.New("host must be a valid hostname or IP address")
+		return ErrHostInvalid
 	}
 	return nil
 }
@@ -107,7 +106,7 @@ func validateProtocol(protocol Protocol) error {
 	case ProtocolSSH, ProtocolTelnet, ProtocolVNC, ProtocolTFTP, ProtocolRDP, ProtocolFTP:
 		return nil
 	default:
-		return errors.New("protocol must be ssh, telnet, vnc, tftp, ftp, or rdp")
+		return ErrProtocolInvalid
 	}
 }
 
@@ -309,11 +308,11 @@ const maxTagLen = 64
 // validateTag returns nil if tag is valid (1–64 chars, alphanumeric + hyphen/underscore).
 func validateTag(tag string) error {
 	if tag == "" || len(tag) > maxTagLen {
-		return errors.New("tag must be 1–64 characters")
+		return ErrTagLength
 	}
 	for _, r := range tag {
 		if r != '-' && r != '_' && !unicode.IsLetter(r) && !unicode.IsNumber(r) {
-			return errors.New("tag may only contain letters, numbers, hyphen, underscore")
+			return ErrTagChars
 		}
 	}
 	return nil

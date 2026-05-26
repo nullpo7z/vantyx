@@ -141,7 +141,7 @@ func listOptsFromRequest(r *http.Request) *access.ListOpts {
 func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -190,7 +190,7 @@ func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 // access group. Admin-only (server-management operation).
 func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if !a.requireAdmin(w, r) {
@@ -198,19 +198,19 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	c, err := r.Cookie("vantyx_session")
 	if err != nil || c.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	sess, err := a.SessionStore.Get(c.Value)
 	if err != nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	_ = sess // reserved for future per-user permission checks.
 
 	var req createTargetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -218,16 +218,16 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	req.Path = normalizeTargetPath(req.Path)
 	req.GroupID = strings.TrimSpace(req.GroupID)
 	if req.Name == "" || req.Host == "" {
-		writeJSONError(w, "name and host are required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "targets.nameHostRequired", http.StatusBadRequest)
 		return
 	}
 	if req.GroupID == "" {
-		writeJSONError(w, "group_id is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "targets.groupIDRequired", http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()
 	if _, err := a.AccessGroupStore.Get(ctx, access.GroupID(req.GroupID)); err != nil {
-		writeJSONError(w, "group not found", http.StatusNotFound)
+		writeJSONErrorKey(w, r, "targets.groupNotFound", http.StatusNotFound)
 		return
 	}
 	allowedGroups, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(sess.UserID), nil)
@@ -243,7 +243,7 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !allowed {
-		writeJSONError(w, "forbidden", http.StatusForbidden)
+		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 		return
 	}
 	if req.Port == 0 {
@@ -251,6 +251,10 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	protocol, err := parseProtocolField(req.Protocol)
 	if err != nil {
+		if errors.Is(err, ErrInvalidProtocol) {
+			writeJSONErrorKey(w, r, "targets.protocolInvalid", http.StatusBadRequest)
+			return
+		}
 		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -285,13 +289,17 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 			writeServiceUnavailableError(w, err)
 			return
 		}
-		if !errors.Is(err, access.ErrTargetExists) {
-			writeInternalError(w, err)
+		if errors.Is(err, access.ErrTargetExists) {
+			continue
+		}
+		if writeAccessValidationError(w, r, err) {
 			return
 		}
+		writeInternalError(w, err)
+		return
 	}
 	if err := a.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID(req.GroupID), access.TargetID(id)); err != nil {
-		writeJSONError(w, "failed to assign target to group", http.StatusInternalServerError)
+		writeJSONErrorKey(w, r, "targets.assignFailed", http.StatusInternalServerError)
 		return
 	}
 	tftp.NotifyTargetCreated(ctx, a.TargetStore, protocol)
@@ -306,7 +314,7 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 // handleUpdateTarget updates an existing target. Admin-only.
 func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if !a.requireAdmin(w, r) {
@@ -320,14 +328,14 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req updateTargetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	req.Host = strings.TrimSpace(req.Host)
 	req.Path = normalizeTargetPath(req.Path)
 	if req.Name == "" || req.Host == "" {
-		writeJSONError(w, "name and host are required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "targets.nameHostRequired", http.StatusBadRequest)
 		return
 	}
 	if req.Port == 0 {
@@ -335,6 +343,10 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	protocol, err := parseProtocolField(req.Protocol)
 	if err != nil {
+		if errors.Is(err, ErrInvalidProtocol) {
+			writeJSONErrorKey(w, r, "targets.protocolInvalid", http.StatusBadRequest)
+			return
+		}
 		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -368,11 +380,14 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	t, err := a.TargetStore.Update(ctx, access.TargetID(targetID), req.Name, req.Host, req.Port, protocol, req.Path, strings.TrimSpace(req.SSHUsername), sshPassword, sshPrivateKey, sshPrivateKeyPassphrase, sftpEnabled, ftpEnabled, tftpEnabled)
 	if err != nil {
 		if errors.Is(err, access.ErrTargetNotFound) {
-			writeJSONError(w, "target not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "common.targetNotFound", http.StatusNotFound)
 			return
 		}
 		if errors.Is(err, access.ErrEncryptionKeyRequired) {
 			writeServiceUnavailableError(w, err)
+			return
+		}
+		if writeAccessValidationError(w, r, err) {
 			return
 		}
 		writeInternalError(w, err)
@@ -387,7 +402,7 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 // handleDeleteTarget deletes a target. Admin-only.
 func (a *App) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if !a.requireAdmin(w, r) {
@@ -395,17 +410,17 @@ func (a *App) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	targetID := chi.URLParam(r, "target_id")
 	if targetID == "" {
-		writeJSONError(w, "target_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.targetIDRequired", http.StatusBadRequest)
 		return
 	}
 	c, err := r.Cookie("vantyx_session")
 	if err != nil || c.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	sess, err := a.SessionStore.Get(c.Value)
 	if err != nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	ctx := r.Context()
@@ -422,13 +437,13 @@ func (a *App) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !allowed {
-		writeJSONError(w, "forbidden", http.StatusForbidden)
+		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 		return
 	}
 	cur, _ := a.TargetStore.Get(ctx, access.TargetID(targetID))
 	if err := a.TargetStore.Delete(ctx, access.TargetID(targetID)); err != nil {
 		if errors.Is(err, access.ErrTargetNotFound) {
-			writeJSONError(w, "target not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "common.targetNotFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)
@@ -446,7 +461,7 @@ func (a *App) handleTargetTags(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "target_id")
 	targetID = strings.TrimSpace(targetID)
 	if targetID == "" {
-		writeJSONError(w, "target_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.targetIDRequired", http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()
@@ -456,7 +471,7 @@ func (a *App) handleTargetTags(w http.ResponseWriter, r *http.Request) {
 	tags, err := a.TargetStore.TagsForTarget(ctx, access.TargetID(targetID))
 	if err != nil {
 		if errors.Is(err, access.ErrTargetNotFound) {
-			writeJSONError(w, "target not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "common.targetNotFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)
@@ -475,7 +490,7 @@ func (a *App) handleSetTargetTags(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "target_id")
 	targetID = strings.TrimSpace(targetID)
 	if targetID == "" {
-		writeJSONError(w, "target_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.targetIDRequired", http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()
@@ -484,18 +499,23 @@ func (a *App) handleSetTargetTags(w http.ResponseWriter, r *http.Request) {
 	}
 	var req setTagsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	if req.Tags == nil {
 		req.Tags = []string{}
 	}
 	if err := a.TargetStore.SetTargetTags(ctx, access.TargetID(targetID), req.Tags); err != nil {
-		if errors.Is(err, access.ErrTargetNotFound) {
-			writeJSONError(w, "target not found", http.StatusNotFound)
-			return
+		switch {
+		case errors.Is(err, access.ErrTargetNotFound):
+			writeJSONErrorKey(w, r, "common.targetNotFound", http.StatusNotFound)
+		case errors.Is(err, access.ErrTagLength):
+			writeJSONErrorKey(w, r, "tags.lengthInvalid", http.StatusBadRequest)
+		case errors.Is(err, access.ErrTagChars):
+			writeJSONErrorKey(w, r, "tags.charsInvalid", http.StatusBadRequest)
+		default:
+			writeInternalError(w, err)
 		}
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

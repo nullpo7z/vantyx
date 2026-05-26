@@ -11,9 +11,8 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
 ### Added
 
 - OSS scaffolding: `LICENSE` (Apache-2.0), `NOTICE`, `CONTRIBUTING.md`
-  (English + Japanese), `CODE_OF_CONDUCT.md`, `SECURITY.md`, `AUTHORS.md`,
-  `.github/` issue / pull request templates, CODEOWNERS, dependabot, and
-  `.editorconfig`.
+  (English + Japanese), `SECURITY.md`, `.github/` bug-report issue template,
+  dependabot, and `.editorconfig`.
 - Bilingual top-level documentation (`README.md` + `README.ja.md`,
   `docs/ARCHITECTURE.md` + `docs/ARCHITECTURE.ja.md`,
   `docs/SECURITY-ASVS-L2.md` + `docs/SECURITY-ASVS-L2.ja.md`).

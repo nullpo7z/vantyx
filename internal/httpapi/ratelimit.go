@@ -236,4 +236,3 @@ func (l *loginRateLimiter) recordSuccess(ip, username string) {
 		delete(l.byUser, key)
 	}
 }
-

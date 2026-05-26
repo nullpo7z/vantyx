@@ -82,4 +82,3 @@ var wsUpgrader = websocket.Upgrader{
 		return allowedWebSocketOrigin(r)
 	},
 }
-

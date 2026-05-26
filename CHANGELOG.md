@@ -10,6 +10,15 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
 
 ### Changed
 
+- CI: migrated `configs/golangci.yml` to the golangci-lint v2 schema
+  (`version: "2"`, `linters.settings`, `linters.exclusions`) and bumped
+  `golangci/golangci-lint-action` from v6 to v8 with `version` pinned to
+  `v2.12.2`. `gosimple` is dropped from the enable list because v2
+  merges it into `staticcheck`; the new `staticcheck` `ST1005` / `QF*`
+  hints and the new `gosec` `G602` / `G703` taint analysers are
+  silenced to keep the v1 lint surface. Necessary because
+  `version: latest` started resolving to v2 and rejected the old v1
+  config.
 - Docs: rewrote `docs/SECURITY-ASVS-L2.md` as a concise best-effort
   security checklist instead of a full ASVS L2 self-assessment.
   Re-framed the security claims in `README.md` / `SECURITY.md` (and their

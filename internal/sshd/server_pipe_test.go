@@ -935,7 +935,7 @@ func setupServerWithTCPTelnetRecording(t *testing.T, port uint16, recDir string)
 // the bug where the CLI session frame was built from the original
 // pty-req row count instead of the latest window-change. The asciinema
 // header records the frame's effective size, so we use it to assert
-// the resize was honoured when connect ran.
+// the resize was honored when connect ran.
 func TestServer_Connect_WindowChangeBeforeConnect_AppliesNewSize(t *testing.T) {
 	echo := mock.NewTelnetEchoServer()
 	if err := echo.Start(); err != nil {

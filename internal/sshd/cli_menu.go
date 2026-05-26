@@ -381,7 +381,7 @@ func newCLILineReader(wr io.Writer, inputCh <-chan byte) func(echo bool, promptF
 //
 // screenCols and screenRows are the latest known terminal dimensions
 // from runMenu (updated from window-change). prepareCLIFrame uses both
-// so the resumed session honours the user's real terminal size.
+// so the resumed session honors the user's real terminal size.
 func (s *Server) handleResumeCommand(ctx context.Context, wr io.Writer, inputCh <-chan byte, args []string, activeSessions []*session.Session, cliSessionMgr *session.Manager, screenCols, screenRows int, resizeChan <-chan sshproxy.TerminalSize) []string {
 	var status []string
 	add := func(s string) { status = append(status, s) }
@@ -450,7 +450,7 @@ func (s *Server) handleResumeCommand(ctx context.Context, wr io.Writer, inputCh 
 // screenCols and screenRows are the latest known terminal dimensions
 // from runMenu (updated from window-change). They drive both the
 // session frame (DECSTBM scroll region) and the initial asciinema
-// recording size, so a resize before "connect" is honoured.
+// recording size, so a resize before "connect" is honored.
 //
 //nolint:gocyclo // connect orchestrates session start, recording, and IO.
 func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []string, lastList []cliGroupEntry, currentGroupIndex int, cliSessionMgr *session.Manager, readLine func(bool, string) (string, error), prompt func(string, ...interface{}), userID string, screenCols, screenRows int, resizeChan <-chan sshproxy.TerminalSize) []string {
@@ -575,7 +575,7 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 				slog.Warn("CLI recording create failed", "session_id", sessionID, "path", castPath, "error", createErr)
 			} else {
 				// Record at the bridge's actual terminal size so the
-				// playback honours the user's real window. sessionCols /
+				// playback honors the user's real window. sessionCols /
 				// sessionRows come from the frame, which already accounts
 				// for the header lines and the latest window-change.
 				asc := recording.NewAsciinemaWriter(f, sessionCols, sessionRows)

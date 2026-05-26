@@ -400,7 +400,7 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 			"session_id": id,
 			"error":      proxyerrors.UnwrapForAudit(bridgeErr),
 		})
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+proxyerrors.BridgeErrorMessage(bridgeErr)))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+localizedBridgeMessage(ctx, bridgeErr)))
 	} else {
 		audit("terminal_bridge_end", auditFields{
 			"session_id": id,

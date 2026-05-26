@@ -54,10 +54,11 @@ components:
         files / file-transfers, tftp, settings など）の主要なエラー文言は
         i18n カタログ経由で生成されます。time_range クエリ (from/to)、
         protocol バリデーション、file-transfers の state/direction/backend/
-        after_cursor バリデーション、`/api/me/password` のポリシーチェックも
-        i18n 経由で localize されます。一部の動的なバリデーションエラー
-        (`access` パッケージの個別タグ検証など) は dependency 側の原文
-        メッセージをそのまま返す場合があります。
+        after_cursor バリデーション、`/api/me/password` のポリシーチェック、
+        および `proxyerrors`（TCP 接続失敗の SFTP / Telnet / SSH ターミナル
+        メッセージ）も i18n 経由で localize されます。一部の動的なバリデー
+        ションエラー (`access` パッケージの個別タグ検証など) は dependency 側
+        の原文メッセージをそのまま返す場合があります。
       properties:
         message:
           type: string

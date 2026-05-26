@@ -140,6 +140,13 @@ var Messages = map[string]string{
 	"transfers.invalidDirection":      "direction must be upload or download",
 	"transfers.invalidBackend":        "backend must be remote or tftp_server",
 
+	// Proxy / bridge dial failures (see internal/proxyerrors).
+	"proxy.tcpTimeout":         "TCP connection to {proto} timed out. Check that the service is enabled, firewall/ACL/port settings, and network path from Vantyx to the target.",
+	"proxy.connectionRefused":  "Connection to {proto} was refused. Check that the service is running and the port number is correct.",
+	"proxy.noRoute":            "No route to {proto}. Check IP address, VLAN, and routing.",
+	"proxy.networkUnreachable": "Network is unreachable. Check the path from the Vantyx server to the target.",
+	"proxy.dialFailed":         "Failed to connect to {proto}: {reason} (check host, port, and that the service is running).",
+
 	// Time range query parameters.
 	"time.invalidFrom":    "invalid from: {reason}",
 	"time.invalidTo":      "invalid to: {reason}",

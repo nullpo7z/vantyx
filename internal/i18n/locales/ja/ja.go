@@ -132,6 +132,13 @@ var Messages = map[string]string{
 	"transfers.invalidDirection":      "direction は upload または download である必要があります",
 	"transfers.invalidBackend":        "backend は remote または tftp_server である必要があります",
 
+	// Proxy / bridge dial failures (see internal/proxyerrors).
+	"proxy.tcpTimeout":         "{proto} への TCP 接続がタイムアウトしました。サービスが有効か、ファイアウォール/ACL/ポート設定、および Vantyx からターゲットへのネットワーク経路を確認してください。",
+	"proxy.connectionRefused":  "{proto} への接続が拒否されました。サービスが起動しているかとポート番号を確認してください。",
+	"proxy.noRoute":            "{proto} への経路がありません。IP アドレス、VLAN、ルーティングを確認してください。",
+	"proxy.networkUnreachable": "ネットワークに到達できません。Vantyx サーバーからターゲットへの経路を確認してください。",
+	"proxy.dialFailed":         "{proto} への接続に失敗しました: {reason} (ホスト、ポート、サービスの起動状態を確認してください)",
+
 	// Time range query parameters.
 	"time.invalidFrom":    "from が不正です: {reason}",
 	"time.invalidTo":      "to が不正です: {reason}",

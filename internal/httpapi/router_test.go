@@ -21,6 +21,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
+	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 )
 
 func newTestApp(t *testing.T) *App {
@@ -1621,6 +1622,36 @@ func TestApp_Files_FactoryReturnsError(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", w.Result().StatusCode)
+	}
+}
+
+// TestApp_Files_FactoryDialErrorLocalized exercises the
+// proxyerrors.WrapTCPDialError → BridgeErrorKey → writeProxyError path
+// to confirm SFTP connect failures honor the caller's resolved locale.
+func TestApp_Files_FactoryDialErrorLocalized(t *testing.T) {
+	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
+	if app == nil {
+		return
+	}
+	app.SFTPClientFactory = func(context.Context, *access.Target) (FileTransferClient, error) {
+		return nil, proxyerrors.WrapTCPDialError("SSH",
+			errors.New("dial tcp 10.0.0.1:22: connect: connection refused"))
+	}
+	if err := app.UserStore.UpdateLocale("admin", "ja"); err != nil {
+		t.Fatalf("UpdateLocale: %v", err)
+	}
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/targets/"+targetID+"/files?path=/", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadGateway {
+		t.Fatalf("status: got %d, want 502 (body=%s)", w.Result().StatusCode, w.Body.String())
+	}
+	msg := decodeErrorMessage(t, w.Body.Bytes())
+	if !strings.Contains(msg, "拒否") {
+		t.Fatalf("expected Japanese 'connection refused' wording, got %q", msg)
 	}
 }
 

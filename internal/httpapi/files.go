@@ -85,10 +85,7 @@ func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, use
 					"target_id": targetID,
 					"error":     proxyerrors.UnwrapForAudit(err),
 				})
-				// proxyerrors.BridgeErrorMessage returns an
-				// already-translated proxy-domain string; keep it raw
-				// rather than wrapping into a key.
-				writeJSONError(w, proxyerrors.BridgeErrorMessage(err), http.StatusBadGateway)
+				writeProxyError(w, r, err, http.StatusBadGateway)
 				return nil, false
 			}
 			return client, true
@@ -100,7 +97,7 @@ func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, use
 				"target_id": targetID,
 				"error":     proxyerrors.UnwrapForAudit(err),
 			})
-			writeJSONError(w, proxyerrors.BridgeErrorMessage(err), http.StatusBadGateway)
+			writeProxyError(w, r, err, http.StatusBadGateway)
 			return nil, false
 		}
 		return &sftpClientAdapter{Client: client}, true

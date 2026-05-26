@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nullpo7z/vantyx/internal/i18n"
+	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 )
 
 // errorResponse is the JSON shape returned by [writeJSONError].
@@ -65,6 +67,32 @@ func writeServiceUnavailableError(w http.ResponseWriter, err error) {
 		"error": err.Error(),
 	})
 	writeJSONError(w, "service unavailable", http.StatusServiceUnavailable)
+}
+
+// writeProxyError responds with a localized message for proxy dial /
+// bridge failures wrapped by [proxyerrors.WrapTCPDialError]. Plain
+// errors (no [proxyerrors.UserFacingError] in the chain) fall back to
+// the raw English text: this only happens for transport-level errors
+// that bypass our wrapper, where preserving the underlying detail is
+// more useful than masking it.
+func writeProxyError(w http.ResponseWriter, r *http.Request, err error, code int) {
+	if key, vars, ok := proxyerrors.BridgeErrorKey(err); ok {
+		writeJSONErrorKey(w, r, key, code, vars...)
+		return
+	}
+	writeJSONError(w, proxyerrors.BridgeErrorMessage(err), code)
+}
+
+// localizedBridgeMessage returns the locale-appropriate user-facing
+// message for a proxy bridge error. Used by non-HTTP surfaces (e.g. the
+// terminal WebSocket close frame) where there is no `*http.Request` to
+// hand to [writeJSONErrorKey] but a [context.Context] carries the
+// locale resolved by the session middleware.
+func localizedBridgeMessage(ctx context.Context, err error) string {
+	if key, vars, ok := proxyerrors.BridgeErrorKey(err); ok {
+		return i18n.TC(ctx, key, vars...)
+	}
+	return proxyerrors.BridgeErrorMessage(err)
 }
 
 // isLoopbackHost reports whether host is 127.0.0.1, localhost, or [::1]

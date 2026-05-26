@@ -13,12 +13,12 @@ import (
 func (a *App) handleVNCWebSocket(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("vantyx_session")
 	if err != nil || cookie.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	sess, err := a.SessionStore.Get(cookie.Value)
 	if err != nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -28,7 +28,7 @@ func (a *App) handleVNCWebSocket(w http.ResponseWriter, r *http.Request) {
 			"user_id": sess.UserID,
 			"reason":  "target_id_required",
 		})
-		writeJSONError(w, "target_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.targetIDRequired", http.StatusBadRequest)
 		return
 	}
 
@@ -43,7 +43,7 @@ func (a *App) handleVNCWebSocket(w http.ResponseWriter, r *http.Request) {
 			"target_id": targetID,
 			"protocol":  target.Protocol,
 		})
-		writeJSONError(w, "target is not a VNC server", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "vnc.notVNC", http.StatusBadRequest)
 		return
 	}
 
@@ -54,7 +54,7 @@ func (a *App) handleVNCWebSocket(w http.ResponseWriter, r *http.Request) {
 			"target_id": targetID,
 			"error":     err.Error(),
 		})
-		writeJSONError(w, "failed to upgrade connection", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.failedUpgradeConnection", http.StatusBadRequest)
 		return
 	}
 	defer conn.Close()

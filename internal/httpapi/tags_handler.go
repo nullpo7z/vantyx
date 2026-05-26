@@ -13,11 +13,11 @@ import (
 func (a *App) handleListTags(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie("vantyx_session")
 	if err != nil || c.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if _, err := a.SessionStore.Get(c.Value); err != nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)

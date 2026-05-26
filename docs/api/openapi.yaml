@@ -48,8 +48,13 @@ components:
       type: object
       description: |
         エラー応答の汎用形式。`message` の文言は呼び出し元のロケール
-        (`users.locale` → `Accept-Language` → 既定 `en`) で localise されて返ります。
+        (`users.locale` → `Accept-Language` → 既定 `en`) で localize されて返ります。
         現在サポートしているロケールは `en` / `ja` です。
+        ほぼ全ての API ハンドラ（auth, users, groups, targets, sessions, recordings,
+        files / file-transfers, tftp, settings など）の主要なエラー文言は
+        i18n カタログ経由で生成されます。一部の動的なバリデーションエラー
+        (`access` パッケージの個別タグ検証など) は dependency 側の原文
+        メッセージをそのまま返す場合があります。
       properties:
         message:
           type: string

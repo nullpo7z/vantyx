@@ -59,11 +59,11 @@ func (b *SessionEventBroker) Broadcast() {
 func (a *App) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if a.SessionEventBroker == nil {
-		writeJSONError(w, "session events not available", http.StatusServiceUnavailable)
+		writeJSONErrorKey(w, r, "sessions.eventsUnavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -184,11 +184,11 @@ func (b *FileTransferEventBroker) shouldEmit(snap filetransfer.JobSnapshot) bool
 func (a *App) handleFileTransferEvents(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if a.FileTransferEventBroker == nil {
-		writeJSONError(w, "file transfer events not available", http.StatusServiceUnavailable)
+		writeJSONErrorKey(w, r, "transfers.eventsUnavailable", http.StatusServiceUnavailable)
 		return
 	}
 

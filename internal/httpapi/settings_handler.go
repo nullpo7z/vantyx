@@ -40,7 +40,7 @@ func (a *App) handlePutAuditForwarderSettings(w http.ResponseWriter, r *http.Req
 		Config auditForwarderConfig `json:"config"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
 	cfg := in.Config
@@ -53,21 +53,21 @@ func (a *App) handlePutAuditForwarderSettings(w http.ResponseWriter, r *http.Req
 	switch cfg.Proto {
 	case "udp", "tcp", "unix", "unixgram":
 	default:
-		writeJSONError(w, "invalid proto", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "settings.invalidProto", http.StatusBadRequest)
 		return
 	}
 	if cfg.Buffer < 0 || cfg.Buffer > 200000 {
-		writeJSONError(w, "invalid buffer", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "settings.invalidBuffer", http.StatusBadRequest)
 		return
 	}
 	// If enabled, require addr (except unix/unixgram defaults to /dev/log when empty).
 	if cfg.Enabled && cfg.Addr == "" && !(cfg.Proto == "unix" || cfg.Proto == "unixgram") {
-		writeJSONError(w, "addr is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "settings.addrRequired", http.StatusBadRequest)
 		return
 	}
 
 	if err := saveAuditForwarderConfigToDB(a.DB, cfg); err != nil {
-		writeJSONError(w, "failed to save settings", http.StatusInternalServerError)
+		writeJSONErrorKey(w, r, "settings.saveFailed", http.StatusInternalServerError)
 		return
 	}
 	// Apply immediately.

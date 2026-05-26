@@ -31,12 +31,12 @@ func newRDPSessionID() (string, error) {
 func (a *App) handleRDPWebSocket(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("vantyx_session")
 	if err != nil || cookie.Value == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	_, err = a.SessionStore.Get(cookie.Value)
 	if err != nil {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -52,7 +52,7 @@ func (a *App) handleRDPWebSocket(w http.ResponseWriter, r *http.Request) {
 			"target_id": targetID,
 			"protocol":  target.Protocol,
 		})
-		writeJSONError(w, "target is not an RDP server", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "rdp.notRDP", http.StatusBadRequest)
 		return
 	}
 
@@ -63,7 +63,7 @@ func (a *App) handleRDPWebSocket(w http.ResponseWriter, r *http.Request) {
 			"target_id": targetID,
 			"error":     err.Error(),
 		})
-		writeJSONError(w, "failed to upgrade connection", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.failedUpgradeConnection", http.StatusBadRequest)
 		return
 	}
 	defer conn.Close()
@@ -108,7 +108,7 @@ func rdpSessionItemFrom(s rdpvnc.Session, mgr *rdpvnc.Manager) RDPSessionItem {
 func (a *App) handleRDPSessions(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if a.RDPVNCManager == nil {
@@ -151,21 +151,21 @@ func (a *App) handleRDPSessions(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleRDPSessionDelete(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(a.currentUserID(r))
 	if userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if a.RDPVNCManager == nil {
-		writeJSONError(w, "session not found or access denied", http.StatusNotFound)
+		writeJSONErrorKey(w, r, "sessions.notFoundOrAccessDenied", http.StatusNotFound)
 		return
 	}
 	sessionID := chi.URLParam(r, "session_id")
 	if sessionID == "" {
-		writeJSONError(w, "session_id required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "sessions.idRequired", http.StatusBadRequest)
 		return
 	}
 	s, ok := a.RDPVNCManager.GetSession(sessionID)
 	if !ok || s.UserID != userID {
-		writeJSONError(w, "session not found or access denied", http.StatusNotFound)
+		writeJSONErrorKey(w, r, "sessions.notFoundOrAccessDenied", http.StatusNotFound)
 		return
 	}
 	canAccess, err := a.userCanAccessTarget(r.Context(), userID, access.TargetID(s.TargetID))
@@ -174,7 +174,7 @@ func (a *App) handleRDPSessionDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !canAccess {
-		writeJSONError(w, "forbidden", http.StatusForbidden)
+		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 		return
 	}
 	a.RDPVNCManager.RemoveSession(sessionID)
@@ -198,7 +198,7 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if target.Protocol != access.ProtocolRDP {
-		writeJSONError(w, "target is not an RDP server", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "rdp.notRDP", http.StatusBadRequest)
 		return
 	}
 
@@ -253,14 +253,14 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 				"target_id": targetID,
 				"error":     err.Error(),
 			})
-			writeJSONError(w, "failed to start RDP bridge: "+err.Error(), http.StatusInternalServerError)
+			writeJSONErrorKey(w, r, "rdp.bridgeFailed", http.StatusInternalServerError, "error", err)
 			return
 		}
 		if a.RDPVNCManager != nil {
 			sid, err := newRDPSessionID()
 			if err != nil {
 				bridge.Stop()
-				writeJSONError(w, "failed to start RDP session", http.StatusInternalServerError)
+				writeJSONErrorKey(w, r, "rdp.startFailed", http.StatusInternalServerError)
 				return
 			}
 			sess := a.RDPVNCManager.RegisterSession(bridgeKey, sid, userID, targetID, target.Name, width, height, bridge)

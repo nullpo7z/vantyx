@@ -47,7 +47,7 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 // openFileTransferClient connects a file transfer client for an already-authorized target.
 func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, userID, targetID string, target *access.Target) (FileTransferClient, bool) {
 	if !protocols.SupportsFileTransfer(target.Protocol) {
-		writeJSONError(w, "file transfer only for SSH, FTP, or TFTP targets", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "files.transferOnlySSHFTPTFTP", http.StatusBadRequest)
 		return nil, false
 	}
 	ctx := r.Context()
@@ -60,21 +60,21 @@ func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, use
 				"target_id": targetID,
 				"error":     err.Error(),
 			})
-			writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
+			writeJSONErrorKey(w, r, "files.connectFailed", http.StatusBadGateway, "error", err)
 			return nil, false
 		}
 		return &tftpClientAdapter{Client: tftpClient}, true
 	case access.ProtocolSSH:
 		if target.SSHUsername == "" || (target.SSHPassword == "" && target.SSHPrivateKey == "") {
-			writeJSONError(w, "stored credentials (password or SSH key) required for file transfer", http.StatusBadRequest)
+			writeJSONErrorKey(w, r, "files.credentialsRequired", http.StatusBadRequest)
 			return nil, false
 		}
 		if !target.SFTPEnabled {
-			writeJSONError(w, "SFTP file transfer is disabled for this target", http.StatusForbidden)
+			writeJSONErrorKey(w, r, "files.sftpDisabled", http.StatusForbidden)
 			return nil, false
 		}
 		if target.SSHPrivateKey != "" && strings.HasPrefix(target.SSHPrivateKey, secret.CiphertextVersionPrefix) {
-			writeJSONError(w, "保存された認証情報の復号に失敗しています。VANTYX_SSH_PASSWORD_ENCRYPTION_KEY を確認してください", http.StatusInternalServerError)
+			writeJSONErrorKey(w, r, "files.credentialsDecryptFailed", http.StatusInternalServerError)
 			return nil, false
 		}
 		if a.SFTPClientFactory != nil {
@@ -85,6 +85,9 @@ func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, use
 					"target_id": targetID,
 					"error":     proxyerrors.UnwrapForAudit(err),
 				})
+				// proxyerrors.BridgeErrorMessage returns an
+				// already-translated proxy-domain string; keep it raw
+				// rather than wrapping into a key.
 				writeJSONError(w, proxyerrors.BridgeErrorMessage(err), http.StatusBadGateway)
 				return nil, false
 			}
@@ -103,7 +106,7 @@ func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, use
 		return &sftpClientAdapter{Client: client}, true
 	case access.ProtocolFTP:
 		if target.SSHUsername == "" || target.SSHPassword == "" {
-			writeJSONError(w, "stored username and password are required for FTP file transfer", http.StatusBadRequest)
+			writeJSONErrorKey(w, r, "files.ftpCredentialsRequired", http.StatusBadRequest)
 			return nil, false
 		}
 		client, err := ftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword)
@@ -113,12 +116,12 @@ func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, use
 				"target_id": targetID,
 				"error":     err.Error(),
 			})
-			writeJSONError(w, "failed to connect to target: "+err.Error(), http.StatusBadGateway)
+			writeJSONErrorKey(w, r, "files.connectFailed", http.StatusBadGateway, "error", err)
 			return nil, false
 		}
 		return &ftpClientAdapter{Client: client}, true
 	default:
-		writeJSONError(w, "file transfer only for SSH, FTP, or TFTP targets", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "files.transferOnlySSHFTPTFTP", http.StatusBadRequest)
 		return nil, false
 	}
 }
@@ -168,7 +171,7 @@ func remotePath(r *http.Request) string {
 // handleListFiles returns a directory listing for the target (SFTP). GET /api/targets/{target_id}/files?path=/
 func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	target, client := a.getTargetAndFileClient(w, r)
@@ -185,7 +188,7 @@ func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {
 			"path":      dirPath,
 			"error":     err.Error(),
 		})
-		writeJSONError(w, "list failed: "+err.Error(), http.StatusBadGateway)
+		writeJSONErrorKey(w, r, "files.listFailed", http.StatusBadGateway, "error", err)
 		return
 	}
 	out := make([]fileEntry, 0, len(entries))
@@ -209,7 +212,7 @@ func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {
 // handleDownloadFile streams a file from the target. GET /api/targets/{target_id}/files/download?path=/remote/file
 func (a *App) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	target, client := a.getTargetAndFileClient(w, r)
@@ -226,17 +229,17 @@ func (a *App) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 			"path":      filePath,
 			"error":     err.Error(),
 		})
-		writeJSONError(w, "open failed: "+err.Error(), http.StatusBadGateway)
+		writeJSONErrorKey(w, r, "files.openFailed", http.StatusBadGateway, "error", err)
 		return
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		writeJSONError(w, "stat failed: "+err.Error(), http.StatusBadGateway)
+		writeJSONErrorKey(w, r, "files.statFailed", http.StatusBadGateway, "error", err)
 		return
 	}
 	if info.IsDir() {
-		writeJSONError(w, "cannot download a directory", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.cannotDownloadDirectory", http.StatusBadRequest)
 		return
 	}
 	name := path.Base(filePath)
@@ -255,7 +258,7 @@ func (a *App) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 // handleUploadFile uploads a file to the target. POST /api/targets/{target_id}/files/upload (multipart: path, file)
 func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	target, client := a.getTargetAndFileClient(w, r)
@@ -267,12 +270,12 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	const maxUploadMB = 64
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadMB<<20)
 	if err := r.ParseMultipartForm(maxUploadMB << 20); err != nil { // #nosec G120 -- bounded by maxUploadMB and MaxBytesReader above
-		writeJSONError(w, "invalid multipart form: "+err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "files.invalidMultipart", http.StatusBadRequest, "error", err)
 		return
 	}
 	pathParam := strings.TrimSpace(r.FormValue("path"))
 	if pathParam == "" {
-		writeJSONError(w, "path is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.pathRequired", http.StatusBadRequest)
 		return
 	}
 	if !path.IsAbs(pathParam) {
@@ -281,7 +284,7 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	pathParam = path.Clean(pathParam)
 	file, _, err := r.FormFile("file")
 	if err != nil {
-		writeJSONError(w, "file is required: "+err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "files.fileRequired", http.StatusBadRequest, "error", err)
 		return
 	}
 	defer file.Close()
@@ -293,7 +296,7 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 			"path":      pathParam,
 			"error":     err.Error(),
 		})
-		writeJSONError(w, "create failed: "+err.Error(), http.StatusBadGateway)
+		writeJSONErrorKey(w, r, "files.createFailed", http.StatusBadGateway, "error", err)
 		return
 	}
 	defer remoteFile.Close()
@@ -303,7 +306,7 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 			"path":      pathParam,
 			"error":     err.Error(),
 		})
-		writeJSONError(w, "upload failed: "+err.Error(), http.StatusBadGateway)
+		writeJSONErrorKey(w, r, "files.uploadFailed", http.StatusBadGateway, "error", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -314,7 +317,7 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 // handleDeleteFile deletes a file or directory on the target. DELETE /api/targets/{target_id}/files?path=/remote/path
 func (a *App) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	target, client := a.getTargetAndFileClient(w, r)
@@ -325,12 +328,12 @@ func (a *App) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 
 	filePath := remotePath(r)
 	if filePath == "/" || filePath == "." {
-		writeJSONError(w, "cannot delete root", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "files.cannotDeleteRoot", http.StatusBadRequest)
 		return
 	}
 	if err := client.RemoveAll(filePath); err != nil {
 		if errors.Is(err, errTFTPNoDelete) {
-			writeJSONError(w, "TFTP does not support delete", http.StatusNotImplemented)
+			writeJSONErrorKey(w, r, "files.tftpDeleteUnsupported", http.StatusNotImplemented)
 			return
 		}
 		audit("files_remove_failed", auditFields{
@@ -338,7 +341,7 @@ func (a *App) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 			"path":      filePath,
 			"error":     err.Error(),
 		})
-		writeJSONError(w, "remove failed: "+err.Error(), http.StatusBadGateway)
+		writeJSONErrorKey(w, r, "files.removeFailed", http.StatusBadGateway, "error", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

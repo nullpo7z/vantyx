@@ -41,7 +41,7 @@ func (a *App) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
 	if afterStr := strings.TrimSpace(q.Get("after_id")); afterStr != "" {
 		afterID, err = strconv.ParseInt(afterStr, 10, 64)
 		if err != nil || afterID <= 0 {
-			writeJSONError(w, "invalid after_id", http.StatusBadRequest)
+			writeJSONErrorKey(w, r, "common.invalidAfterID", http.StatusBadRequest)
 			return
 		}
 	}

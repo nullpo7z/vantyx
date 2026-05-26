@@ -20,15 +20,23 @@ package en
 // #nosec G101 -- translation strings, not secrets.
 var Messages = map[string]string{
 	// Generic.
-	"common.unauthorized":       "unauthorized",
-	"common.forbidden":          "forbidden",
-	"common.forbiddenAdminOnly": "forbidden: admin only",
-	"common.invalidRequestBody": "invalid request body",
-	"common.internalError":      "internal error",
-	"common.serviceUnavailable": "service unavailable",
-	"common.notFound":           "not found",
-	"common.targetIDRequired":   "target_id required",
-	"common.targetNotFound":     "target not found",
+	"common.unauthorized":            "unauthorized",
+	"common.forbidden":               "forbidden",
+	"common.forbiddenAdminOnly":      "forbidden: admin only",
+	"common.invalidRequestBody":      "invalid request body",
+	"common.invalidJSON":             "invalid JSON",
+	"common.internalError":           "internal error",
+	"common.serviceUnavailable":      "service unavailable",
+	"common.notFound":                "not found",
+	"common.methodNotAllowed":        "method not allowed",
+	"common.invalidPath":             "invalid path",
+	"common.pathRequired":            "path is required",
+	"common.fileNotFound":            "file not found",
+	"common.invalidAfterID":          "invalid after_id",
+	"common.failedUpgradeConnection": "failed to upgrade connection",
+	"common.cannotDownloadDirectory": "cannot download a directory",
+	"common.targetIDRequired":        "target_id required",
+	"common.targetNotFound":          "target not found",
 
 	// Authentication.
 	"auth.invalidCredentials":     "invalid credentials",
@@ -48,4 +56,76 @@ var Messages = map[string]string{
 	"users.usernameRequired": "username is required",
 	"users.passwordRequired": "password is required",
 	"users.alreadyExists":    "user already exists (id or username)",
+
+	// Groups.
+	"groups.idRequired":             "group_id required",
+	"groups.notFound":               "group not found",
+	"groups.nameRequired":           "name is required",
+	"groups.userIDRequired":         "user_id is required",
+	"groups.groupAndUserIDRequired": "group_id and user_id required",
+
+	// Targets.
+	"targets.nameHostRequired": "name and host are required",
+	"targets.groupIDRequired":  "group_id is required",
+	"targets.groupNotFound":    "group not found",
+	"targets.assignFailed":     "failed to assign target to group",
+
+	// Settings.
+	"settings.invalidProto":  "invalid proto",
+	"settings.invalidBuffer": "invalid buffer",
+	"settings.addrRequired":  "addr is required",
+	"settings.saveFailed":    "failed to save settings",
+
+	// Sessions / terminal.
+	"sessions.idRequired":             "session_id required",
+	"sessions.notFoundOrAccessDenied": "session not found or access denied",
+	"sessions.onlySSHTelnet":          "only SSH and Telnet targets supported",
+	"sessions.eventsUnavailable":      "session events not available",
+
+	// Command logs.
+	"command.queryFailed": "failed to query command logs",
+
+	// Recordings.
+	"recordings.idRequired":        "recording_id required",
+	"recordings.formatInvalid":     "format must be cast, gif, or webm",
+	"recordings.notAvailable":      "recordings not available",
+	"recordings.notFound":          "recording not found",
+	"recordings.notConfigured":     "recordings not configured",
+	"recordings.fileNotFound":      "recording file not found",
+	"recordings.convertReadFailed": "failed to read converted file",
+	"recordings.videoUnavailable":  "video export unavailable: {error}",
+
+	// RDP / VNC / TFTP capability checks.
+	"rdp.notRDP":         "target is not an RDP server",
+	"rdp.startFailed":    "failed to start RDP session",
+	"rdp.bridgeFailed":   "failed to start RDP bridge: {error}",
+	"vnc.notVNC":         "target is not a VNC server",
+	"tftp.notTFTPServer": "target is not a TFTP server",
+
+	// File operations (SFTP / FTP / TFTP).
+	"files.transferOnlySSHFTPTFTP":   "file transfer only for SSH, FTP, or TFTP targets",
+	"files.sftpDisabled":             "SFTP file transfer is disabled for this target",
+	"files.credentialsRequired":      "stored credentials (password or SSH key) required for file transfer",
+	"files.ftpCredentialsRequired":   "stored username and password are required for FTP file transfer",
+	"files.credentialsDecryptFailed": "failed to decrypt stored credentials; verify VANTYX_SSH_PASSWORD_ENCRYPTION_KEY",
+	"files.connectFailed":            "failed to connect to target: {error}",
+	"files.listFailed":               "list failed: {error}",
+	"files.openFailed":               "open failed: {error}",
+	"files.statFailed":               "stat failed: {error}",
+	"files.createFailed":             "create failed: {error}",
+	"files.uploadFailed":             "upload failed: {error}",
+	"files.removeFailed":             "remove failed: {error}",
+	"files.cannotDeleteRoot":         "cannot delete root",
+	"files.tftpDeleteUnsupported":    "TFTP does not support delete",
+	"files.invalidMultipart":         "invalid multipart form: {error}",
+	"files.fileRequired":             "file is required: {error}",
+	"files.directoryNotEmpty":        "directory is not empty",
+
+	// File transfers (async job API).
+	"transfers.notADownload":          "not a download transfer",
+	"transfers.notReady":              "transfer not ready",
+	"transfers.backendInvalid":        "backend must be remote or tftp_server",
+	"transfers.targetAndPathReq":      "target_id and path are required",
+	"transfers.notSupportedForTarget": "file transfer not supported for this target",
+	"transfers.eventsUnavailable":     "file transfer events not available",
 }

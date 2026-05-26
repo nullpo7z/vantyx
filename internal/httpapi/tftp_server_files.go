@@ -41,7 +41,7 @@ func (a *App) getTFTPServerTarget(w http.ResponseWriter, r *http.Request) *acces
 		return nil
 	}
 	if !protocols.Supports(target.Protocol, protocols.CapabilityTFTPServer) {
-		writeJSONError(w, "target is not a TFTP server", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "tftp.notTFTPServer", http.StatusBadRequest)
 		return nil
 	}
 	return target
@@ -65,7 +65,7 @@ func tftpServerFullPath(targetID access.TargetID, relPath string) (string, error
 // GET /api/tftp/targets/{target_id}/files?path=/
 func (a *App) handleTFTPServerListFiles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	target := a.getTFTPServerTarget(w, r)
@@ -78,7 +78,7 @@ func (a *App) handleTFTPServerListFiles(w http.ResponseWriter, r *http.Request) 
 	}
 	full, err := tftpServerFullPath(target.ID, p)
 	if err != nil {
-		writeJSONError(w, "invalid path", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidPath", http.StatusBadRequest)
 		return
 	}
 	entries, err := os.ReadDir(full)
@@ -119,7 +119,7 @@ func (a *App) handleTFTPServerListFiles(w http.ResponseWriter, r *http.Request) 
 // GET /api/tftp/targets/{target_id}/files/download?path=/foo/bar.txt
 func (a *App) handleTFTPServerDownloadFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	target := a.getTFTPServerTarget(w, r)
@@ -128,25 +128,25 @@ func (a *App) handleTFTPServerDownloadFile(w http.ResponseWriter, r *http.Reques
 	}
 	p := strings.TrimSpace(r.URL.Query().Get("path"))
 	if p == "" {
-		writeJSONError(w, "path is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.pathRequired", http.StatusBadRequest)
 		return
 	}
 	full, err := tftpServerFullPath(target.ID, p)
 	if err != nil {
-		writeJSONError(w, "invalid path", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidPath", http.StatusBadRequest)
 		return
 	}
 	info, err := os.Stat(full)
 	if err != nil {
 		if os.IsNotExist(err) {
-			writeJSONError(w, "file not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "common.fileNotFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)
 		return
 	}
 	if info.IsDir() {
-		writeJSONError(w, "cannot download a directory", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.cannotDownloadDirectory", http.StatusBadRequest)
 		return
 	}
 	f, err := os.Open(full)
@@ -173,7 +173,7 @@ func (a *App) handleTFTPServerDownloadFile(w http.ResponseWriter, r *http.Reques
 // POST /api/tftp/targets/{target_id}/files/upload (multipart: path, file)
 func (a *App) handleTFTPServerUploadFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	target := a.getTFTPServerTarget(w, r)
@@ -184,17 +184,17 @@ func (a *App) handleTFTPServerUploadFile(w http.ResponseWriter, r *http.Request)
 	const maxUploadMB = 64
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadMB<<20)
 	if err := r.ParseMultipartForm(maxUploadMB << 20); err != nil { // #nosec G120 -- bounded by maxUploadMB and MaxBytesReader above
-		writeJSONError(w, "invalid multipart form: "+err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "files.invalidMultipart", http.StatusBadRequest, "error", err)
 		return
 	}
 	pathParam := strings.TrimSpace(r.FormValue("path"))
 	if pathParam == "" {
-		writeJSONError(w, "path is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.pathRequired", http.StatusBadRequest)
 		return
 	}
 	full, err := tftpServerFullPath(target.ID, pathParam)
 	if err != nil {
-		writeJSONError(w, "invalid path", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidPath", http.StatusBadRequest)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
@@ -203,7 +203,7 @@ func (a *App) handleTFTPServerUploadFile(w http.ResponseWriter, r *http.Request)
 	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
-		writeJSONError(w, "file is required: "+err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "files.fileRequired", http.StatusBadRequest, "error", err)
 		return
 	}
 	defer file.Close()
@@ -227,7 +227,7 @@ func (a *App) handleTFTPServerUploadFile(w http.ResponseWriter, r *http.Request)
 // DELETE /api/tftp/targets/{target_id}/files?path=/foo/bar.txt
 func (a *App) handleTFTPServerDeleteFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
 		return
 	}
 	target := a.getTFTPServerTarget(w, r)
@@ -236,18 +236,18 @@ func (a *App) handleTFTPServerDeleteFile(w http.ResponseWriter, r *http.Request)
 	}
 	p := strings.TrimSpace(r.URL.Query().Get("path"))
 	if p == "" {
-		writeJSONError(w, "path is required", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.pathRequired", http.StatusBadRequest)
 		return
 	}
 	full, err := tftpServerFullPath(target.ID, p)
 	if err != nil {
-		writeJSONError(w, "invalid path", http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "common.invalidPath", http.StatusBadRequest)
 		return
 	}
 	info, err := os.Stat(full)
 	if err != nil {
 		if os.IsNotExist(err) {
-			writeJSONError(w, "file not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "common.fileNotFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)
@@ -256,13 +256,13 @@ func (a *App) handleTFTPServerDeleteFile(w http.ResponseWriter, r *http.Request)
 	if info.IsDir() {
 		entries, _ := os.ReadDir(full)
 		if len(entries) > 0 {
-			writeJSONError(w, "directory is not empty", http.StatusBadRequest)
+			writeJSONErrorKey(w, r, "files.directoryNotEmpty", http.StatusBadRequest)
 			return
 		}
 	}
 	if err := os.Remove(full); err != nil {
 		if os.IsNotExist(err) {
-			writeJSONError(w, "file not found", http.StatusNotFound)
+			writeJSONErrorKey(w, r, "common.fileNotFound", http.StatusNotFound)
 			return
 		}
 		writeInternalError(w, err)

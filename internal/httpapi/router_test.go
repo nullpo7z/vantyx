@@ -3920,3 +3920,75 @@ func TestApp_ErrorMessage_UserLocaleOverridesHeader(t *testing.T) {
 		t.Fatalf("expected Japanese 'invalid request body', got %q", msg)
 	}
 }
+
+// TestApp_ErrorMessage_LocalizedHandlers exercises a handful of
+// recently migrated handlers (groups / recordings / settings) to make
+// sure their error responses honor the locale resolved by the
+// session middleware.
+func TestApp_ErrorMessage_LocalizedHandlers(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	if err := app.UserStore.UpdateLocale("admin", "ja"); err != nil {
+		t.Fatalf("UpdateLocale: %v", err)
+	}
+	sess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("SessionStore.Create: %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		method   string
+		path     string
+		body     string
+		wantCode int
+		wantSub  string
+	}{
+		{
+			name:     "groups: name is required (ja)",
+			method:   http.MethodPost,
+			path:     "/api/groups",
+			body:     `{"name":"  "}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "必須",
+		},
+		{
+			name:     "recordings: bad format",
+			method:   http.MethodGet,
+			path:     "/api/recordings/abc/file?format=mp4",
+			body:     "",
+			wantCode: http.StatusBadRequest,
+			wantSub:  "cast",
+		},
+		{
+			name:     "settings: invalid proto",
+			method:   http.MethodPut,
+			path:     "/api/settings/audit-forwarder",
+			body:     `{"config":{"proto":"sctp"}}`,
+			wantCode: http.StatusBadRequest,
+			wantSub:  "プロトコル",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var body io.Reader
+			if tc.body != "" {
+				body = bytes.NewReader([]byte(tc.body))
+			}
+			req := httptest.NewRequest(tc.method, tc.path, body)
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Result().StatusCode != tc.wantCode {
+				t.Fatalf("status: got %d, want %d (body=%s)", w.Result().StatusCode, tc.wantCode, w.Body.String())
+			}
+			if msg := decodeErrorMessage(t, w.Body.Bytes()); !strings.Contains(msg, tc.wantSub) {
+				t.Fatalf("expected localized message containing %q, got %q", tc.wantSub, msg)
+			}
+		})
+	}
+}

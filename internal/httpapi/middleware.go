@@ -53,7 +53,7 @@ func csrfOriginMiddleware(next http.Handler) http.Handler {
 		secFetchSite := strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))
 		if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
 			if origin != want {
-				writeJSONError(w, "forbidden", http.StatusForbidden)
+				writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -62,7 +62,7 @@ func csrfOriginMiddleware(next http.Handler) http.Handler {
 		ref := strings.TrimSpace(r.Referer())
 		// If browser fetch metadata is present but we don't have Origin/Referer, treat as suspicious.
 		if ref == "" && secFetchSite != "" {
-			writeJSONError(w, "forbidden", http.StatusForbidden)
+			writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 			return
 		}
 		// Non-browser clients may not send Origin/Referer. Allow in that case.
@@ -72,11 +72,11 @@ func csrfOriginMiddleware(next http.Handler) http.Handler {
 		}
 		u, err := url.Parse(ref)
 		if err != nil || u.Scheme == "" || u.Host == "" {
-			writeJSONError(w, "forbidden", http.StatusForbidden)
+			writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 			return
 		}
 		if u.Scheme+"://"+u.Host != want {
-			writeJSONError(w, "forbidden", http.StatusForbidden)
+			writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)

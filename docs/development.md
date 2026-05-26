@@ -11,7 +11,16 @@ project's coding conventions.
 - Node.js 20 LTS or newer for the frontend.
 - Docker / docker compose for the integration and end-to-end tests.
 - `make` for the documented developer commands.
-- (Optional) `golangci-lint` if you want to run lint outside of `make`.
+- `golangci-lint` for running the Go lint suite locally (also invoked
+  by `make lint-go`). Install the same v1 line CI uses with:
+
+  ```bash
+  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+  # ensure $(go env GOPATH)/bin is on your PATH
+  ```
+
+  Then `golangci-lint run --config=./configs/golangci.yml --issues-exit-code=1`
+  reproduces the CI lint step verbatim.
 
 ## Repository layout
 

@@ -51,7 +51,7 @@ fmt-fe:
 lint: lint-go lint-fe
 
 lint-go:
-	@$(GOLANGCI) run --issues-exit-code=1
+	@$(GOLANGCI) run --config=./configs/golangci.yml --issues-exit-code=1
 
 lint-fe:
 	@if [ -d web ]; then \

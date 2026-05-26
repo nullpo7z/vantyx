@@ -1150,6 +1150,93 @@ func TestApp_ChangePassword_Unauthorized(t *testing.T) {
 	}
 }
 
+// TestApp_UpdateLocale_RoundTrip verifies that PUT /api/me/locale persists the
+// user's locale and that subsequent login / GET /api/me reflect it.
+func TestApp_UpdateLocale_RoundTrip(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/me/locale", bytes.NewReader([]byte(`{"locale":"ja"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("PUT /api/me/locale expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+	var resp struct {
+		Locale string `json:"locale"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Locale != "ja" {
+		t.Fatalf("expected locale=ja in response, got %q", resp.Locale)
+	}
+
+	meReq := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	meReq.AddCookie(cookie)
+	meW := httptest.NewRecorder()
+	router.ServeHTTP(meW, meReq)
+	if meW.Result().StatusCode != http.StatusOK {
+		t.Fatalf("/api/me expected 200, got %d", meW.Result().StatusCode)
+	}
+	var me struct {
+		Locale string `json:"locale"`
+	}
+	_ = json.Unmarshal(meW.Body.Bytes(), &me)
+	if me.Locale != "ja" {
+		t.Fatalf("expected /api/me locale=ja, got %q", me.Locale)
+	}
+
+	clearReq := httptest.NewRequest(http.MethodPut, "/api/me/locale", bytes.NewReader([]byte(`{"locale":""}`)))
+	clearReq.Header.Set("Content-Type", "application/json")
+	clearReq.AddCookie(cookie)
+	clearW := httptest.NewRecorder()
+	router.ServeHTTP(clearW, clearReq)
+	if clearW.Result().StatusCode != http.StatusOK {
+		t.Fatalf("clearing locale expected 200, got %d", clearW.Result().StatusCode)
+	}
+}
+
+// TestApp_UpdateLocale_Validation rejects unsupported locale codes and
+// unauthenticated callers.
+func TestApp_UpdateLocale_Validation(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/me/locale", bytes.NewReader([]byte(`{"locale":"fr"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("unsupported locale expected 400, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+
+	bad := httptest.NewRequest(http.MethodPut, "/api/me/locale", bytes.NewReader([]byte("not json")))
+	bad.Header.Set("Content-Type", "application/json")
+	bad.AddCookie(cookie)
+	badW := httptest.NewRecorder()
+	router.ServeHTTP(badW, bad)
+	if badW.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid body expected 400, got %d", badW.Result().StatusCode)
+	}
+
+	unauthed := httptest.NewRequest(http.MethodPut, "/api/me/locale", bytes.NewReader([]byte(`{"locale":"ja"}`)))
+	unauthed.Header.Set("Content-Type", "application/json")
+	uw := httptest.NewRecorder()
+	router.ServeHTTP(uw, unauthed)
+	if uw.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated expected 401, got %d", uw.Result().StatusCode)
+	}
+}
+
 const testSSHAuthorizedKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl user@host"
 
 func TestApp_SSHKeys_List_Unauthorized(t *testing.T) {

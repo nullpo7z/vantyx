@@ -5,7 +5,7 @@
 
 import API from './api.js'
 import { renderApp } from './app.js'
-import { t } from './i18n.js'
+import { applyServerLocale, t } from './i18n.js'
 
 /**
  * Render the "you must change your password" screen.
@@ -128,6 +128,9 @@ export function renderLogin(container) {
     btn.disabled = true
     try {
       const data = await API.login(username, password)
+      if (data && typeof data.locale === 'string' && data.locale) {
+        applyServerLocale(data.locale)
+      }
       if (data.require_password_change) {
         renderChangePassword(container)
       } else {

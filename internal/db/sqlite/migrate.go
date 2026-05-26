@@ -163,6 +163,11 @@ func Migrate(db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `UPDATE users SET role = 'admin' WHERE id = 'admin'`); err != nil {
 		return err
 	}
+	// Per-user UI locale (BCP 47 short code, currently '' | 'en' | 'ja').
+	// Empty means "no preference" so the frontend falls back to its default.
+	if _, err := db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN locale TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return err
+	}
 	// Recordings: optional session name/description (from terminal session StartOptions).
 	for _, alter := range []string{
 		`ALTER TABLE recordings ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`,

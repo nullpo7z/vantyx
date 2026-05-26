@@ -16,6 +16,7 @@ type userResponse struct {
 	ID       string   `json:"id"`
 	Username string   `json:"username"`
 	Role     string   `json:"role"`
+	Locale   string   `json:"locale,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
 }
 
@@ -59,7 +60,7 @@ func (a *App) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		if tags == nil {
 			tags = []string{}
 		}
-		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role, Tags: tags})
+		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role, Locale: u.Locale, Tags: tags})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -108,7 +109,7 @@ func (a *App) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(userResponse{ID: u.ID, Username: u.Username, Role: role})
+	_ = json.NewEncoder(w).Encode(userResponse{ID: u.ID, Username: u.Username, Role: role, Locale: u.Locale})
 }
 
 // handleUserTags returns tags for the user. Admin only.

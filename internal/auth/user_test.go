@@ -336,6 +336,81 @@ func TestSQLiteUserStore_UpdatePassword(t *testing.T) {
 	}
 }
 
+func TestSQLiteUserStore_UpdateLocale(t *testing.T) {
+	store := newTestSQLiteUserStore(t)
+	if _, err := store.CreateUser("u1", "alice", "Alice1!x", ""); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	got, err := store.GetByID("u1")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Locale != "" {
+		t.Fatalf("expected empty locale on fresh user, got %q", got.Locale)
+	}
+
+	if err := store.UpdateLocale("u1", "ja"); err != nil {
+		t.Fatalf("UpdateLocale ja: %v", err)
+	}
+	got, _ = store.GetByID("u1")
+	if got.Locale != "ja" {
+		t.Fatalf("expected ja, got %q", got.Locale)
+	}
+
+	if err := store.UpdateLocale("u1", "EN"); err != nil {
+		t.Fatalf("UpdateLocale case-insensitive: %v", err)
+	}
+	got, _ = store.GetByID("u1")
+	if got.Locale != "en" {
+		t.Fatalf("expected en (canonicalised), got %q", got.Locale)
+	}
+
+	if err := store.UpdateLocale("u1", ""); err != nil {
+		t.Fatalf("UpdateLocale clear: %v", err)
+	}
+	got, _ = store.GetByID("u1")
+	if got.Locale != "" {
+		t.Fatalf("expected cleared locale, got %q", got.Locale)
+	}
+
+	if err := store.UpdateLocale("u1", "fr"); err != ErrInvalidLocale {
+		t.Fatalf("expected ErrInvalidLocale for unsupported locale, got %v", err)
+	}
+	if err := store.UpdateLocale("missing", "ja"); err != ErrUserNotFound {
+		t.Fatalf("expected ErrUserNotFound for missing user, got %v", err)
+	}
+}
+
+func TestNormalizeUILocale(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{"", "", true},
+		{"  ", "", true},
+		{"en", "en", true},
+		{"EN", "en", true},
+		{" ja ", "ja", true},
+		{"fr", "", false},
+		{"english", "", false},
+	} {
+		got, err := NormalizeUILocale(tc.in)
+		if tc.ok {
+			if err != nil {
+				t.Errorf("NormalizeUILocale(%q): unexpected error %v", tc.in, err)
+				continue
+			}
+			if got != tc.want {
+				t.Errorf("NormalizeUILocale(%q): got %q, want %q", tc.in, got, tc.want)
+			}
+		} else if err == nil {
+			t.Errorf("NormalizeUILocale(%q): expected error, got %q", tc.in, got)
+		}
+	}
+}
+
 func TestSQLiteUserStore_TagsForUser_SetUserTags(t *testing.T) {
 	store := newTestSQLiteUserStore(t)
 	_, _ = store.CreateUser("u1", "alice", "Password1!", "")

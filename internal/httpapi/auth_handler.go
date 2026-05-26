@@ -235,17 +235,26 @@ func (a *App) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, auth.ErrWrongPassword):
 			writeJSONErrorKey(w, r, "auth.currentPasswordWrong", http.StatusUnauthorized)
-			return
 		case errors.Is(err, auth.ErrPasswordUnchanged):
 			writeJSONErrorKey(w, r, "auth.passwordUnchanged", http.StatusBadRequest)
-			return
 		case errors.Is(err, auth.ErrUserNotFound):
 			writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
-			return
+		case errors.Is(err, auth.ErrEmptyPassword):
+			writeJSONErrorKey(w, r, "auth.passwordEmpty", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordTooShort):
+			writeJSONErrorKey(w, r, "auth.passwordTooShort", http.StatusBadRequest, "min", auth.MinPasswordLength)
+		case errors.Is(err, auth.ErrPasswordNoUpper):
+			writeJSONErrorKey(w, r, "auth.passwordNoUpper", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordNoLower):
+			writeJSONErrorKey(w, r, "auth.passwordNoLower", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordNoDigit):
+			writeJSONErrorKey(w, r, "auth.passwordNoDigit", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrPasswordNoSpecial):
+			writeJSONErrorKey(w, r, "auth.passwordNoSpecial", http.StatusBadRequest)
 		default:
-			writeJSONError(w, err.Error(), http.StatusBadRequest)
-			return
+			writeInternalError(w, err)
 		}
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

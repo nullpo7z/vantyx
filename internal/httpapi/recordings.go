@@ -52,7 +52,7 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 
 	from, to, err := parseTimeRange(q.Get("from"), q.Get("to"), time.Now().UTC())
 	if err != nil {
-		writeTimeRangeError(w, err)
+		writeTimeRangeError(w, r, err)
 		return
 	}
 

@@ -44,6 +44,12 @@ var Messages = map[string]string{
 	"auth.sessionCreateFailed":    "failed to create session",
 	"auth.currentPasswordWrong":   "current password is wrong",
 	"auth.passwordUnchanged":      "new password must differ from current",
+	"auth.passwordEmpty":          "password must not be empty",
+	"auth.passwordTooShort":       "password must be at least {min} characters",
+	"auth.passwordNoUpper":        "password must contain at least one uppercase letter",
+	"auth.passwordNoLower":        "password must contain at least one lowercase letter",
+	"auth.passwordNoDigit":        "password must contain at least one digit",
+	"auth.passwordNoSpecial":      "password must contain at least one special character",
 	"auth.invalidSSHKey":          "invalid SSH public key",
 	"auth.sshKeyNotFound":         "key not found",
 	"auth.sshKeyAuthorizedKeyReq": "authorized_key is required",
@@ -69,6 +75,7 @@ var Messages = map[string]string{
 	"targets.groupIDRequired":  "group_id is required",
 	"targets.groupNotFound":    "group not found",
 	"targets.assignFailed":     "failed to assign target to group",
+	"targets.protocolInvalid":  "protocol must be ssh, telnet, vnc, tftp, ftp, or rdp",
 
 	// Settings.
 	"settings.invalidProto":  "invalid proto",
@@ -128,4 +135,15 @@ var Messages = map[string]string{
 	"transfers.targetAndPathReq":      "target_id and path are required",
 	"transfers.notSupportedForTarget": "file transfer not supported for this target",
 	"transfers.eventsUnavailable":     "file transfer events not available",
+	"transfers.invalidCursor":         "invalid after_id cursor",
+	"transfers.invalidState":          "invalid state filter",
+	"transfers.invalidDirection":      "direction must be upload or download",
+	"transfers.invalidBackend":        "backend must be remote or tftp_server",
+
+	// Time range query parameters.
+	"time.invalidFrom":    "invalid from: {reason}",
+	"time.invalidTo":      "invalid to: {reason}",
+	"time.fromBeforeTo":   "from must be before to",
+	"time.rangeTooLarge":  "time range must not exceed {days} days",
+	"time.expectedFormat": "expected RFC3339 or YYYY-MM-DD",
 }

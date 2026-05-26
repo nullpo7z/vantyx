@@ -81,27 +81,27 @@ func (a *App) handleFileTransfersList(w http.ResponseWriter, r *http.Request) {
 
 	states, err := parseFileTransferStates(q["state"])
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.invalidState", http.StatusBadRequest)
 		return
 	}
 	dir, err := parseFileTransferDirection(q.Get("direction"))
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.invalidDirection", http.StatusBadRequest)
 		return
 	}
 	backend, err := parseFileTransferBackend(q.Get("backend"))
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.invalidBackend", http.StatusBadRequest)
 		return
 	}
 	afterUpdated, afterID, err := decodeFileTransferCursor(q.Get("after_cursor"))
 	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "transfers.invalidCursor", http.StatusBadRequest)
 		return
 	}
 	from, to, err := parseTimeRange(q.Get("from"), q.Get("to"), time.Now().UTC())
 	if err != nil {
-		writeTimeRangeError(w, err)
+		writeTimeRangeError(w, r, err)
 		return
 	}
 
@@ -403,7 +403,7 @@ func (a *App) handleFileTransferUpload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		cancel()
 		a.failTransferJob(job, err.Error())
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 	job.SetTempPath(tempPath)

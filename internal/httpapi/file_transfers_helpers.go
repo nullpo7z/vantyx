@@ -2,12 +2,30 @@ package httpapi
 
 import (
 	"encoding/base64"
-	"fmt"
+	"errors"
 	"io"
 	"strings"
 	"time"
 
 	"github.com/nullpo7z/vantyx/internal/filetransfer"
+)
+
+// File transfer query-parsing sentinels. Handlers translate these into
+// localized 400 responses without echoing raw user input back to the
+// client (OWASP ASVS V5.3).
+var (
+	// ErrInvalidCursor is returned by [decodeFileTransferCursor] when
+	// the opaque cursor cannot be parsed.
+	ErrInvalidCursor = errors.New("invalid after_id cursor")
+	// ErrInvalidState is returned by [parseFileTransferStates] when a
+	// state filter value is not one of the supported enum members.
+	ErrInvalidState = errors.New("invalid state filter")
+	// ErrInvalidDirection is returned by [parseFileTransferDirection]
+	// when the direction is not upload or download.
+	ErrInvalidDirection = errors.New("direction must be upload or download")
+	// ErrInvalidBackend is returned by [parseFileTransferBackend] when
+	// the backend is not one of remote or tftp_server.
+	ErrInvalidBackend = errors.New("backend must be remote or tftp_server")
 )
 
 // fileTransferCursorSeparator separates the RFC3339Nano timestamp and
@@ -60,29 +78,31 @@ func encodeFileTransferCursor(updated time.Time, id string) string {
 }
 
 // decodeFileTransferCursor parses a cursor produced by
-// [encodeFileTransferCursor]. Invalid cursors yield a generic error so
-// callers don't leak the cursor format to clients.
+// [encodeFileTransferCursor]. Invalid cursors yield [ErrInvalidCursor]
+// so callers can respond with a localized message without echoing the
+// raw cursor bytes back to the client.
 func decodeFileTransferCursor(s string) (time.Time, string, error) {
 	if s == "" {
 		return time.Time{}, "", nil
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return time.Time{}, "", fmt.Errorf("invalid after_cursor")
+		return time.Time{}, "", ErrInvalidCursor
 	}
 	parts := strings.SplitN(string(raw), fileTransferCursorSeparator, 2)
 	if len(parts) != 2 {
-		return time.Time{}, "", fmt.Errorf("invalid after_cursor")
+		return time.Time{}, "", ErrInvalidCursor
 	}
 	t, err := time.Parse(time.RFC3339Nano, parts[0])
 	if err != nil {
-		return time.Time{}, "", fmt.Errorf("invalid after_cursor")
+		return time.Time{}, "", ErrInvalidCursor
 	}
 	return t.UTC(), parts[1], nil
 }
 
 // parseFileTransferStates parses repeated state query values into
-// typed [filetransfer.State] slices.
+// typed [filetransfer.State] slices. Unknown state values return
+// [ErrInvalidState] without echoing the raw input.
 func parseFileTransferStates(raw []string) ([]filetransfer.State, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -99,7 +119,7 @@ func parseFileTransferStates(raw []string) ([]filetransfer.State, error) {
 				filetransfer.StateCompleted, filetransfer.StateFailed, filetransfer.StateCancelled:
 				out = append(out, filetransfer.State(part))
 			default:
-				return nil, fmt.Errorf("invalid state: %s", part)
+				return nil, ErrInvalidState
 			}
 		}
 	}
@@ -107,7 +127,7 @@ func parseFileTransferStates(raw []string) ([]filetransfer.State, error) {
 }
 
 // parseFileTransferDirection returns the typed direction or "" for
-// empty input.
+// empty input. Unknown values return [ErrInvalidDirection].
 func parseFileTransferDirection(s string) (filetransfer.Direction, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -117,11 +137,11 @@ func parseFileTransferDirection(s string) (filetransfer.Direction, error) {
 	case filetransfer.DirectionUpload, filetransfer.DirectionDownload:
 		return filetransfer.Direction(s), nil
 	}
-	return "", fmt.Errorf("invalid direction: %s", s)
+	return "", ErrInvalidDirection
 }
 
 // parseFileTransferBackend returns the typed backend or "" for empty
-// input.
+// input. Unknown values return [ErrInvalidBackend].
 func parseFileTransferBackend(s string) (filetransfer.Backend, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -131,5 +151,5 @@ func parseFileTransferBackend(s string) (filetransfer.Backend, error) {
 	case filetransfer.BackendRemote, filetransfer.BackendTFTPServer:
 		return filetransfer.Backend(s), nil
 	}
-	return "", fmt.Errorf("invalid backend: %s", s)
+	return "", ErrInvalidBackend
 }

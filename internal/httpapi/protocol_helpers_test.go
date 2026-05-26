@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/nullpo7z/vantyx/internal/access"
@@ -51,8 +52,8 @@ func TestParseProtocolField_Invalid(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for %q, got nil", in)
 			}
-			if err.Error() != protocolValidationError {
-				t.Fatalf("unexpected error message: %q", err.Error())
+			if !errors.Is(err, ErrInvalidProtocol) {
+				t.Fatalf("expected ErrInvalidProtocol, got %v", err)
 			}
 		})
 	}

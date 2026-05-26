@@ -251,9 +251,10 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	protocol, err := parseProtocolField(req.Protocol)
 	if err != nil {
-		// parseProtocolField returns dynamic per-value errors; leave
-		// them unlocalised for now (validation surface to be revisited
-		// when the access package gains its own i18n hooks).
+		if errors.Is(err, ErrInvalidProtocol) {
+			writeJSONErrorKey(w, r, "targets.protocolInvalid", http.StatusBadRequest)
+			return
+		}
 		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -338,8 +339,10 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	protocol, err := parseProtocolField(req.Protocol)
 	if err != nil {
-		// See handleCreateTarget for why parseProtocolField errors
-		// are returned without translation.
+		if errors.Is(err, ErrInvalidProtocol) {
+			writeJSONErrorKey(w, r, "targets.protocolInvalid", http.StatusBadRequest)
+			return
+		}
 		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}

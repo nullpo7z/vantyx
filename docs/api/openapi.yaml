@@ -52,7 +52,10 @@ components:
         現在サポートしているロケールは `en` / `ja` です。
         ほぼ全ての API ハンドラ（auth, users, groups, targets, sessions, recordings,
         files / file-transfers, tftp, settings など）の主要なエラー文言は
-        i18n カタログ経由で生成されます。一部の動的なバリデーションエラー
+        i18n カタログ経由で生成されます。time_range クエリ (from/to)、
+        protocol バリデーション、file-transfers の state/direction/backend/
+        after_cursor バリデーション、`/api/me/password` のポリシーチェックも
+        i18n 経由で localize されます。一部の動的なバリデーションエラー
         (`access` パッケージの個別タグ検証など) は dependency 側の原文
         メッセージをそのまま返す場合があります。
       properties:

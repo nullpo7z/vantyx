@@ -36,6 +36,12 @@ var Messages = map[string]string{
 	"auth.sessionCreateFailed":    "セッションの作成に失敗しました",
 	"auth.currentPasswordWrong":   "現在のパスワードが正しくありません",
 	"auth.passwordUnchanged":      "新しいパスワードは現在のものと異なる必要があります",
+	"auth.passwordEmpty":          "パスワードは必須です",
+	"auth.passwordTooShort":       "パスワードは {min} 文字以上で入力してください",
+	"auth.passwordNoUpper":        "パスワードには大文字を 1 文字以上含めてください",
+	"auth.passwordNoLower":        "パスワードには小文字を 1 文字以上含めてください",
+	"auth.passwordNoDigit":        "パスワードには数字を 1 文字以上含めてください",
+	"auth.passwordNoSpecial":      "パスワードには記号を 1 文字以上含めてください",
 	"auth.invalidSSHKey":          "SSH 公開鍵が不正です",
 	"auth.sshKeyNotFound":         "鍵が見つかりません",
 	"auth.sshKeyAuthorizedKeyReq": "authorized_key は必須です",
@@ -61,6 +67,7 @@ var Messages = map[string]string{
 	"targets.groupIDRequired":  "group_id は必須です",
 	"targets.groupNotFound":    "グループが見つかりません",
 	"targets.assignFailed":     "ターゲットのグループ割り当てに失敗しました",
+	"targets.protocolInvalid":  "protocol は ssh, telnet, vnc, tftp, ftp, rdp のいずれかである必要があります",
 
 	// Settings.
 	"settings.invalidProto":  "プロトコル指定が不正です",
@@ -120,4 +127,15 @@ var Messages = map[string]string{
 	"transfers.targetAndPathReq":      "target_id と path は必須です",
 	"transfers.notSupportedForTarget": "このターゲットではファイル転送に対応していません",
 	"transfers.eventsUnavailable":     "ファイル転送イベントを利用できません",
+	"transfers.invalidCursor":         "after_id カーソルが不正です",
+	"transfers.invalidState":          "state フィルタが不正です",
+	"transfers.invalidDirection":      "direction は upload または download である必要があります",
+	"transfers.invalidBackend":        "backend は remote または tftp_server である必要があります",
+
+	// Time range query parameters.
+	"time.invalidFrom":    "from が不正です: {reason}",
+	"time.invalidTo":      "to が不正です: {reason}",
+	"time.fromBeforeTo":   "from は to より前である必要があります",
+	"time.rangeTooLarge":  "時間範囲は {days} 日以内である必要があります",
+	"time.expectedFormat": "RFC3339 または YYYY-MM-DD 形式で指定してください",
 }

@@ -20,6 +20,10 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
   `docs/roadmap.ja.md`). Top-level documents (`README`, `SECURITY`,
   `CONTRIBUTING`) keep their bilingual pairs; everything under `docs/` is
   English only to cap the bilingual-maintenance load.
+- Docs: trimmed `docs/roadmap.md` to the open items only. The list of
+  shipped features lives in `README.md` and was duplicated in the old
+  roadmap; the new file just enumerates what is still missing so the
+  two sources do not drift.
 - CI: split the workflow so per-PR runs only execute the fast gates
   (`lint-go`, `lint-fe`, `test-go`). The slower `link-check`,
   `security-scan` (Trivy + gosec), and `build-docker` jobs moved to a

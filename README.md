@@ -15,7 +15,7 @@ exposes a unified REST + WebSocket API for the bundled single-page UI.
 
 - **Browser terminal** for SSH and Telnet (xterm.js + WebSocket), with
   session resume, NAWS, and persistent shells.
-- **Browser remote desktop** for VNC via noVNC (RDP bridge is on the roadmap).
+- **Browser remote desktop** for VNC via noVNC (RDP bridge is on the [roadmap](docs/roadmap.md)).
 - **File transfer** UI for SFTP, FTP, remote TFTP, and a built-in TFTP server
   for network-equipment provisioning.
 - **CLI gateway**: log into Vantyx via `ssh user@vantyx` and proxy out to

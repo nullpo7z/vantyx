@@ -16,7 +16,7 @@ FTP / TFTP サーバーをつなぐセルフホスト型のアクセスゲート
 - **ブラウザターミナル**（SSH / Telnet 対応、xterm.js + WebSocket）：
   セッションの再開、NAWS、永続シェル。
 - **ブラウザリモートデスクトップ**（noVNC 経由の VNC）：RDP ブリッジは
-  ロードマップに掲載。
+  [ロードマップ](docs/roadmap.md)に掲載（英語のみ）。
 - **ファイル転送 UI**：SFTP / FTP / リモート TFTP / ネットワーク機器向け
   組み込み TFTP サーバー。
 - **CLI ゲートウェイ**：`ssh user@vantyx` で Vantyx にログインし、許可

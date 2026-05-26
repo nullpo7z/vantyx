@@ -10,23 +10,18 @@ issues:
     - patched_deps
   exclude-rules:
     # Tests can use long functions, less strict gosec, etc.
-    # bodyclose / unparam are excluded because tests often discard
-    # http.Response (e.g. websocket upgrades) and accept helper return
-    # values they do not consume.
+    # bodyclose is excluded because tests often discard http.Response
+    # (e.g. websocket upgrades) explicitly on purpose.
     - path: _test\.go$
       linters:
-        - gocyclo
         - gosec
-        - revive
         - errcheck
         - bodyclose
-        - unparam
-    # The tools build tag wraps blank imports only.
-    - path: internal/tools/
-      linters:
-        - revive
 
 linters:
+  # Personal-OSS minimal set: stdlib correctness + a security tool +
+  # cheap typo checks. Heavier opinionated linters (revive godoc
+  # requirements, gocyclo, unparam, nilerr) are intentionally off.
   enable:
     - govet
     - errcheck
@@ -35,34 +30,10 @@ linters:
     - unused
     - ineffassign
     - gosec
-    - gocyclo
-    - revive
     - misspell
-    - unparam
-    - nilerr
     - bodyclose
 
 linters-settings:
-  gocyclo:
-    min-complexity: 50
-
-  revive:
-    enable-all-rules: false
-    rules:
-      - name: exported
-        arguments:
-          - "checkPrivateReceivers"
-          - "disableStutteringCheck"
-      - name: package-comments
-      - name: var-naming
-      - name: unused-parameter
-        disabled: true
-      - name: error-naming
-      - name: error-return
-      - name: unexported-return
-      - name: receiver-naming
-      - name: context-as-argument
-
   misspell:
     locale: US
     # Accept British English spellings that appear throughout the
@@ -102,6 +73,3 @@ linters-settings:
       - (*os.File).Close
       - (net.Conn).Close
       - (*net/http.Request.Body).Close
-
-  unparam:
-    check-exported: false

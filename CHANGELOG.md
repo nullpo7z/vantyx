@@ -30,6 +30,12 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
   `scripts/check_coverage.sh` helper and the `make coverage` target
   remain available locally (the Makefile target now accepts an
   optional `MIN=NN` to opt back in).
+- Lint: trimmed `configs/golangci.yml` to a minimal personal-OSS set
+  (`govet`, `errcheck`, `staticcheck`, `gosimple`, `unused`,
+  `ineffassign`, `gosec`, `misspell`, `bodyclose`). The opinionated
+  style linters (`revive` godoc requirements, `gocyclo`, `unparam`,
+  `nilerr`) are off so PRs are not blocked on style nits unrelated to
+  the change.
 - CI: split the workflow so per-PR runs only execute the fast gates
   (`lint-go`, `lint-fe`, `test-go`). The slower `link-check`,
   `security-scan` (Trivy + gosec), and `build-docker` jobs moved to a

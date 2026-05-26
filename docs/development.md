@@ -106,13 +106,15 @@ End-to-end tests are documented in [`e2e/README.md`](../e2e/README.md).
   uses [`goimports`](https://pkg.go.dev/golang.org/x/tools/cmd/goimports)
   to normalise import groups.
 - Lint with `golangci-lint` using
-  [`configs/golangci.yml`](../configs/golangci.yml). Mandatory
-  linters include `revive` (godoc on every exported symbol),
-  `gocyclo`, `gosec`, `errcheck`, `gosimple`, `govet`, `staticcheck`,
-  `misspell`, and `unparam`.
-- Public symbols must have godoc comments starting with the symbol
-  name (`Foo does ...`). Package documentation lives in a `doc.go`
-  file per package.
+  [`configs/golangci.yml`](../configs/golangci.yml). The enabled set
+  is intentionally small: `govet`, `errcheck`, `staticcheck`,
+  `gosimple`, `unused`, `ineffassign`, `gosec`, `misspell`,
+  `bodyclose`. Opinionated style linters (`revive` godoc requirements,
+  `gocyclo`, `unparam`, `nilerr`) are off.
+- Godoc on exported symbols is encouraged but not enforced. When you
+  do write one, follow the convention of starting it with the symbol
+  name (`Foo does ...`). Package documentation can live in a `doc.go`
+  file when useful.
 - Logging: use the helpers in
   [`internal/logging`](../internal/logging). Do not call `log.Printf`
   directly in new code.

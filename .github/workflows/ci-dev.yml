@@ -25,9 +25,11 @@ jobs:
             exit 1
           fi
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          # Pin to a known-good v2 release; "latest" can break CI when
+          # upstream cuts a new major (e.g. v1 -> v2 broke the schema).
+          version: v2.12.2
           # Build the linter with the runner's Go toolchain so it
           # matches the language version targeted by go.mod (the
           # prebuilt binary lags upstream Go releases).

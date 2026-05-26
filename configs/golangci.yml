@@ -1,75 +1,101 @@
+version: "2"
+
 run:
-  timeout: 10m
   issues-exit-code: 1
+
+linters:
+  # Personal-OSS minimal set: stdlib correctness + a security tool +
+  # cheap typo checks. v2's default set already includes govet,
+  # errcheck, staticcheck (which absorbs gosimple/stylecheck), unused,
+  # and ineffassign, so we only opt-in to the extras here.
+  enable:
+    - bodyclose
+    - gosec
+    - misspell
+
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (net.Conn).Close
+        - (*net/http.Request.Body).Close
+
+    gosec:
+      # G602 (slice index out of range) and G703 (path traversal via
+      # taint analysis) are newer gosec checks that produce false
+      # positives on code paths that are already validated upstream.
+      # Keep the v1 behaviour.
+      excludes:
+        - G602
+        - G703
+
+    misspell:
+      locale: US
+      # Accept British English spellings that appear throughout the
+      # codebase comments. The doc strings use a mix of UK/US English
+      # because contributors come from different backgrounds; rather
+      # than rewrite every comment we whitelist the spellings.
+      ignore-rules:
+        - vantyx
+        - asciinema
+        - noVNC
+        - cancelled
+        - cancelling
+        - initialised
+        - initialise
+        - organised
+        - organise
+        - centralises
+        - centralise
+        - serialises
+        - serialise
+        - serialised
+        - honoured
+        - honour
+        - dialling
+        - sanitised
+        - sanitise
+        - recognised
+        - recognise
+        - behaviour
+        - colour
+
+    staticcheck:
+      # v2 merges gosimple/stylecheck into staticcheck and adds the new
+      # QF* "quick fix" suggestions. We keep the v1 effective surface
+      # by silencing the new stylistic categories.
+      checks:
+        - "all"
+        - "-ST1005" # error strings should not be capitalized (pre-existing style)
+        - "-QF1001" # could apply De Morgan's law
+        - "-QF1008" # could remove embedded field from selector
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Tests can use long functions, less strict gosec, etc.
+      # bodyclose is excluded because tests often discard http.Response
+      # (e.g. websocket upgrades) explicitly on purpose.
+      - path: _test\.go$
+        linters:
+          - bodyclose
+          - errcheck
+          - gosec
+    paths:
+      - web/node_modules
+      - patched_deps
+      - third_party$
+      - builtin$
+      - examples$
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-dirs:
-    - web/node_modules
-    - patched_deps
-  exclude-rules:
-    # Tests can use long functions, less strict gosec, etc.
-    # bodyclose is excluded because tests often discard http.Response
-    # (e.g. websocket upgrades) explicitly on purpose.
-    - path: _test\.go$
-      linters:
-        - gosec
-        - errcheck
-        - bodyclose
-
-linters:
-  # Personal-OSS minimal set: stdlib correctness + a security tool +
-  # cheap typo checks. Heavier opinionated linters (revive godoc
-  # requirements, gocyclo, unparam, nilerr) are intentionally off.
-  enable:
-    - govet
-    - errcheck
-    - staticcheck
-    - gosimple
-    - unused
-    - ineffassign
-    - gosec
-    - misspell
-    - bodyclose
-
-linters-settings:
-  misspell:
-    locale: US
-    # Accept British English spellings that appear throughout the
-    # codebase comments. The doc strings use a mix of UK/US English
-    # because contributors come from different backgrounds; rather than
-    # rewrite every comment we whitelist the spellings.
-    ignore-words:
-      - vantyx
-      - asciinema
-      - noVNC
-      - cancelled
-      - cancelling
-      - initialised
-      - initialise
-      - organised
-      - organise
-      - centralises
-      - centralise
-      - serialises
-      - serialise
-      - serialised
-      - honoured
-      - honour
-      - dialling
-      - sanitised
-      - sanitise
-      - recognised
-      - recognise
-      - behaviour
-      - colour
-
-  errcheck:
-    check-type-assertions: false
-    check-blank: false
-    exclude-functions:
-      - (io.Closer).Close
-      - (*os.File).Close
-      - (net.Conn).Close
-      - (*net/http.Request.Body).Close

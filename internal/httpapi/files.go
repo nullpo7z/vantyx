@@ -166,6 +166,17 @@ func remotePath(r *http.Request) string {
 	return path.Clean(p)
 }
 
+// requireNonRootFilePath rejects paths that resolve to the filesystem root.
+// Listing "/" is fine, but file operations like upload/download should not
+// target "/" or ".".
+func requireNonRootFilePath(w http.ResponseWriter, r *http.Request, p string) bool {
+	if p == "/" || p == "." {
+		writeJSONErrorKey(w, r, "common.invalidPath", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 // handleListFiles returns a directory listing for the target (SFTP). GET /api/targets/{target_id}/files?path=/
 func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -220,6 +231,9 @@ func (a *App) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	defer client.Close()
 
 	filePath := remotePath(r)
+	if !requireNonRootFilePath(w, r, filePath) {
+		return
+	}
 	f, err := client.Open(filePath)
 	if err != nil {
 		audit("files_open_failed", auditFields{
@@ -281,6 +295,9 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		pathParam = "/" + pathParam
 	}
 	pathParam = path.Clean(pathParam)
+	if !requireNonRootFilePath(w, r, pathParam) {
+		return
+	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		writeJSONErrorKey(w, r, "files.fileRequired", http.StatusBadRequest, "error", err)

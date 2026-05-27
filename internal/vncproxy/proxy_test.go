@@ -106,3 +106,39 @@ func TestBridge_DialFailureReturnsError(t *testing.T) {
 		t.Fatal("expected Bridge to return error when dial fails")
 	}
 }
+
+func TestBridge_RejectsHugeClientFrame(t *testing.T) {
+	echoAddr := tcpEchoServer(t)
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	done := make(chan error, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		done <- Bridge(conn, echoAddr, nil)
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws"}
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	huge := make([]byte, maxClientMessageBytes+1)
+	if err := conn.WriteMessage(websocket.BinaryMessage, huge); err != nil {
+		// Some clients may fail early if the peer already closed.
+		return
+	}
+	// Server should close; read should eventually error.
+	_, _, _ = conn.ReadMessage()
+	<-done
+}

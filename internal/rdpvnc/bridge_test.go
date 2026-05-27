@@ -7,6 +7,24 @@ import (
 	"time"
 )
 
+func TestValidateRDPInputs(t *testing.T) {
+	if err := validateRDPInputs("example.com", 3389, "user", "pass", 1024, 768); err != nil {
+		t.Fatalf("expected ok, got %v", err)
+	}
+	if err := validateRDPInputs("", 3389, "user", "pass", 1024, 768); err == nil {
+		t.Fatal("expected error for empty host")
+	}
+	if err := validateRDPInputs("example.com", 0, "user", "pass", 1024, 768); err == nil {
+		t.Fatal("expected error for invalid port")
+	}
+	if err := validateRDPInputs("example.com", 3389, "u\nser", "pass", 1024, 768); err == nil {
+		t.Fatal("expected error for control chars in username")
+	}
+	if err := validateRDPInputs("example.com", 3389, "user", "pa\rss", 1024, 768); err == nil {
+		t.Fatal("expected error for control chars in password")
+	}
+}
+
 func TestNextDisplay(t *testing.T) {
 	d1 := nextDisplay()
 	d2 := nextDisplay()

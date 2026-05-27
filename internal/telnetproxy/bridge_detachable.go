@@ -14,6 +14,10 @@ import (
 	"github.com/nullpo7z/vantyx/internal/session"
 )
 
+// maxClientMessageBytes bounds WebSocket frames from the browser client
+// to mitigate memory-based DoS in gorilla/websocket's ReadMessage path (CWE-770).
+const maxClientMessageBytes int64 = 1 << 20 // 1 MiB
+
 // clientEntry tracks a single attached telnet client, mirroring the
 // SSH bridge's structure. canWrite controls stdin forwarding so a
 // viewer's input never reaches the upstream telnet socket.
@@ -218,6 +222,7 @@ func (b *detachableBridge) handleResizeMessage(msg []byte) bool {
 }
 
 func (b *detachableBridge) attachWebSocket(wsConn *websocket.Conn, mode session.AttachMode, userID string) {
+	wsConn.SetReadLimit(maxClientMessageBytes)
 	w := &wsWriterAdapter{wsConn}
 	entry := &clientEntry{w: w, canWrite: mode != session.AttachModeViewer, userID: userID}
 	b.clientMu.Lock()

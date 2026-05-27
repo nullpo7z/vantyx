@@ -238,8 +238,10 @@ func buildFileTransferJobQuery(filter ListFilter) (string, []interface{}) {
 		conds = append(conds, "state IN ("+strings.Join(placeholders, ",")+")")
 	}
 	if q := strings.TrimSpace(filter.Query); q != "" {
-		conds = append(conds, "(file_name LIKE ? OR remote_path LIKE ? OR target_name LIKE ?)")
-		pat := "%" + q + "%"
+		// Escape LIKE wildcards so attacker-controlled fragments cannot
+		// smuggle pattern operators or force a broad scan (CWE-400).
+		pat := "%" + escapeLikeOperand(q) + "%"
+		conds = append(conds, `(file_name LIKE ? ESCAPE '\' OR remote_path LIKE ? ESCAPE '\' OR target_name LIKE ? ESCAPE '\')`)
 		args = append(args, pat, pat, pat)
 	}
 	if !filter.AfterUpdated.IsZero() {
@@ -255,6 +257,25 @@ func buildFileTransferJobQuery(filter ListFilter) (string, []interface{}) {
 		" ORDER BY updated_at DESC, id DESC LIMIT ?"
 	args = append(args, limit)
 	return sqlStr, args
+}
+
+// escapeLikeOperand escapes LIKE wildcards (`%`, `_`) and the escape
+// byte itself so caller-controlled substrings can be passed through
+// `... LIKE ? ESCAPE '\'` safely.
+func escapeLikeOperand(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '\\', '%', '_':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // Delete removes a single row. Returns the previous record and whether anything was deleted.

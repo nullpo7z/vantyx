@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,6 +41,47 @@ func nextDisplay() int {
 	return int(atomic.AddInt64(&displayCounter, 1))
 }
 
+func validateRDPString(s string, max int) error {
+	if s == "" {
+		return nil
+	}
+	if max > 0 && len(s) > max {
+		return fmt.Errorf("rdpvnc: input too long")
+	}
+	// Reject control characters to avoid log/terminal injection and
+	// surprising parsing behavior in downstream tooling.
+	for _, r := range s {
+		if r == 0 || r == '\r' || r == '\n' {
+			return fmt.Errorf("rdpvnc: invalid control character")
+		}
+	}
+	return nil
+}
+
+func validateRDPInputs(host string, port int, username, password string, width, height int) error {
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("rdpvnc: host is required")
+	}
+	// Basic sanity limits; width/height are already bounded by the HTTP layer.
+	if port <= 0 || port > 65535 {
+		return fmt.Errorf("rdpvnc: invalid port")
+	}
+	if err := validateRDPString(host, 512); err != nil {
+		return err
+	}
+	if err := validateRDPString(username, 256); err != nil {
+		return err
+	}
+	// Password may be longer but still cap to avoid pathological argv sizes.
+	if err := validateRDPString(password, 2048); err != nil {
+		return err
+	}
+	if width <= 0 || height <= 0 {
+		return fmt.Errorf("rdpvnc: invalid geometry")
+	}
+	return nil
+}
+
 func freePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -53,6 +95,9 @@ func freePort() (int, error) {
 // Start launches Xvfb, xfreerdp, and x11vnc. The returned Bridge exposes a
 // local VNC port that noVNC can connect to. Call Stop() when done.
 func Start(ctx context.Context, host string, port int, username, password string, width, height int) (*Bridge, error) {
+	if err := validateRDPInputs(host, port, username, password, width, height); err != nil {
+		return nil, err
+	}
 	display := nextDisplay()
 	displayStr := fmt.Sprintf(":%d", display)
 

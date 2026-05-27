@@ -286,6 +286,10 @@ func (a *App) handleFileTransferStartDownload(w http.ResponseWriter, r *http.Req
 		pathParam = "/" + pathParam
 	}
 	pathParam = path.Clean(pathParam)
+	if pathParam == "/" || pathParam == "." {
+		writeJSONErrorKey(w, r, "common.invalidPath", http.StatusBadRequest)
+		return
+	}
 	_, target, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
 	if !ok {
 		return
@@ -353,6 +357,10 @@ func (a *App) handleFileTransferUpload(w http.ResponseWriter, r *http.Request) {
 		pathParam = "/" + pathParam
 	}
 	pathParam = path.Clean(pathParam)
+	if pathParam == "/" || pathParam == "." {
+		writeJSONErrorKey(w, r, "common.invalidPath", http.StatusBadRequest)
+		return
+	}
 	file, hdr, err := r.FormFile("file")
 	if err != nil {
 		writeJSONErrorKey(w, r, "files.fileRequired", http.StatusBadRequest, "error", err)

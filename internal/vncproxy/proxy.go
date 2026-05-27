@@ -13,6 +13,12 @@ import (
 
 var logger = logging.WithComponent("vncproxy")
 
+// maxClientMessageBytes bounds client->server WebSocket frames to avoid
+// unbounded memory growth in gorilla/websocket's ReadMessage path (CWE-770).
+// VNC client traffic is typically small (input events); large framebuffer data
+// flows server->client.
+const maxClientMessageBytes int64 = 1 << 20 // 1 MiB
+
 // Bridge connects a noVNC WebSocket client to a VNC server at targetAddr.
 //
 // It proxies raw bytes in both directions until either side closes; the
@@ -37,10 +43,11 @@ func Bridge(wsConn *websocket.Conn, targetAddr string, touch func()) error {
 	}
 
 	// WebSocket -> TCP: read WS messages, write to the VNC server.
+	wsConn.SetReadLimit(maxClientMessageBytes)
 	go func() {
 		defer closeBoth()
 		for {
-			mt, data, err := wsConn.ReadMessage()
+			mt, r, err := wsConn.NextReader()
 			if err != nil {
 				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 					logger.Warn("ws read failed", "error", err)
@@ -53,7 +60,7 @@ func Bridge(wsConn *websocket.Conn, targetAddr string, touch func()) error {
 			if touch != nil {
 				touch()
 			}
-			if _, err := tcpConn.Write(data); err != nil {
+			if _, err := io.Copy(tcpConn, r); err != nil {
 				logger.Warn("tcp write failed", "error", err)
 				return
 			}

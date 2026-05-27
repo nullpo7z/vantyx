@@ -208,6 +208,7 @@ func (b *sshDetachableBridge) runExternalResize() {
 }
 
 func (b *sshDetachableBridge) attachWebSocket(conn *websocket.Conn, mode session.AttachMode, userID string) {
+	conn.SetReadLimit(maxClientMessageBytes)
 	w := &wsWriterAdapter{conn}
 	entry := &clientEntry{w: w, canWrite: mode != session.AttachModeViewer, userID: userID}
 	b.clientMu.Lock()

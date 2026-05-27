@@ -18,6 +18,11 @@ import (
 	"github.com/nullpo7z/vantyx/internal/session"
 )
 
+// maxClientMessageBytes bounds WebSocket frames from the browser client
+// to mitigate memory-based DoS in gorilla/websocket's ReadMessage path (CWE-770).
+// Terminal input is typically small (keystrokes); large payloads are unexpected.
+const maxClientMessageBytes int64 = 1 << 20 // 1 MiB
+
 // sessionFactory opens an SSH connection and returns stdin/stdout/stderr pipes, a window-change hook, and a cleanup function.
 // Used so tests can inject a fake that fails at specific steps for coverage.
 var sessionFactory = defaultSessionFactory
@@ -222,6 +227,7 @@ func RunBridge(ctx context.Context, conn *websocket.Conn, host string, port uint
 
 	// WebSocket -> stdin
 	wg.Add(1)
+	conn.SetReadLimit(maxClientMessageBytes)
 	go func() {
 		defer wg.Done()
 		type resizeMsg struct {

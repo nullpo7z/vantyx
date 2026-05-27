@@ -72,6 +72,22 @@ func TestFileTransferBackgroundDownload(t *testing.T) {
 	}
 }
 
+func TestFileTransferBackgroundDownload_RejectsRootPath(t *testing.T) {
+	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+
+	startBody := []byte(`{"backend":"remote","target_id":"` + targetID + `","path":"/"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/file-transfers/download", bytes.NewReader(startBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Result().StatusCode)
+	}
+}
+
 func TestFileTransferBackgroundUpload(t *testing.T) {
 	app, _, targetID := setupAppWithTargetAndSFTPMock(t)
 	router := app.NewRouter()

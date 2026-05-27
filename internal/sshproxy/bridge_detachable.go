@@ -225,9 +225,7 @@ func (b *sshDetachableBridge) attachWebSocket(conn *websocket.Conn, mode session
 
 func (b *sshDetachableBridge) detachEntry(entry *clientEntry) {
 	b.clientMu.Lock()
-	if _, ok := b.clients[entry]; ok {
-		delete(b.clients, entry)
-	}
+	delete(b.clients, entry)
 	b.clientMu.Unlock()
 	_ = entry.w.Close()
 }

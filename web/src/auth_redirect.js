@@ -61,7 +61,7 @@ export function peekPostLoginRedirect() {
  * @returns {boolean} True when a redirect was performed.
  */
 export function consumePostLoginRedirect() {
-  let path = null
+  let path
   try {
     path = sessionStorage.getItem(STORAGE_KEY)
     sessionStorage.removeItem(STORAGE_KEY)

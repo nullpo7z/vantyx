@@ -481,10 +481,6 @@ func (a *App) collectInvitationOptions(ctx context.Context, ownerID, targetID st
 	}
 	users := make([]invitationOptionsMember, 0, len(seenUsers))
 	for _, m := range seenUsers {
-		if len(m.Tags) == 0 {
-			// User has target access via group membership only; still invitable
-			// but no tag filter bucket — include with empty tags.
-		}
 		sort.Strings(m.Tags)
 		users = append(users, *m)
 	}
@@ -975,11 +971,11 @@ func (a *App) handleKickParticipant(w http.ResponseWriter, r *http.Request) {
 // caller. Caller must be a participant.
 func (a *App) handleCreateWriteRequest(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "session_id")
-	termSess, room, userID, ok := a.loadParticipatingTerminalSession(w, r, sessionID)
+	termSess, _, userID, ok := a.loadParticipatingTerminalSession(w, r, sessionID)
 	if !ok {
 		return
 	}
-	room = a.ensureRoomFor(termSess)
+	room := a.ensureRoomFor(termSess)
 	if room == nil {
 		writeJSONErrorKey(w, r, "sharing.participantNotFound", http.StatusForbidden)
 		return
@@ -1176,7 +1172,7 @@ func (a *App) handleReleaseWriteToken(w http.ResponseWriter, r *http.Request) {
 }
 
 // publishSharingEvent fans an event out to every participant of the
-// room (plus the owner). The payload is JSON-marshalled before
+// room (plus the owner). The payload is JSON-marshaled before
 // dispatch so the SSE handler does not need to know about
 // sharing.Event.
 func (a *App) publishSharingEvent(termSess *session.Session, event, userID, username string, extra map[string]interface{}) {

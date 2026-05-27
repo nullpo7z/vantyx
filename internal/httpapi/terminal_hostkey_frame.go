@@ -5,7 +5,7 @@ package httpapi
 // runDetachableBridge normally surfaces upstream failures as a single
 // "error: <localized message>" text frame. For the two host-key error
 // modes that the SPA can recover from interactively, we instead emit a
-// JSON frame the SPA recognises and renders as a TOFU adoption /
+// JSON frame the SPA recognizes and renders as a TOFU adoption /
 // mismatch warning dialog. Both frames carry enough context for the
 // SPA to call the corresponding /api/targets/{target_id}/ssh-host-key
 // endpoint without an extra round trip.

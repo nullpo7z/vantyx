@@ -196,7 +196,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // handleTerminalAttach handles the resume / viewer branch of /ws/ssh.
 //
-// Two flavours are supported:
+// Two flavors are supported:
 //
 //   - mode=writer (default): the caller owns the backgrounded session
 //     and wants to re-attach. Requires owner identity or current

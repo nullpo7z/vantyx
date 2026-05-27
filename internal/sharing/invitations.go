@@ -20,7 +20,7 @@ const (
 	// ModeViewer means the invitee can attach as a read-only viewer.
 	ModeViewer Mode = "viewer"
 	// ModeWriterEligible means the invitee may both view and request
-	// the write token without the owner having to pre-authorise the
+	// the write token without the owner having to pre-authorize the
 	// handoff. Currently treated identically to ModeViewer at the
 	// auth layer because every participant can request the token.
 	ModeWriterEligible Mode = "writer_eligible"

@@ -508,7 +508,6 @@ export function renderTerminalPage(container) {
     syncInviteManageButton()
     ensureSharingBanner()
     attachSharingEvents(v)
-    startWriteRequestPolling(v)
     void refreshParticipants(v)
     if (typeof currentSessionIdReady?._resolve === 'function') {
       try { currentSessionIdReady._resolve(v) } catch { /* ignore */ }
@@ -1172,11 +1171,6 @@ export function renderTerminalPage(container) {
         showIncomingWriteRequestModal(pendingWriteRequestApproval)
       }
     })
-    renderSharingBanner()
-  }
-
-  function setViewerBannerOwner(name) {
-    viewerOwnerName = name || viewerOwnerName
     renderSharingBanner()
   }
 

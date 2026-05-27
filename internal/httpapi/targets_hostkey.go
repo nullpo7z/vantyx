@@ -231,7 +231,7 @@ func (a *App) handleUpdateTargetHostKey(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(targetToResponse(t, tags))
 }
 
-// dialSSHWithContext bridges net.Dialer (which honours ctx cancellation)
+// dialSSHWithContext bridges net.Dialer (which honors ctx cancellation)
 // with ssh.NewClientConn so the probe dial picks up the request
 // timeout instead of hanging on a black-holed host. ssh.Dial uses a
 // blocking net.Dial under the hood and ignores any ctx.

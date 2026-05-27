@@ -117,11 +117,8 @@ func TestBridgeFanOutAndWriterEnforcement(t *testing.T) {
 	viewer.stdinIn <- []byte("VIEWER-INPUT-MUST-BE-DROPPED\n")
 
 	deadline := time.After(3 * time.Second)
-	for {
-		if bytes.Contains(owner.written.Bytes(), []byte("hello-from-owner")) &&
-			bytes.Contains(viewer.written.Bytes(), []byte("hello-from-owner")) {
-			break
-		}
+	for !(bytes.Contains(owner.written.Bytes(), []byte("hello-from-owner")) &&
+		bytes.Contains(viewer.written.Bytes(), []byte("hello-from-owner"))) {
 		select {
 		case <-deadline:
 			t.Fatalf("fan-out missing: owner=%q viewer=%q", owner.written.String(), viewer.written.String())
@@ -202,10 +199,7 @@ func TestBridgeSetWriterTransfersControl(t *testing.T) {
 	viewer.stdinIn <- []byte("from-new-writer\n")
 
 	deadline := time.After(3 * time.Second)
-	for {
-		if bytes.Contains(viewer.written.Bytes(), []byte("from-new-writer")) {
-			break
-		}
+	for !bytes.Contains(viewer.written.Bytes(), []byte("from-new-writer")) {
 		select {
 		case <-deadline:
 			t.Fatalf("new writer's input did not echo back: %q", viewer.written.String())

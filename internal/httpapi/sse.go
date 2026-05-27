@@ -69,7 +69,7 @@ func (b *SessionEventBroker) Broadcast() {
 
 // PublishToUsers sends payload only to subscribers whose userID
 // appears in users. The payload is delivered as the JSON body of an
-// SSE message frame; the broker does no further marshalling. Callers
+// SSE message frame; the broker does no further marshaling. Callers
 // generally use [sharing.Event] before invoking this.
 func (b *SessionEventBroker) PublishToUsers(payload []byte, users ...string) {
 	if len(users) == 0 || len(payload) == 0 {

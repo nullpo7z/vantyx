@@ -809,6 +809,16 @@ func (a *App) handleJoinSession(w http.ResponseWriter, r *http.Request) {
 		writeJSONErrorKey(w, r, "sharing.invitationStaleAccess", http.StatusForbidden)
 		return
 	}
+	// Also confirm the *joining* user still has access to the target.
+	// Without this check, a link invitation can be shared outside the
+	// target's ACL and grant unintended read access to sensitive output.
+	if ok, err := a.userCanAccessTarget(r.Context(), userID, access.TargetID(inv.TargetID)); err != nil {
+		writeInternalError(w, err)
+		return
+	} else if !ok {
+		writeJSONErrorKey(w, r, "sharing.inviteeNoTargetAccess", http.StatusForbidden)
+		return
+	}
 	if err := a.SharingStore.RecordUse(r.Context(), inv.ID, userID, now); err != nil {
 		writeInternalError(w, err)
 		return
@@ -1334,6 +1344,14 @@ func (a *App) terminalSessionByOwnerOrParticipant(ctx context.Context, sessionID
 		return termSess, room, nil
 	}
 	if room == nil || !room.IsParticipant(userID) {
+		return nil, room, sharing.ErrParticipantMissing
+	}
+	// Viewer attach must still respect the target ACL (group/tag grants).
+	// Participants are stored in-memory, so we defensively re-check the
+	// underlying access control to avoid stale or leaked viewer state.
+	if ok, err := a.userCanAccessTarget(ctx, userID, access.TargetID(termSess.TargetID)); err != nil {
+		return nil, room, err
+	} else if !ok {
 		return nil, room, sharing.ErrParticipantMissing
 	}
 	return termSess, room, nil

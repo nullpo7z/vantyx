@@ -25,6 +25,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
+	"github.com/nullpo7z/vantyx/internal/sharing"
 )
 
 // httpLogger is the slog logger tagged with the "httpapi.router"
@@ -75,6 +76,20 @@ type App struct {
 
 	// FileTransferManager tracks background file upload / download jobs.
 	FileTransferManager *filetransfer.Manager
+
+	// SharingRegistry holds the in-memory rooms for collaborative
+	// terminal sessions. Each running terminal session gets a Room
+	// the first time someone interacts with the sharing API.
+	SharingRegistry *sharing.Registry
+
+	// SharingStore persists invitations (token hash, expiry, mode).
+	// A nil store disables invitation issuance and join.
+	SharingStore sharing.Store
+
+	// SharingBridges tracks the live bridge controllers per session
+	// so the HTTP layer can hand the write token to a different
+	// participant at runtime.
+	SharingBridges *bridgeRegistry
 }
 
 // newAppDBOpen, newAppMigrate, and newAppUserStore are test seams used
@@ -231,6 +246,9 @@ func NewApp() *App {
 		FileTransferEventBroker: ftBroker,
 		CommandLogStore:         newCommandLogStore(db),
 		FileTransferManager:     ftManager,
+		SharingRegistry:         sharing.NewRegistry(),
+		SharingStore:            sharing.NewSQLiteStore(db),
+		SharingBridges:          newBridgeRegistry(),
 	}
 }
 
@@ -333,15 +351,33 @@ func (a *App) NewRouter() http.Handler {
 	r.Delete("/api/targets/{target_id}", a.handleDeleteTarget)
 	r.Get("/api/targets/{target_id}/tags", a.handleTargetTags)
 	r.Put("/api/targets/{target_id}/tags", a.handleSetTargetTags)
+	// SSH host-key probing (TOFU helper) and host-key adoption /
+	// clearing. Both are admin-only and audited.
+	r.Post("/api/targets/probe-host-key", a.handleProbeHostKey)
+	r.Put("/api/targets/{target_id}/ssh-host-key", a.handleUpdateTargetHostKey)
 
 	// SSE pushers.
 	r.Get("/api/events/sessions", a.handleSessionEvents)
 	r.Get("/api/events/file-transfers", a.handleFileTransferEvents)
+	r.Get("/api/invitations/incoming", a.handleListIncomingInvitations)
 
 	// SSH terminal and session list.
 	r.Route("/api/terminal/sessions", func(r chi.Router) {
 		r.Get("/", a.handleTerminalSessions)
 		r.Delete("/{session_id}", a.handleTerminalSessionDelete)
+		// Collaborative session sharing (Phase A).
+		r.Get("/{session_id}/invitation-options", a.handleInvitationOptions)
+		r.Post("/{session_id}/invitations", a.handleCreateInvitation)
+		r.Get("/{session_id}/invitations", a.handleListInvitations)
+		r.Delete("/{session_id}/invitations/{invitation_id}", a.handleRevokeInvitation)
+		r.Post("/{session_id}/invitations/{invitation_id}/join-url", a.handleRegenerateInvitationJoinURL)
+		r.Post("/{session_id}/join", a.handleJoinSession)
+		r.Get("/{session_id}/participants", a.handleListParticipants)
+		r.Delete("/{session_id}/participants/{user_id}", a.handleKickParticipant)
+		r.Post("/{session_id}/write-requests", a.handleCreateWriteRequest)
+		r.Post("/{session_id}/write-requests/{request_id}/grant", a.handleGrantWriteRequest)
+		r.Post("/{session_id}/write-requests/{request_id}/deny", a.handleDenyWriteRequest)
+		r.Post("/{session_id}/write-token/release", a.handleReleaseWriteToken)
 	})
 	r.Get("/ws/ssh", a.handleSSHWebSocket)
 	r.Get("/ws/vnc", a.handleVNCWebSocket)

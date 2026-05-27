@@ -4,6 +4,7 @@
  */
 
 import API from './api.js'
+import { captureNextQueryParam, consumePostLoginRedirect } from './auth_redirect.js'
 import { renderApp } from './app.js'
 import { applyServerLocale, t } from './i18n.js'
 
@@ -67,6 +68,7 @@ export function renderChangePassword(container) {
     btn.disabled = true
     try {
       await API.changePassword(current, newPw)
+      if (consumePostLoginRedirect()) return
       renderApp(container)
     } catch (err) {
       errorEl.textContent = err.message || t('login.changeFailed')
@@ -85,6 +87,7 @@ export function renderChangePassword(container) {
  * @param {HTMLElement} container - SPA root element.
  */
 export function renderLogin(container) {
+  captureNextQueryParam()
   container.innerHTML = `
     <div class="flex-1 flex items-center justify-center p-4">
       <div class="w-full max-w-sm bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
@@ -133,6 +136,8 @@ export function renderLogin(container) {
       }
       if (data.require_password_change) {
         renderChangePassword(container)
+      } else if (consumePostLoginRedirect()) {
+        /* navigating to invitation / deep link */
       } else {
         renderApp(container)
       }

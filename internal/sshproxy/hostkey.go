@@ -27,6 +27,11 @@ type bridgeOptions struct {
 	// is rejected because no fingerprint was configured; callers may
 	// surface it via TOFU flows.
 	captured *string
+	// controlSink, when set, receives the live BridgeController so the
+	// HTTP layer can drive writer / viewer hand-offs. The bridge calls
+	// Register exactly once after the SSH session is set up; nil sinks
+	// are ignored.
+	controlSink BridgeControlSink
 }
 
 // WithHostKeyFingerprint sets the expected SHA-256 host-key fingerprint
@@ -47,6 +52,32 @@ func WithHostKeyFingerprint(fp string) BridgeOption {
 // break-glass; production deployments must record a fingerprint instead.
 func WithInsecureSkipHostKeyVerify() BridgeOption {
 	return func(o *bridgeOptions) { o.insecureSkipVerify = true }
+}
+
+// WithBridgeControlSink registers a sink that receives the live
+// BridgeController when the bridge is ready. Used by internal/httpapi
+// to wire up the collaborative-session writer / viewer hand-off.
+func WithBridgeControlSink(sink BridgeControlSink) BridgeOption {
+	return func(o *bridgeOptions) { o.controlSink = sink }
+}
+
+// WithCapturedFingerprint configures the bridge / host-key callback to
+// publish the SHA-256 fingerprint of the upstream key into *out. It is
+// populated:
+//
+//   - on every connection when WithInsecureSkipHostKeyVerify is also
+//     set (host key probing helper for TOFU adoption); and
+//   - when host-key verification is rejected because no fingerprint is
+//     configured, so the rejecting error reporter can still surface the
+//     offered key to the operator.
+//
+// The pointer must be non-nil. Passing nil makes this option a no-op.
+func WithCapturedFingerprint(out *string) BridgeOption {
+	return func(o *bridgeOptions) {
+		if out != nil {
+			o.captured = out
+		}
+	}
 }
 
 func buildOptions(opts []BridgeOption) *bridgeOptions {

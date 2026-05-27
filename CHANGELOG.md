@@ -8,8 +8,125 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
 
 ## [Unreleased]
 
+### Added
+
+- Feature: each row in the issued-invitations table now offers
+  **Show link** (reuses the URL from this browser when still valid),
+  **Reissue** (POST `.../invitations/{id}/join-url` rotates the token),
+  and **Delete** (revoke). New links invalidate the previous token.
+- Fix: the invite-management dialog now refreshes its status column
+  in real time. It shares the `/api/events/sessions` SSE stream with
+  the terminal page and reloads when invitations are consumed or
+  revoked; a 30-second timer also picks up time-based expirations.
+  The backend emits a new `invitation_consumed` sharing event when a
+  join link is used.
+- Fix: the issued-invitations table treated API `expires_at` values
+  (Unix seconds) as JavaScript milliseconds, so unused invites showed
+  1970-era expiry times and were always labelled expired. The list
+  now parses server timestamps correctly, renames the expiry column
+  to "Expires" / "有効期限", and uses a dedicated "Status" /
+  "ステータス" column (revoke stays under "Actions" / "操作").
+- Fix: opening a collaborative-session invitation URL while logged
+  out sent the user to the login page but, after signing in, always
+  landed on the home screen instead of returning to
+  `/terminal?session_id=…&mode=viewer&invite=…`. Standalone pages now
+  stash the requested path (and `?next=` on the login link) in
+  `sessionStorage` and navigate back once authentication succeeds.
+- Terminal page header: owners of an active SSH/Telnet session now
+  see an **Invitations** button that opens the same invite-management
+  dialog as the sessions list (issue named or link invitations, copy
+  join URLs, revoke pending invites). Hidden for viewers and until a
+  `session_id` is established.
+- Fix: the Edit Target modal's "SSH host key" section was always
+  displaying "Not registered" even when a fingerprint was on file.
+  The modal builds its target stub from the `data-target-*`
+  attributes of the edit button, but the button never serialised
+  `ssh_host_key_fingerprint`, so the modal had nothing to show.
+  The button now exposes `data-target-ssh-host-key-fp` and the
+  modal also refreshes the value via `GET /api/targets` after
+  rendering, so adoption performed in another tab (e.g. through
+  the terminal-page TOFU dialog) is reflected immediately. The
+  Clear button is now disabled when there is nothing to clear, and
+  the "Not registered" placeholder copy was reworded from "(will
+  confirm on first connect)" to the more accurate "(will be
+  prompted in the adoption dialog on connect)".
+- Fix: when the SSH bridge fails host-key verification on the
+  initial dial, the terminal page no longer renders the misleading
+  "session is still running on the backend" banner alongside the
+  credentials form. The host-key TOFU / mismatch dialog now hides
+  every other transient wrap on entry, and dismissing it lands on
+  a single clear "verification cancelled — connection cannot be
+  established" banner that explains the next step. Each connect-flow
+  `ws.onclose` handler also short-circuits when a host-key error has
+  fired so it does not race the dialog with stale recovery UI.
+  Additionally, the WebSocket that delivered the `host_key_unknown` /
+  `host_key_mismatch` frame now has its `onmessage` / `onclose` /
+  `onerror` / `onopen` handlers detached before `ws.close()` is
+  called. Without that, a delayed close-handshake from the old
+  socket could fire after the user adopted the key and a fresh
+  socket had already attached, writing a stale "[connection
+  closed]" line into the live xterm and re-surfacing the
+  disconnected banner over the working session.
+- Fix: `POST /api/targets/probe-host-key` was forcing
+  `HostKeyAlgorithms` to ED25519-first, but the detachable SSH
+  bridge does not set the field and therefore inherits Go
+  `x/crypto/ssh`'s default order which prefers RSA over ED25519.
+  On servers that advertise multiple host keys (the OpenSSH
+  default), the probe captured the ED25519 fingerprint while the
+  bridge later negotiated the RSA key, leaving operators stuck in
+  an adopt → mismatch → re-adopt loop. The probe now uses the
+  same default order so probe and bridge always converge on the
+  same key.
+- SSH host key fingerprint UI / API + Trust-On-First-Use (TOFU)
+  adoption flow. Two admin-only endpoints back the new flow:
+  `POST /api/targets/probe-host-key` performs a one-shot SSH dial
+  and returns the offered SHA-256 fingerprint without persisting
+  anything; `PUT /api/targets/{id}/ssh-host-key` adopts (or clears
+  with empty body) the fingerprint and emits a dedicated audit
+  event. The Add Target modal now auto-probes the upstream host
+  when SSH is selected and asks for explicit confirmation before
+  recording the fingerprint, the Edit Target modal exposes
+  re-fetch and clear buttons, and the terminal page surfaces a
+  TOFU adoption dialog (and a stronger checkbox-gated mismatch
+  warning) when the bridge reports `host_key_unknown` or
+  `host_key_mismatch` via a structured WebSocket frame. After the
+  user accepts, the cached credentials drive an automatic
+  reconnect. New audit events: `target_host_key_probed`,
+  `target_host_key_adopted`, `target_host_key_cleared`,
+  `target_host_key_probe_failed`, `terminal_host_key_unknown_presented`,
+  `terminal_host_key_mismatch_presented`. Also fixes a missing
+  SQLite migration for `ssh_host_key_insecure_skip_verify` that
+  prevented brand-new deployments from ever calling
+  `SetSSHHostKeyInsecureSkipVerify`.
+- Collaborative terminal sessions (Phase A: SSH/Telnet). A session
+  owner can invite other Vantyx users either by name or via a
+  one-shot share link, and invitees attach to the running bridge as
+  read-only viewers. Exactly one writer holds input control at a
+  time; viewers can request control and the current writer accepts
+  or refuses through a modal. Invitations are persisted in
+  `session_invitations` (only the SHA-256 hash of the token is
+  stored) and expire after a configurable TTL. New REST endpoints
+  under `/api/terminal/sessions/{id}` cover invitation issue / list /
+  revoke, join, participants list / kick, and write-token
+  request / grant / deny / release. The detachable SSH and Telnet
+  bridges fan-out output to every attached client, drop viewer
+  stdin server-side, and switch the writer without disconnecting
+  anyone. New audit events (`session_invitation_*`,
+  `session_participant_*`, `session_write_*`) record every
+  collaboration action.
+
 ### Changed
 
+- Docker: drop `su-exec` from the runtime image and start the
+  process directly as the non-root user via `USER nonroot:nonroot`
+  in the Dockerfile. The previous entrypoint relied on `su-exec`
+  to demote root → nonroot at start-up, which fails with
+  `setgroups: Operation not permitted` when the container runs
+  with `cap_drop: ALL` (e.g. on a Proxmox unprivileged LXC host).
+  The hardening posture in `docker-compose.yml` is unchanged and
+  the container still cannot regain root inside; it simply never
+  starts as root in the first place. Bind-mounted host paths must
+  be writable by UID 65532.
 - CI: migrated `configs/golangci.yml` to the golangci-lint v2 schema
   (`version: "2"`, `linters.settings`, `linters.exclusions`) and bumped
   `golangci/golangci-lint-action` from v6 to v8 with `version` pinned to

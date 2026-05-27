@@ -345,7 +345,8 @@ func TestHandleSSHWebSocket_TelnetTargetUpgrades(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read before ready: %v", err)
 		}
-		if mt == websocket.TextMessage && len(msg) > 0 && msg[0] == '{' {
+		if mt == websocket.TextMessage && len(msg) > 0 &&
+			(strings.HasPrefix(string(msg), "vantyx:meta:") || msg[0] == '{') {
 			ready = true
 		}
 	}

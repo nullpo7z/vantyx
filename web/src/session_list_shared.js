@@ -204,11 +204,26 @@ export function buildSessionsTableHTML(sessions, rdpSessions, escapeHtml) {
         : `<span class="break-words">${escapeHtml(descText)}</span>`
     const isTftp = isTftpConsoleSession(s)
     const tftpTargetId = isTftp ? tftpTargetFromDescription(s.description) : ''
+    const role = (s.role || 'owner').toLowerCase()
+    const isOwner = role === 'owner'
+    // Viewer participants always reattach in viewer mode. The
+    // terminal page picks up `mode=viewer` from the URL and disables
+    // stdin client-side; the bridge enforces it server-side too.
+    const reconnectModeAttr = isOwner ? '' : ` data-reconnect-attach-mode="viewer"`
     const reconnectAttrs = isTftp
       ? `data-terminal-reconnect="1" data-session-id="${escapeHtml(s.session_id)}" data-reconnect-mode="tftp" data-target-id="${escapeHtml(s.target_id)}" data-tftp-target-id="${escapeHtml(tftpTargetId)}"`
-      : `data-terminal-reconnect="1" data-session-id="${escapeHtml(s.session_id)}" data-target-id="${escapeHtml(s.target_id)}" data-target-name="${escapeHtml(s.target_name || '')}"`
+      : `data-terminal-reconnect="1" data-session-id="${escapeHtml(s.session_id)}" data-target-id="${escapeHtml(s.target_id)}" data-target-name="${escapeHtml(s.target_name || '')}"${reconnectModeAttr}`
+    const inviteBtn = isOwner
+      ? `<button type="button" data-session-invite="1" data-session-id="${escapeHtml(s.session_id)}" data-target-id="${escapeHtml(s.target_id)}" data-target-name="${escapeHtml(s.target_name || '')}" class="${SESSIONS_BTN} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" title="${tr('sharing.inviteTitle')}">${tr('sharing.invite')}</button>`
+      : ''
+    const roleBadge = isOwner
+      ? ''
+      : `<span class="ml-1 inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-amber-800 align-middle">${tr('sharing.roleViewer')}</span>`
+    const ownerLine = !isOwner && s.owner_username
+      ? `<div class="text-xs text-slate-500 mt-0.5">${escapeHtml(tr('sharing.ownedBy', { name: s.owner_username }))}</div>`
+      : ''
     rows.push(`<tr class="${sessionTableRowClass(s.idle)}">
-      <td class="${SESSIONS_CELL} text-sm font-medium text-slate-900 whitespace-nowrap">${titleText}</td>
+      <td class="${SESSIONS_CELL} text-sm font-medium text-slate-900 whitespace-nowrap">${titleText}${roleBadge}${ownerLine}</td>
       <td class="${SESSIONS_CELL} text-sm text-slate-600 min-w-[8rem] max-w-md">${descCell}</td>
       <td class="${SESSIONS_CELL} text-sm text-slate-700 break-all font-mono">${escapeHtml(targetFullPathForDisplay(s))}</td>
       <td class="${SESSIONS_CELL_SHRINK} text-slate-800 font-medium">${escapeHtml(sessionProtocolLabel(s))}</td>
@@ -216,7 +231,8 @@ export function buildSessionsTableHTML(sessions, rdpSessions, escapeHtml) {
       <td class="${SESSIONS_CELL_ACTIONS}">
         <div class="${SESSIONS_ACTION_BTNS}">
           <button type="button" ${reconnectAttrs} class="${SESSIONS_BTN} bg-sky-600 text-white hover:bg-sky-700">${tr('sessions.reconnect')}</button>
-          <button type="button" ${sessionEndButtonAttrs(s, escapeHtml, { kind: 'terminal' })} class="${SESSIONS_BTN} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">${tr('sessions.end')}</button>
+          ${inviteBtn}
+          ${isOwner ? `<button type="button" ${sessionEndButtonAttrs(s, escapeHtml, { kind: 'terminal' })} class="${SESSIONS_BTN} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">${tr('sessions.end')}</button>` : ''}
         </div>
       </td>
     </tr>`)
@@ -346,7 +362,18 @@ export function bindSessionListActions(container, { openTerminalTab, getRdpResol
       if (targetId) params.set('target_id', targetId)
       if (targetName) params.set('target_name', targetName)
       params.set('session_id', sid)
+      const attachMode = btn.getAttribute('data-reconnect-attach-mode') || ''
+      if (attachMode === 'viewer') params.set('mode', 'viewer')
       openTerminalTab(`/terminal?${params.toString()}`)
+    })
+  })
+  container.querySelectorAll('[data-session-invite]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const sid = btn.getAttribute('data-session-id') || ''
+      if (!sid) return
+      const targetName = btn.getAttribute('data-target-name') || ''
+      const { openInviteDialog } = await import('./invite_dialog.js')
+      openInviteDialog({ sessionId: sid, targetName, escapeHtml })
     })
   })
   container.querySelectorAll('[data-rdp-reconnect]').forEach((el) => {

@@ -38,6 +38,13 @@ type Target struct {
 	// non-empty, sshproxy / sftp connections to this target are aborted
 	// unless the server presents a matching key. ASVS V2.6 / V9.2.
 	SSHHostKeyFingerprint string
+	// SSHHostKeyInsecureSkipVerify, when true, disables host-key
+	// verification for this target only. Equivalent to setting the
+	// global VANTYX_SSH_INSECURE_IGNORE_HOST_KEY=1 env var but scoped
+	// to one target so the rest of the deployment retains its
+	// default-deny posture (CWE-295). The fingerprint field, if also
+	// set, is *ignored* in this mode.
+	SSHHostKeyInsecureSkipVerify bool
 	// File transfer protocol toggles (for SSH / Telnet targets: enable / disable SFTP / FTP / TFTP for the file transfer UI). Persisted to the DB.
 	SFTPEnabled bool
 	FTPEnabled  bool
@@ -61,6 +68,11 @@ type TargetStore interface {
 	// of the upstream SSH server's host key. Pass "" to clear it (which
 	// reinstates the TOFU-prompt behavior on the next connection).
 	SetSSHHostKeyFingerprint(ctx context.Context, targetID TargetID, fingerprint string) error
+	// SetSSHHostKeyInsecureSkipVerify toggles per-target host-key
+	// verification bypass. When true, sshproxy / sftp accept any
+	// host key for this target. Use only when the operator
+	// explicitly accepts the MITM risk.
+	SetSSHHostKeyInsecureSkipVerify(ctx context.Context, targetID TargetID, skip bool) error
 }
 
 var (

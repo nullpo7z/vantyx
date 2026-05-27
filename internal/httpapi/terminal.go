@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/recording"
 	"github.com/nullpo7z/vantyx/internal/session"
+	"github.com/nullpo7z/vantyx/internal/sharing"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
 	"github.com/nullpo7z/vantyx/internal/telnetproxy"
 )
@@ -192,22 +194,31 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleTerminalAttach handles the resume branch of /ws/ssh: the
-// caller already owns a backgrounded session and wants to re-attach a
-// fresh WebSocket connection to it.
+// handleTerminalAttach handles the resume / viewer branch of /ws/ssh.
+//
+// Two flavors are supported:
+//
+//   - mode=writer (default): the caller owns the backgrounded session
+//     and wants to re-attach. Requires owner identity or current
+//     write-token holder.
+//   - mode=viewer: the caller has already accepted an invitation and
+//     joined via POST /api/terminal/sessions/{id}/join. The bridge
+//     attaches them as a read-only client and silently drops their
+//     stdin until they obtain the write token.
 func (a *App) handleTerminalAttach(w http.ResponseWriter, r *http.Request, userID, sessionIDParam string) {
-	termSess, ok := a.TerminalSessionManager.Get(session.ID(sessionIDParam))
-	if !ok || termSess.UserID != userID {
-		writeJSONErrorKey(w, r, "sessions.notFoundOrAccessDenied", http.StatusNotFound)
-		return
-	}
-	canAccess, err := a.userCanAccessTarget(r.Context(), userID, access.TargetID(termSess.TargetID))
+	mode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
+	viewer := mode == "viewer"
+	termSess, room, err := a.terminalSessionByOwnerOrParticipant(r.Context(), sessionIDParam, userID, viewer)
 	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	if !canAccess {
-		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
+		switch {
+		case errors.Is(err, sharing.ErrRoomNotFound),
+			errors.Is(err, sharing.ErrParticipantMissing):
+			writeJSONErrorKey(w, r, "sessions.notFoundOrAccessDenied", http.StatusNotFound)
+		case errors.Is(err, sharing.ErrNotWriter):
+			writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
+		default:
+			writeInternalError(w, err)
+		}
 		return
 	}
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
@@ -219,17 +230,45 @@ func (a *App) handleTerminalAttach(w http.ResponseWriter, r *http.Request, userI
 		writeJSONErrorKey(w, r, "common.failedUpgradeConnection", http.StatusBadRequest)
 		return
 	}
-	_ = conn.WriteMessage(websocket.TextMessage, []byte(""))
+	_ = conn.WriteMessage(websocket.TextMessage, []byte("vantyx:ready"))
+	if err := writeTerminalWsMeta(conn, struct {
+		SessionID string `json:"session_id"`
+	}{SessionID: sessionIDParam}); err != nil {
+		_ = conn.Close()
+		return
+	}
+	attachMode := session.AttachModeWriter
+	if viewer {
+		attachMode = session.AttachModeViewer
+	}
+	username := a.usernameFor(r.Context(), userID)
 	select {
-	case termSess.AttachCh <- session.AttachReq{Conn: conn}:
+	case termSess.AttachCh <- session.AttachReq{Conn: conn, UserID: userID, Username: username, Mode: attachMode}:
 		audit("terminal_session_attach", auditFields{
 			"session_id": sessionIDParam,
 			"user_id":    userID,
+			"mode":       string(modeLabel(attachMode)),
 		})
+		// If a writer reconnects, make sure the bridge knows; the
+		// previous controller may have demoted them after a kick or
+		// reload of the room state.
+		if !viewer && a.SharingBridges != nil {
+			if controller, ok := a.SharingBridges.Get(termSess.ID()); ok {
+				controller.SetWriter(roomWriterID(room))
+			}
+		}
 	default:
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: session attach slot busy"))
 		_ = conn.Close()
 	}
+}
+
+// modeLabel maps session.AttachMode to its short audit-log string.
+func modeLabel(m session.AttachMode) string {
+	if m == session.AttachModeViewer {
+		return "viewer"
+	}
+	return "writer"
 }
 
 // TerminalSessionItem is one entry in the GET /api/terminal/sessions
@@ -246,6 +285,14 @@ type TerminalSessionItem struct {
 	LastSeen    time.Time `json:"last_seen"`
 	Idle        bool      `json:"idle"`
 	IdleSeconds int       `json:"idle_seconds,omitempty"`
+	// Role indicates how the current user is attached to this session:
+	// "owner" if they own the underlying terminal (and therefore are
+	// the default writer), or "viewer" if they have joined via a
+	// sharing invitation. Empty when the session listing is used in
+	// pre-collaboration code paths.
+	Role          string `json:"role,omitempty"`
+	OwnerUserID   string `json:"owner_user_id,omitempty"`
+	OwnerUsername string `json:"owner_username,omitempty"`
 }
 
 func terminalSessionItemFrom(sess *session.Session, mgr *session.Manager, protocol access.Protocol, targetPath string) TerminalSessionItem {
@@ -292,6 +339,7 @@ func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 		mgr = m
 	}
 	ids := lister.ActiveIDs()
+	seen := make(map[session.ID]struct{}, len(ids))
 	items := make([]TerminalSessionItem, 0, len(ids))
 	for _, id := range ids {
 		sess, ok := a.TerminalSessionManager.Get(id)
@@ -307,7 +355,43 @@ func (a *App) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 			protocol = target.Protocol
 			targetPath = target.Path
 		}
-		items = append(items, terminalSessionItemFrom(sess, mgr, protocol, targetPath))
+		item := terminalSessionItemFrom(sess, mgr, protocol, targetPath)
+		item.Role = "owner"
+		item.OwnerUserID = sess.UserID
+		item.OwnerUsername = a.usernameFor(ctx, sess.UserID)
+		items = append(items, item)
+		seen[id] = struct{}{}
+	}
+	// Add sessions where the current user is participating as a
+	// viewer / writer through the sharing registry. The room's owner
+	// must still have access to the target; we re-check the viewer's
+	// own access too so a revoked grant does not surface stale rows.
+	if a.SharingRegistry != nil {
+		for _, sid := range a.SharingRegistry.RoomsForUser(userID) {
+			id := session.ID(sid)
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			sess, ok := a.TerminalSessionManager.Get(id)
+			if !ok {
+				continue
+			}
+			if _, ok := allowedSet[access.TargetID(sess.TargetID)]; !ok {
+				continue
+			}
+			protocol := access.ProtocolSSH
+			targetPath := ""
+			if target, err := a.TargetStore.Get(ctx, access.TargetID(sess.TargetID)); err == nil && target != nil {
+				protocol = target.Protocol
+				targetPath = target.Path
+			}
+			item := terminalSessionItemFrom(sess, mgr, protocol, targetPath)
+			item.Role = "viewer"
+			item.OwnerUserID = sess.UserID
+			item.OwnerUsername = a.usernameFor(ctx, sess.UserID)
+			items = append(items, item)
+			seen[id] = struct{}{}
+		}
 	}
 	writeJSON(w, map[string]interface{}{"items": items})
 }
@@ -363,14 +447,11 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 //
 //nolint:gocyclo // bridge coordinates recording, command logging, and the upstream bridge.
 func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session, manager terminalSessionStarter, id session.ID, conn *websocket.Conn, target *access.Target, creds sshproxy.Credentials, cols, rows int) {
-	_ = conn.WriteMessage(websocket.TextMessage, []byte(""))
-	// Send session_id so the client can reconnect (resume) without
-	// credentials.
-	if b, err := json.Marshal(struct {
+	_ = conn.WriteMessage(websocket.TextMessage, []byte("vantyx:ready"))
+	// Send session_id so the client can reconnect (resume) without credentials.
+	_ = writeTerminalWsMeta(conn, struct {
 		SessionID string `json:"session_id"`
-	}{SessionID: string(id)}); err == nil {
-		_ = conn.WriteMessage(websocket.TextMessage, b)
-	}
+	}{SessionID: string(id)})
 	touch := func() { manager.Touch(id) }
 
 	tee, stdinRecorder, recordingCloser := a.setupRecording(ctx, termSess, id, cols, rows)
@@ -379,28 +460,52 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 	}
 	tee, stdinRecorder = a.wrapWithCommandLog(termSess, id, tee, stdinRecorder)
 
+	// Initial WebSocket attach is the session owner. Pass user metadata
+	// down so the bridge knows who to consider as the writer.
+	ownerAttach := session.AttachReq{Conn: conn, UserID: termSess.UserID, Mode: session.AttachModeWriter}
+	if a.SharingBridges != nil {
+		defer a.SharingBridges.Unregister(id)
+	}
 	var bridgeErr error
 	var endReason, endMsg string
 	switch target.Protocol {
 	case access.ProtocolTelnet:
+		endReason = "telnet_session_closed"
+		endMsg = "session_ended: Telnet session closed"
 		var telStdin telnetproxy.StdinRecorder
 		if stdinRecorder != nil {
 			telStdin = telnetproxy.StdinRecorderFunc(stdinRecorder.RecordInput)
 		}
-		bridgeErr = telnetproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, termSess.Output, termSess.AttachCh, conn, touch, tee, telStdin, cols, rows, nil)
-		endReason = "telnet_session_closed"
-		endMsg = "session_ended: Telnet session closed"
+		var sink telnetproxy.BridgeControlSink
+		if a.SharingBridges != nil {
+			sink = telnetBridgeSink{id: id, br: a.SharingBridges}
+		}
+		bridgeErr = telnetproxy.RunBridgeDetachable(ctx, endMsg, target.Host, target.Port, creds.Username, creds.Password, termSess.Output, termSess.AttachCh, ownerAttach, touch, tee, telStdin, cols, rows, nil, sink)
 	default:
-		bridgeErr = sshproxy.RunBridgeDetachable(ctx, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, conn, touch, tee, stdinRecorder, cols, rows, nil, sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint))
 		endReason = "ssh_session_closed"
 		endMsg = "session_ended: SSH session closed"
+		opts := []sshproxy.BridgeOption{sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint)}
+		if a.SharingBridges != nil {
+			opts = append(opts, sshproxy.WithBridgeControlSink(sshBridgeSink{id: id, br: a.SharingBridges}))
+		}
+		bridgeErr = sshproxy.RunBridgeDetachable(ctx, endMsg, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, ownerAttach, touch, tee, stdinRecorder, cols, rows, nil, opts...)
 	}
 	if bridgeErr != nil {
 		audit("terminal_bridge_end_error", auditFields{
 			"session_id": id,
 			"error":      proxyerrors.UnwrapForAudit(bridgeErr),
 		})
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+localizedBridgeMessage(ctx, bridgeErr)))
+		if frame, evt, ok := encodeHostKeyErrorFrame(bridgeErr, target); ok {
+			audit(evt, auditFields{
+				"session_id": id,
+				"target_id":  string(target.ID),
+				"host":       target.Host,
+				"port":       target.Port,
+			})
+			_ = conn.WriteMessage(websocket.TextMessage, wrapTerminalWsMeta(frame))
+		} else {
+			_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+localizedBridgeMessage(ctx, bridgeErr)))
+		}
 	} else {
 		audit("terminal_bridge_end", auditFields{
 			"session_id": id,

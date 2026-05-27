@@ -1,5 +1,6 @@
 import API from './api.js'
 import { t } from './i18n.js'
+import { createRealtimeWatcher, POLL_MS, shouldRefreshSessionList } from './sharing_events.js'
 import {
   buildSessionsTableHTML,
   bindSessionListActions,
@@ -17,6 +18,7 @@ import {
 export const SESSIONS_MAIN_CLASS = 'flex-1 overflow-auto p-6 flex flex-col w-full min-h-0'
 
 let transferListUnsub = null
+let sessionListWatchStop = null
 
 function isActiveTransfer(state) {
   return state === 'receiving' || state === 'running'
@@ -71,8 +73,11 @@ export async function renderSessionsPage({
   sessionEndModal,
   openTerminalTab,
   getRdpResolutionForTarget,
-  onSubscribeSSE,
 }) {
+  if (sessionListWatchStop) {
+    sessionListWatchStop()
+    sessionListWatchStop = null
+  }
   if (transferListUnsub) {
     transferListUnsub()
     transferListUnsub = null
@@ -234,8 +239,10 @@ export async function renderSessionsPage({
   }
 
   refreshBtn?.addEventListener('click', () => refresh())
-  if (typeof onSubscribeSSE === 'function') {
-    onSubscribeSSE(refresh)
-  }
+  sessionListWatchStop = createRealtimeWatcher({
+    shouldRefresh: shouldRefreshSessionList,
+    onRefresh: refresh,
+    pollMs: POLL_MS.sessionList,
+  })
   await refresh()
 }

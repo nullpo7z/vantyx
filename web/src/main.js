@@ -11,6 +11,12 @@ import { applyStoredTheme } from './theme.js'
 import { applyHtmlLangAttribute, applyServerLocale, registerServerSync, t } from './i18n.js'
 import API from './api.js'
 import { initFileTransferManager } from './file_transfer_manager.js'
+import {
+  captureNextQueryParam,
+  consumePostLoginRedirect,
+  loginUrlWithNext,
+  savePostLoginRedirect,
+} from './auth_redirect.js'
 import { renderLogin } from './login.js'
 import { renderApp } from './app.js'
 import { renderTerminalPage } from './terminal_page.js'
@@ -46,12 +52,14 @@ function syncLocaleFromServer(me) {
  *  full-window page when {@link API.me} returns an unauthorised error.
  *  Kept inline so we don't need to import the SPA shell here. */
 function renderLoginRequired(container) {
+  savePostLoginRedirect()
+  const loginHref = loginUrlWithNext()
   container.innerHTML = `
     <div class="min-h-screen flex items-center justify-center p-6">
       <div class="w-full max-w-md bg-white rounded-lg shadow-sm border border-slate-200 p-6">
         <h1 class="text-lg font-semibold text-slate-800 mb-2">${t('common.loginRequired')}</h1>
         <p class="text-sm text-slate-600 mb-4">${t('common.loginRequiredDesc')}</p>
-        <a href="/" class="inline-flex items-center justify-center rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700">${t('common.goLogin')}</a>
+        <a href="${loginHref}" class="inline-flex items-center justify-center rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700">${t('common.goLogin')}</a>
       </div>
     </div>
   `
@@ -131,9 +139,12 @@ async function init() {
     return
   }
 
+  captureNextQueryParam()
+
   try {
     const me = await API.me()
     syncLocaleFromServer(me)
+    if (consumePostLoginRedirect()) return
     renderApp(appEl)
   } catch {
     renderLogin(appEl)

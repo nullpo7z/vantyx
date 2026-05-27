@@ -9,6 +9,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { t } from './i18n.js'
+import { classifyTerminalWsFrameSync } from './terminal_ws_protocol.js'
 
 function escapeHtml(s) {
   if (s == null) return ''
@@ -447,25 +448,29 @@ export function renderTFTPConsolePage(container) {
             term.focus()
           }
           ws.onmessage = (ev) => {
-            if (typeof ev.data === 'string') {
-              if (!currentSessionId && ev.data.trim().startsWith('{')) {
-                try {
-                  const obj = JSON.parse(ev.data)
-                  if (obj && typeof obj.session_id === 'string' && obj.session_id) {
-                    currentSessionId = obj.session_id
-                    hideCredsShowTerm()
-                    return
-                  }
-                } catch {
-                  // JSON でなければそのまま表示
-                }
+            const frame = classifyTerminalWsFrameSync(ev.data)
+            if (frame.kind === 'empty' || frame.kind === 'ready' || frame.kind === 'swallow') {
+              return
+            }
+            if (frame.kind === 'meta' && frame.object) {
+              const obj = frame.object
+              if (!currentSessionId && typeof obj.session_id === 'string' && obj.session_id) {
+                currentSessionId = obj.session_id
+                hideCredsShowTerm()
               }
+              return
+            }
+            if (typeof ev.data === 'string') {
               if (ev.data.startsWith('error:')) {
                 showCredError(ev.data.replace(/^error:\s*/, ''))
                 credsWrap?.classList.remove('hidden')
                 xtermEl?.classList.add('hidden')
+                return
               }
-              term.write(ev.data)
+              if (frame.kind === 'terminal' && frame.text) {
+                hideCredsShowTerm()
+                term.write(frame.text)
+              }
             } else {
               hideCredsShowTerm()
               term.write(new Uint8Array(ev.data))

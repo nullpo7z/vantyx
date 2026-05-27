@@ -174,7 +174,7 @@ const API = {
     return res.json()
   },
 
-  async createTarget({ name, host, port, protocol, group_id, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, sftp_enabled, ftp_enabled, tftp_enabled }) {
+  async createTarget({ name, host, port, protocol, group_id, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, sftp_enabled, ftp_enabled, tftp_enabled, ssh_host_key_fingerprint }) {
     const payload = {
       name,
       host,
@@ -190,6 +190,9 @@ const API = {
     if (typeof sftp_enabled === 'boolean') payload.sftp_enabled = sftp_enabled
     if (typeof ftp_enabled === 'boolean') payload.ftp_enabled = ftp_enabled
     if (typeof tftp_enabled === 'boolean') payload.tftp_enabled = tftp_enabled
+    if (typeof ssh_host_key_fingerprint === 'string' && ssh_host_key_fingerprint.trim() !== '') {
+      payload.ssh_host_key_fingerprint = ssh_host_key_fingerprint.trim()
+    }
     const res = await fetch('/api/targets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -275,6 +278,56 @@ const API = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
       throw new Error(err.message || 'Failed to set target tags')
+    }
+    return res.json()
+  },
+
+  /**
+   * Probe an SSH host and return the SHA-256 fingerprint of its host
+   * key without persisting anything. Admin-only on the server.
+   *
+   * Used by the Add / Edit Target modals for the trust-on-first-use
+   * confirmation step, and by the inline "再取得" button.
+   *
+   * @param {{host: string, port?: number}} args
+   * @returns {Promise<{host: string, port: number, fingerprint: string}>}
+   */
+  async probeHostKey({ host, port }) {
+    const res = await fetch('/api/targets/probe-host-key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ host, port: port || 22 }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to probe SSH host key')
+    }
+    return res.json()
+  },
+
+  /**
+   * Adopt or clear the expected SSH host key fingerprint for an
+   * existing target. Pass an empty string to clear; otherwise the
+   * value must be in "SHA256:<base64>" form.
+   *
+   * Admin-only on the server. Returns the refreshed target row so
+   * callers can update local state.
+   *
+   * @param {string} targetId
+   * @param {string} fingerprint Pass "" to clear; otherwise "SHA256:..." form.
+   * @returns {Promise<object>} Updated target row.
+   */
+  async updateTargetHostKey(targetId, fingerprint) {
+    const res = await fetch(`/api/targets/${encodeURIComponent(targetId)}/ssh-host-key`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ fingerprint: fingerprint || '' }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to update SSH host key fingerprint')
     }
     return res.json()
   },
@@ -768,6 +821,189 @@ const API = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
       throw new Error(err.message || 'Delete failed')
+    }
+  },
+
+  /**
+   * 共有セッションの招待を発行する。
+   * @param {string} sessionId
+   * @param {{mode?: string, invitee_user_id?: string, ttl_seconds?: number}} options
+   */
+  /** 招待先のユーザー・グループ候補（セッションオーナー向け） */
+  async sessionInvitationOptions(sessionId) {
+    const res = await fetch(
+      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitation-options`,
+      { credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load invitation options')
+    }
+    return res.json()
+  },
+
+  async createSessionInvitation(sessionId, options = {}) {
+    const res = await fetch(
+      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitations`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(options || {}),
+      },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to create invitation')
+    }
+    return res.json()
+  },
+
+  /** 自分宛ての未使用指名招待一覧（ホーム画面用） */
+  async listIncomingInvitations() {
+    const res = await fetch('/api/invitations/incoming', { credentials: 'include', cache: 'no-store' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load incoming invitations')
+    }
+    return res.json()
+  },
+
+  /** 共有セッションの招待一覧 */
+  async listSessionInvitations(sessionId) {
+    const res = await fetch(
+      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitations`,
+      { credentials: 'include', cache: 'no-store' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load invitations')
+    }
+    return res.json()
+  },
+
+  /** 招待を取消する */
+  async revokeSessionInvitation(sessionId, invitationId) {
+    const res = await fetch(
+      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitations/${encodeURIComponent(invitationId)}`,
+      { method: 'DELETE', credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to revoke invitation')
+    }
+  },
+
+  /**
+   * 有効な招待の参加 URL を再発行する（以前のリンクは無効）。
+   * @returns {Promise<{ join_url: string, token?: string }>}
+   */
+  async regenerateSessionInvitationJoinUrl(sessionId, invitationId) {
+    const res = await fetch(
+      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitations/${encodeURIComponent(invitationId)}/join-url`,
+      { method: 'POST', credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to regenerate invitation link')
+    }
+    return res.json()
+  },
+
+  /** 招待トークンまたは招待 ID で参加する */
+  async joinSession(sessionId, { invitationToken, invitationId } = {}) {
+    const body = {}
+    if (invitationToken) body.invitation_token = invitationToken
+    if (invitationId) body.invitation_id = invitationId
+    const res = await fetch(
+      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/join`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to join session')
+    }
+    return res.json()
+  },
+
+  /** 参加者一覧と書込権限リクエスト一覧 */
+  async listSessionParticipants(sessionId) {
+    const res = await fetch(
+      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/participants`,
+      { credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load participants')
+    }
+    return res.json()
+  },
+
+  /** 参加者をキックする（オーナー専用） */
+  async kickSessionParticipant(sessionId, userId) {
+    const res = await fetch(
+      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/participants/${encodeURIComponent(userId)}`,
+      { method: 'DELETE', credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to remove participant')
+    }
+  },
+
+  /** 書込権限のリクエストを作成する */
+  async createSessionWriteRequest(sessionId) {
+    const res = await fetch(
+      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/write-requests`,
+      { method: 'POST', credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to request write token')
+    }
+    return res.json()
+  },
+
+  /** 書込権限リクエストを承認する */
+  async grantSessionWriteRequest(sessionId, requestId) {
+    const res = await fetch(
+      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/write-requests/${encodeURIComponent(requestId)}/grant`,
+      { method: 'POST', credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to grant write request')
+    }
+    return res.json()
+  },
+
+  /** 書込権限リクエストを拒否する */
+  async denySessionWriteRequest(sessionId, requestId) {
+    const res = await fetch(
+      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/write-requests/${encodeURIComponent(requestId)}/deny`,
+      { method: 'POST', credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to deny write request')
+    }
+    return res.json()
+  },
+
+  /** 書込権限を自発的に手放す */
+  async releaseSessionWriteToken(sessionId) {
+    const res = await fetch(
+      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/write-token/release`,
+      { method: 'POST', credentials: 'include' },
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to release write token')
     }
   },
 }

@@ -28,6 +28,19 @@ func ClientCiphers() []string {
 	return []string{"aes256-ctr", "aes256-cbc", "aes128-ctr", "aes128-cbc", "3des-cbc"}
 }
 
+// HostKeyAlgorithms note: every SSH client built here on top of
+// ssh.ClientConfig deliberately leaves HostKeyAlgorithms unset so it
+// inherits the package-default preference order. The default order
+// puts RSA before ED25519, which sounds backwards but matches what
+// stock OpenSSH offers when both keys are advertised. Mixing the
+// default here with an explicit override anywhere else (e.g. the
+// host-key probe endpoint in internal/httpapi/targets_hostkey.go)
+// produces the bug reported in 2026-05: probe and bridge end up
+// negotiating different host keys, so the user adopts a fingerprint
+// the bridge will never see and the next connect always reports a
+// mismatch. Keep both code paths algorithm-agnostic; if a stronger
+// policy is wanted, change every site at once.
+
 // Test hooks for defaultSessionFactory error paths (set from bridge_test.go).
 var (
 	testHookNewSession func(*ssh.Client) (*ssh.Session, error)
@@ -444,6 +457,7 @@ func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.W
 // attachableWriter is the internal interface for writing to an attached client (WebSocket or CLI stream).
 type attachableWriter interface {
 	WriteBinary([]byte) error
+	WriteText([]byte) error
 	Close() error
 }
 
@@ -452,6 +466,10 @@ type wsWriterAdapter struct{ *websocket.Conn }
 
 func (w *wsWriterAdapter) WriteBinary(p []byte) error {
 	return w.WriteMessage(websocket.BinaryMessage, p)
+}
+
+func (w *wsWriterAdapter) WriteText(p []byte) error {
+	return w.WriteMessage(websocket.TextMessage, p)
 }
 
 // StreamAttach is used to attach an SSH channel (CLI) to an existing session. Create from sshd and send via AttachCh.
@@ -464,11 +482,30 @@ type StreamAttach struct {
 }
 
 func (s *StreamAttach) WriteBinary(p []byte) error { return s.Write(p) }
+func (s *StreamAttach) WriteText(p []byte) error   { return s.Write(p) }
 func (s *StreamAttach) Close() error {
 	if s.CloseFn != nil {
 		return s.CloseFn()
 	}
 	return nil
+}
+
+// BridgeController is the subset of the running detachable bridge
+// that the HTTP layer needs to drive the writer / viewer hand-off. It
+// is published via [BridgeControlSink] so callers can promote a user
+// to writer or demote everyone without holding a direct reference to
+// the bridge struct.
+type BridgeController interface {
+	// SetWriter promotes attached clients owned by userID to writer
+	// and demotes the rest. An empty userID demotes every client.
+	SetWriter(userID string)
+}
+
+// BridgeControlSink receives the controller exactly once when the
+// bridge is fully initialised. May be nil for callers that do not
+// need run-time writer changes (CLI, tests).
+type BridgeControlSink interface {
+	Register(controller BridgeController)
 }
 
 // RunBridgeDetachable runs an SSH bridge that keeps running when the client disconnects.
@@ -477,7 +514,7 @@ func (s *StreamAttach) Close() error {
 // Touch is called on client or remote I/O. If tee is non-nil, a copy of stdout/stderr is written to tee (e.g. asciinema file).
 // If stdinRecorder is non-nil, it is called when data is written to the target stdin. The bridge exits when ctx is done or SSH session closes.
 // initialCols and initialRows are the terminal size for the PTY (e.g. from client); 0 lets the factory use defaults.
-func RunBridgeDetachable(ctx context.Context, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, output *session.RingBuffer, attachCh <-chan session.AttachReq, initialConn interface{}, touch func(), tee io.Writer, stdinRecorder StdinRecorder, initialCols, initialRows int, externalResize <-chan TerminalSize, opts ...BridgeOption) error {
+func RunBridgeDetachable(ctx context.Context, endMsg string, host string, port uint16, username, password, privateKeyPEM, keyPassphrase string, output *session.RingBuffer, attachCh <-chan session.AttachReq, initialConn interface{}, touch func(), tee io.Writer, stdinRecorder StdinRecorder, initialCols, initialRows int, externalResize <-chan TerminalSize, opts ...BridgeOption) error {
 	auth, err := AuthMethods(password, privateKeyPEM, keyPassphrase)
 	if err != nil {
 		return err
@@ -505,7 +542,10 @@ func RunBridgeDetachable(ctx context.Context, host string, port uint16, username
 		doCleanup()
 	}()
 
-	bridge := newSSHDetachableBridge(ctx, stdin, output, windowChange, touch, tee, stdinRecorder, attachCh, externalResize)
+	bridge := newSSHDetachableBridge(ctx, endMsg, stdin, output, windowChange, touch, tee, stdinRecorder, attachCh, externalResize)
+	if o.controlSink != nil {
+		o.controlSink.Register(bridge)
+	}
 	bridge.startPumps(stdout, stderr)
 	return bridge.run(initialConn)
 }

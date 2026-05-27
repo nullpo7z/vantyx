@@ -304,6 +304,96 @@ func (s *SQLiteAccessGroupStore) UserIDsForGroup(ctx context.Context, groupID Gr
 	return out, nil
 }
 
+// UserIDsForTarget returns distinct user IDs that can access targetID via
+// group membership or tag-based ACL (mirrors TargetIDsForUser paths).
+func (s *SQLiteAccessGroupStore) UserIDsForTarget(ctx context.Context, targetID TargetID, opts *ListOpts) ([]UserID, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	tid := string(targetID)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT uid FROM (
+			SELECT ug.user_id AS uid
+			FROM user_groups ug
+			INNER JOIN group_targets gt ON gt.group_id = ug.group_id
+			WHERE gt.target_id = ?
+			UNION
+			SELECT ut.user_id AS uid
+			FROM user_tags ut
+			INNER JOIN target_tags tt ON tt.tag = ut.tag
+			WHERE tt.target_id = ?
+			UNION
+			SELECT ut.user_id AS uid
+			FROM user_tags ut
+			INNER JOIN group_tags gtag ON gtag.tag = ut.tag
+			INNER JOIN group_targets gt ON gt.group_id = gtag.group_id
+			WHERE gt.target_id = ?
+		)
+		ORDER BY uid
+	`, tid, tid, tid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var all []UserID
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			return nil, err
+		}
+		all = append(all, UserID(uid))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	limit, offset := listLimit(opts, s.defaultListLimit)
+	if opts != nil && opts.AfterID != "" {
+		i := 0
+		for i < len(all) && string(all[i]) <= opts.AfterID {
+			i++
+		}
+		all = all[i:]
+	}
+	if offset > 0 {
+		if offset >= len(all) {
+			return nil, nil
+		}
+		all = all[offset:]
+	}
+	if limit > 0 && len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
+}
+
+// TagsGrantingTargetAccess returns distinct tags that grant access to targetID.
+func (s *SQLiteAccessGroupStore) TagsGrantingTargetAccess(ctx context.Context, targetID TargetID) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT tag FROM (
+			SELECT tag FROM target_tags WHERE target_id = ?
+			UNION
+			SELECT gtag.tag FROM group_tags gtag
+			INNER JOIN group_targets gt ON gt.group_id = gtag.group_id
+			WHERE gt.target_id = ?
+		)
+		ORDER BY tag
+	`, string(targetID), string(targetID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, err
+		}
+		out = append(out, tag)
+	}
+	return out, rows.Err()
+}
+
 const maxTagLen = 64
 
 // validateTag returns nil if tag is valid (1–64 chars, alphanumeric + hyphen/underscore).
@@ -899,6 +989,31 @@ func (s *SQLiteTargetStore) SetSSHHostKeyFingerprint(ctx context.Context, id Tar
 	return nil
 }
 
+// SetSSHHostKeyInsecureSkipVerify toggles per-target host-key
+// verification bypass. The fingerprint column is *not* cleared so the
+// operator can flip back later, but bridges that see skip=1 will
+// accept any host key on the next connection.
+func (s *SQLiteTargetStore) SetSSHHostKeyInsecureSkipVerify(ctx context.Context, id TargetID, skip bool) error {
+	if err := validateTargetID(id); err != nil {
+		return err
+	}
+	val := 0
+	if skip {
+		val = 1
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	res, err := s.db.ExecContext(ctx, `UPDATE targets SET ssh_host_key_insecure_skip_verify = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, val, string(id))
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrTargetNotFound
+	}
+	return nil
+}
+
 // Delete removes a target. Group assignments (group_targets) are removed by FK CASCADE.
 func (s *SQLiteTargetStore) Delete(ctx context.Context, id TargetID) error {
 	if err := validateTargetID(id); err != nil {
@@ -928,13 +1043,13 @@ func (s *SQLiteTargetStore) Get(ctx context.Context, id TargetID) (*Target, erro
 	var port int
 	var proto string
 	var storedPassword, storedKey, storedKeyPass string
-	var sftpVal, ftpVal, tftpVal int
+	var sftpVal, ftpVal, tftpVal, insecureSkipVal int
 	var hostKeyFP string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0), COALESCE(ssh_host_key_fingerprint,'')
+		SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0), COALESCE(ssh_host_key_fingerprint,''), COALESCE(ssh_host_key_insecure_skip_verify,0)
 		FROM targets
 		WHERE id = ?
-	`, string(id)).Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal, &hostKeyFP)
+	`, string(id)).Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal, &hostKeyFP, &insecureSkipVal)
 	if err == nil {
 		t.ID = TargetID(idStr)
 		t.SSHPassword = decryptOrPlain(s.encKey, storedPassword, t.ID, "ssh_password")
@@ -944,6 +1059,7 @@ func (s *SQLiteTargetStore) Get(ctx context.Context, id TargetID) (*Target, erro
 		t.FTPEnabled = ftpVal != 0
 		t.TFTPEnabled = tftpVal != 0
 		t.SSHHostKeyFingerprint = hostKeyFP
+		t.SSHHostKeyInsecureSkipVerify = insecureSkipVal != 0
 	}
 	if err == sql.ErrNoRows {
 		return nil, ErrTargetNotFound
@@ -1044,7 +1160,7 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 		err := func() error {
 			// #nosec G202 -- placeholders is "?,?,?" from len(chunk); args are validated TargetIDs
 			rows, err := s.db.QueryContext(ctx, `
-				SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0), COALESCE(ssh_host_key_fingerprint,'')
+				SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0), COALESCE(ssh_host_key_fingerprint,''), COALESCE(ssh_host_key_insecure_skip_verify,0)
 				FROM targets
 				WHERE id IN (`+placeholders+`)`, args...)
 			if err != nil {
@@ -1057,9 +1173,9 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 				var port int
 				var proto string
 				var storedPassword, storedKey, storedKeyPass string
-				var sftpVal, ftpVal, tftpVal int
+				var sftpVal, ftpVal, tftpVal, insecureSkipVal int
 				var hostKeyFP string
-				if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal, &hostKeyFP); err != nil {
+				if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal, &hostKeyFP, &insecureSkipVal); err != nil {
 					return err
 				}
 				if port >= 0 && port <= 65535 {
@@ -1073,6 +1189,7 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 					t.FTPEnabled = ftpVal != 0
 					t.TFTPEnabled = tftpVal != 0
 					t.SSHHostKeyFingerprint = hostKeyFP
+					t.SSHHostKeyInsecureSkipVerify = insecureSkipVal != 0
 					byID[TargetID(idStr)] = &t
 				}
 			}

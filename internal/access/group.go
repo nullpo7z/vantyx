@@ -56,6 +56,12 @@ type AccessGroupStore interface {
 	GroupIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]GroupID, error)
 	TargetIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]TargetID, error)
 	TargetIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]TargetID, error)
+	// UserIDsForTarget returns user IDs that can access the target (group
+	// membership or matching tags). Used when listing invitation candidates.
+	UserIDsForTarget(ctx context.Context, targetID TargetID, opts *ListOpts) ([]UserID, error)
+	// TagsGrantingTargetAccess returns tags that grant access to the target
+	// (target_tags plus group_tags on groups containing the target).
+	TagsGrantingTargetAccess(ctx context.Context, targetID TargetID) ([]string, error)
 	// Tags applied to the group. Matching tags also grant access (tag-based ACL).
 	TagsForGroup(ctx context.Context, groupID GroupID) ([]string, error)
 	SetGroupTags(ctx context.Context, groupID GroupID, tags []string) error

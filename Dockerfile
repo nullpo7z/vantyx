@@ -33,10 +33,15 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /out/vant
 # -----------------------------------------------------------------------------
 FROM alpine:3.22
 
-# su-exec, nonroot user, asciinema-agg (GIF 用), ffmpeg (WebM 用), フォント (agg の描画用)
+# asciinema-agg (GIF 用), ffmpeg (WebM 用), フォント (agg の描画用)
 # freerdp (3.x) + Xvfb + x11vnc: browser-based RDP via FreeRDP→Xvfb→x11vnc→noVNC
+#
+# 以前は `su-exec` で root → nonroot に降格していたが、`cap_drop: ALL` の
+# 環境（Proxmox unprivileged LXC など）では setgroups() が EPERM になり
+# 起動できないため、Docker の USER ディレクティブで最初から nonroot 起動
+# する方式に切替（CWE-250 / 269: 不要権限の回避）。
 ARG AGG_VERSION=v1.7.0
-RUN apk add --no-cache su-exec wget ffmpeg fontconfig font-dejavu \
+RUN apk add --no-cache wget ffmpeg fontconfig font-dejavu \
 	freerdp xvfb x11vnc xdpyinfo xkeyboard-config \
 	&& adduser -D -u 65532 nonroot \
 	&& wget -q "https://github.com/asciinema/agg/releases/download/${AGG_VERSION}/agg-x86_64-unknown-linux-musl" -O /usr/local/bin/agg \
@@ -50,9 +55,12 @@ COPY --from=builder /out/vantyx /app/vantyx
 COPY --from=frontend /src/web/dist /app/web/dist
 COPY scripts/docker-entrypoint.sh /entrypoint.sh
 
-RUN mkdir -p /app/certs /app/data && chown -R nonroot:nonroot /app/certs /app/data \
+RUN mkdir -p /app/certs /app/data /app/recordings \
+	&& chown -R nonroot:nonroot /app/certs /app/data /app/recordings \
 	&& chmod +x /entrypoint.sh
 
 EXPOSE 80 443
+
+USER nonroot:nonroot
 
 ENTRYPOINT ["/entrypoint.sh"]

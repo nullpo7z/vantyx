@@ -419,11 +419,26 @@ func (a *App) NewRouter() http.Handler {
 	// SPA: serve web/dist when present (after `npm run build`).
 	if dir := staticDir(); dir != "" {
 		r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-			path := strings.TrimPrefix(r.URL.Path, "/")
-			if path == "" {
-				path = "index.html"
+			raw := strings.TrimPrefix(r.URL.Path, "/")
+			if raw == "" {
+				raw = "index.html"
 			}
-			fpath := filepath.Join(dir, filepath.Clean(path))
+			// Prevent path traversal. filepath.Clean alone is insufficient because
+			// Join(dir, "../x") escapes dir. We normalise to an absolute-clean
+			// path first, then enforce that the final path stays within dir.
+			//
+			// Example attack: GET /../etc/passwd
+			clean := filepath.Clean("/" + raw) // always absolute, so ".." collapses safely.
+			rel := strings.TrimPrefix(clean, string(filepath.Separator))
+			fpath := filepath.Join(dir, rel)
+			if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				http.NotFound(w, r)
+				return
+			}
+			if relp, err := filepath.Rel(dir, fpath); err != nil || relp == ".." || strings.HasPrefix(relp, ".."+string(filepath.Separator)) {
+				http.NotFound(w, r)
+				return
+			}
 			if f, err := os.Stat(fpath); err == nil && !f.IsDir() {
 				http.ServeFile(w, r, fpath)
 				return

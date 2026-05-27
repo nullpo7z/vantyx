@@ -2466,6 +2466,10 @@ func TestApp_SPAFallback(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>spa</html>"), 0644); err != nil {
 		t.Fatalf("write index.html: %v", err)
 	}
+	// #nosec G306 -- 0644 intentional for test static file
+	if err := os.WriteFile(filepath.Join(dir, "app.js"), []byte("console.log('ok')"), 0644); err != nil {
+		t.Fatalf("write app.js: %v", err)
+	}
 	old := staticDirForTest
 	staticDirForTest = dir
 	defer func() { staticDirForTest = old }()
@@ -2486,6 +2490,53 @@ func TestApp_SPAFallback(t *testing.T) {
 	router.ServeHTTP(w2, req2)
 	if w2.Result().StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 for SPA fallback, got %d", w2.Result().StatusCode)
+	}
+}
+
+func TestApp_SPAServesStaticFileAndBlocksTraversal(t *testing.T) {
+	dir := t.TempDir()
+	// #nosec G306 -- 0644 intentional for test static file
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>spa</html>"), 0644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	// #nosec G306 -- 0644 intentional for test static file
+	if err := os.WriteFile(filepath.Join(dir, "app.js"), []byte("console.log('ok')"), 0644); err != nil {
+		t.Fatalf("write app.js: %v", err)
+	}
+	// Create a file outside the static root that should never be reachable.
+	outside := t.TempDir()
+	// #nosec G306 -- 0644 intentional for test file
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("nope"), 0644); err != nil {
+		t.Fatalf("write secret.txt: %v", err)
+	}
+
+	old := staticDirForTest
+	staticDirForTest = dir
+	defer func() { staticDirForTest = old }()
+
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	// Normal static file access works.
+	req := httptest.NewRequest(http.MethodGet, "/app.js", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Result().StatusCode)
+	}
+
+	// Traversal attempts must be blocked (even if such a path exists).
+	// Some routers (and some HTTP servers) reject raw ".." segments up-front
+	// with 400. Either 400 or 404 is acceptable here; the important contract
+	// is that the server must not serve a file outside the static root.
+	req2 := httptest.NewRequest(http.MethodGet, "/../secret.txt", nil)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Result().StatusCode == http.StatusOK {
+		t.Fatalf("expected traversal request to be rejected, got 200")
+	}
+	if strings.Contains(w2.Body.String(), "nope") {
+		t.Fatal("expected traversal request not to leak the outside file")
 	}
 }
 

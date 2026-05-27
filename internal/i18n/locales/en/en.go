@@ -71,14 +71,14 @@ var Messages = map[string]string{
 	"groups.groupAndUserIDRequired": "group_id and user_id required",
 
 	// Targets.
-	"targets.nameHostRequired":         "name and host are required",
-	"targets.groupIDRequired":          "group_id is required",
-	"targets.groupNotFound":            "group not found",
-	"targets.assignFailed":             "failed to assign target to group",
-	"targets.protocolInvalid":          "protocol must be ssh, telnet, vnc, tftp, ftp, or rdp",
+	"targets.nameHostRequired":          "name and host are required",
+	"targets.groupIDRequired":           "group_id is required",
+	"targets.groupNotFound":             "group not found",
+	"targets.assignFailed":              "failed to assign target to group",
+	"targets.protocolInvalid":           "protocol must be ssh, telnet, vnc, tftp, ftp, or rdp",
 	"targets.hostKeyFingerprintInvalid": "ssh_host_key_fingerprint must be empty or in 'SHA256:<base64>' form",
-	"targets.hostKeyOnlySSH":           "host key fingerprint is only meaningful for SSH targets",
-	"targets.hostKeyProbeFailed":       "failed to probe upstream SSH host key",
+	"targets.hostKeyOnlySSH":            "host key fingerprint is only meaningful for SSH targets",
+	"targets.hostKeyProbeFailed":        "failed to probe upstream SSH host key",
 
 	// Settings.
 	"settings.invalidProto":  "invalid proto",
@@ -97,7 +97,7 @@ var Messages = map[string]string{
 	"sharing.modeInvalid":            "invitation mode is invalid",
 	"sharing.inviteeNotFound":        "invited user not found",
 	"sharing.inviteeOrTagOnly":       "cannot specify both a user and a tag",
-	"sharing.inviteTagInvalid":         "tag is invalid",
+	"sharing.inviteTagInvalid":       "tag is invalid",
 	"sharing.inviteTagNotForTarget":  "this tag does not grant access to the target",
 	"sharing.inviteeNoTargetAccess":  "invited user cannot access this target",
 	"sharing.linkMaxUsesInvalid":     "invalid link usage limit",

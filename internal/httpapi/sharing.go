@@ -71,11 +71,11 @@ type sharingResponseInvitation struct {
 
 // sharingResponseParticipant is the JSON shape for participant lists.
 type sharingResponseParticipant struct {
-	UserID    string `json:"user_id"`
-	Username  string `json:"username"`
-	Role      string `json:"role"`
-	JoinedAt  int64  `json:"joined_at"`
-	IsWriter  bool   `json:"is_writer"`
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	JoinedAt int64  `json:"joined_at"`
+	IsWriter bool   `json:"is_writer"`
 }
 
 // sharingResponseWriteRequest is the JSON shape for write requests.
@@ -312,7 +312,7 @@ func (a *App) handleCreateTagInvitations(w http.ResponseWriter, r *http.Request,
 }
 
 var (
-	errInviteTagInvalid     = errors.New("invite tag invalid")
+	errInviteTagInvalid      = errors.New("invite tag invalid")
 	errInviteTagNotForTarget = errors.New("tag does not grant access to target")
 )
 

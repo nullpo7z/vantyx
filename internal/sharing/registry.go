@@ -54,13 +54,13 @@ type Participant struct {
 
 // WriteRequest tracks one pending or recently-decided handoff.
 type WriteRequest struct {
-	ID          string
-	RequesterID string
+	ID            string
+	RequesterID   string
 	RequesterName string
-	Status      WriteRequestStatus
-	RequestedAt time.Time
-	DecidedAt   time.Time
-	DecidedBy   string
+	Status        WriteRequestStatus
+	RequestedAt   time.Time
+	DecidedAt     time.Time
+	DecidedBy     string
 }
 
 // Room is the state for one shareable terminal session. The owner

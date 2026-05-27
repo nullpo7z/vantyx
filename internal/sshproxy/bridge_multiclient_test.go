@@ -16,13 +16,13 @@ import (
 // the multi-client tests to assert fan-out and writer / viewer
 // behaviour without spinning up real WebSockets.
 type recordingStreamAttach struct {
-	id       string
-	written  bytes.Buffer
-	closed   atomic.Bool
-	stdinIn  chan []byte
-	onClose  func()
-	starter  chan struct{}
-	closeFn  func() error
+	id      string
+	written bytes.Buffer
+	closed  atomic.Bool
+	stdinIn chan []byte
+	onClose func()
+	starter chan struct{}
+	closeFn func() error
 }
 
 func newRecordingStreamAttach(id string) *recordingStreamAttach {

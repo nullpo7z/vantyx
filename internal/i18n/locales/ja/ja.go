@@ -63,11 +63,14 @@ var Messages = map[string]string{
 	"groups.groupAndUserIDRequired": "group_id と user_id が必要です",
 
 	// Targets.
-	"targets.nameHostRequired": "name と host は必須です",
-	"targets.groupIDRequired":  "group_id は必須です",
-	"targets.groupNotFound":    "グループが見つかりません",
-	"targets.assignFailed":     "ターゲットのグループ割り当てに失敗しました",
-	"targets.protocolInvalid":  "protocol は ssh, telnet, vnc, tftp, ftp, rdp のいずれかである必要があります",
+	"targets.nameHostRequired":         "name と host は必須です",
+	"targets.groupIDRequired":          "group_id は必須です",
+	"targets.groupNotFound":            "グループが見つかりません",
+	"targets.assignFailed":             "ターゲットのグループ割り当てに失敗しました",
+	"targets.protocolInvalid":          "protocol は ssh, telnet, vnc, tftp, ftp, rdp のいずれかである必要があります",
+	"targets.hostKeyFingerprintInvalid": "ssh_host_key_fingerprint は空か 'SHA256:<base64>' 形式である必要があります",
+	"targets.hostKeyOnlySSH":           "ホストキーフィンガープリントは SSH ターゲットのみで指定できます",
+	"targets.hostKeyProbeFailed":       "SSH ホストキーの取得に失敗しました",
 
 	// Settings.
 	"settings.invalidProto":  "プロトコル指定が不正です",
@@ -80,6 +83,30 @@ var Messages = map[string]string{
 	"sessions.notFoundOrAccessDenied": "セッションが見つからないかアクセスが許可されていません",
 	"sessions.onlySSHTelnet":          "SSH と Telnet のターゲットのみ対応しています",
 	"sessions.eventsUnavailable":      "セッションイベントを利用できません",
+
+	// Collaborative session sharing (Phase A).
+	"sharing.unavailable":           "共有機能を利用できません",
+	"sharing.modeInvalid":           "招待モードが不正です",
+	"sharing.inviteeNotFound":       "招待先のユーザーが見つかりません",
+	"sharing.inviteeOrTagOnly":      "指名招待とタグ招待は同時に指定できません",
+	"sharing.inviteTagInvalid":      "タグが不正です",
+	"sharing.inviteTagNotForTarget": "このタグは対象ホストへのアクセス権がありません",
+	"sharing.inviteeNoTargetAccess": "招待先ユーザーはこのホストにアクセスできません",
+	"sharing.linkMaxUsesInvalid":    "リンクの利用回数が不正です",
+	"sharing.cannotInviteSelf":      "自分自身を招待することはできません",
+	"sharing.tokenOrIDRequired":     "招待トークンまたは招待 ID が必要です",
+	"sharing.invitationNotFound":    "招待が見つかりません",
+	"sharing.invitationInactive":    "この招待は失効しているか取り消されています",
+	"sharing.invitationOtherUser":   "この招待は別のユーザー宛てです",
+	"sharing.invitationStaleAccess": "招待者が対象へのアクセス権を失っています",
+	"sharing.userIDRequired":        "user_id は必須です",
+	"sharing.cannotKickOwner":       "セッションのオーナーは退出させられません",
+	"sharing.participantNotFound":   "参加者が見つかりません",
+	"sharing.alreadyWriter":         "すでに操作権を持っています",
+	"sharing.requestIDRequired":     "request_id は必須です",
+	"sharing.writeRequestNotFound":  "操作権リクエストが見つかりません",
+	"sharing.writeRequestNotPending": "対象のリクエストはすでに処理済みです",
+	"sharing.notWriter":             "現在の操作権保持者のみ実行できます",
 
 	// Command logs.
 	"command.queryFailed": "コマンドログの取得に失敗しました",

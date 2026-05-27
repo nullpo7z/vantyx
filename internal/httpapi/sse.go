@@ -12,21 +12,35 @@ import (
 
 // SessionEventBroker broadcasts session lifecycle events (terminal/RDP created or removed)
 // to SSE clients so the frontend can update active session counts without polling.
+//
+// Each subscriber is associated with a userID so the broker can also
+// fan out collaborative-session events (participant_joined,
+// write_token_transferred, ...) only to clients that should care
+// about them. Routing is done via the optional ToUsers field on
+// [sessionEventEnvelope]; an empty list reverts to global broadcast
+// for backwards compatibility.
 type SessionEventBroker struct {
 	mu      sync.RWMutex
-	clients map[chan []byte]struct{}
+	clients map[chan []byte]string // channel -> userID ("" for legacy callers)
 }
 
 // NewSessionEventBroker creates a new broker. Call Run() to start the fan-out goroutine.
 func NewSessionEventBroker() *SessionEventBroker {
-	return &SessionEventBroker{clients: make(map[chan []byte]struct{})}
+	return &SessionEventBroker{clients: make(map[chan []byte]string)}
 }
 
-// Subscribe adds a client channel and returns it. The caller must call Unsubscribe when done.
+// Subscribe adds a client channel for the legacy global broadcast
+// stream. Existing tests rely on this signature.
 func (b *SessionEventBroker) Subscribe() chan []byte {
-	ch := make(chan []byte, 8)
+	return b.SubscribeFor("")
+}
+
+// SubscribeFor adds a client channel scoped to userID. Empty userID
+// means "no filtering"; the channel receives every event.
+func (b *SessionEventBroker) SubscribeFor(userID string) chan []byte {
+	ch := make(chan []byte, 64)
 	b.mu.Lock()
-	b.clients[ch] = struct{}{}
+	b.clients[ch] = userID
 	b.mu.Unlock()
 	return ch
 }
@@ -53,6 +67,39 @@ func (b *SessionEventBroker) Broadcast() {
 	}
 }
 
+// PublishToUsers sends payload only to subscribers whose userID
+// appears in users. The payload is delivered as the JSON body of an
+// SSE message frame; the broker does no further marshalling. Callers
+// generally use [sharing.Event] before invoking this.
+func (b *SessionEventBroker) PublishToUsers(payload []byte, users ...string) {
+	if len(users) == 0 || len(payload) == 0 {
+		return
+	}
+	wanted := make(map[string]struct{}, len(users))
+	for _, u := range users {
+		if u != "" {
+			wanted[u] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for ch, uid := range b.clients {
+		if uid == "" {
+			continue
+		}
+		if _, ok := wanted[uid]; !ok {
+			continue
+		}
+		select {
+		case ch <- payload:
+		default:
+		}
+	}
+}
+
 // handleSessionEvents streams session lifecycle events over SSE. Requires auth.
 // Frontend connects with EventSource; backend calls SessionEventBroker.Broadcast() when
 // terminal or RDP sessions are created or removed.
@@ -75,7 +122,7 @@ func (a *App) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 		f.Flush()
 	}
 
-	ch := a.SessionEventBroker.Subscribe()
+	ch := a.SessionEventBroker.SubscribeFor(userID)
 	defer a.SessionEventBroker.Unsubscribe(ch)
 
 	for {

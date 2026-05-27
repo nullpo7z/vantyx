@@ -26,8 +26,30 @@ type Manager struct {
 	idleWarnAfter time.Duration // 0 = idle warnings disabled
 }
 
+// attachChannelBuffer is the AttachCh capacity. It is sized to absorb
+// a small spike of joining viewers without blocking the HTTP layer;
+// the bridge drains from the channel as fast as it can.
+const attachChannelBuffer = 16
+
+// AttachMode identifies how a newly-attached client should be wired
+// into the bridge. Phase A introduces the writer / viewer split for
+// multi-participant sessions; older code paths that just want a
+// single attached client can leave the mode zero (writer).
+type AttachMode int
+
+const (
+	// AttachModeWriter is the legacy attach mode: the new client
+	// receives output and may send stdin. Sole writer at any time.
+	AttachModeWriter AttachMode = 0
+	// AttachModeViewer attaches a read-only client. The bridge fans
+	// stdout/stderr out to the viewer, but discards anything they
+	// send on the wire.
+	AttachModeViewer AttachMode = 1
+)
+
 // Session is a long-lived backend session. Output holds terminal stdout/stderr for replay on resume.
-// AttachCh is used to attach a new client (e.g. WebSocket) for resume; send a value to attach, buffer size 1.
+// AttachCh is used to attach a new client (e.g. WebSocket); send a value to attach. Capacity is
+// large enough to absorb a small burst of viewers joining a single owner.
 type Session struct {
 	id        ID
 	createdAt time.Time
@@ -45,11 +67,19 @@ type Session struct {
 	done     chan struct{}
 }
 
-// AttachReq carries a WebSocket connection to attach to an existing session.
-// The type is interface{} so that httpapi does not need to depend on websocket.Conn in session package.
-// The handler should send AttachReq{Conn: conn} and the bridge loop will type-assert to *websocket.Conn.
+// AttachReq carries a client connection to attach to an existing
+// session. Conn is intentionally interface{} so internal/session does
+// not need to depend on websocket.Conn or sshproxy.StreamAttach;
+// bridge implementations type-assert before use. UserID and Username
+// describe the joining identity (used by the bridge layer for
+// per-client metadata such as "who currently holds stdin"). Mode
+// distinguishes writer from viewer; the zero value is writer for
+// backwards compatibility.
 type AttachReq struct {
-	Conn interface{}
+	Conn     interface{}
+	UserID   string
+	Username string
+	Mode     AttachMode
 }
 
 // NewManager creates a new Manager.
@@ -82,7 +112,7 @@ func (m *Manager) Start(id ID, opts StartOptions, fn func(ctx context.Context, s
 		Name:        opts.Name,
 		Description: opts.Description,
 		Output:      NewRingBuffer(DefaultRingBufferSize),
-		AttachCh:    make(chan AttachReq, 1),
+		AttachCh:    make(chan AttachReq, attachChannelBuffer),
 		cancel:      cancel,
 		done:        make(chan struct{}),
 	}

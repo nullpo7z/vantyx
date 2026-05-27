@@ -21,9 +21,26 @@ type resizeMsg struct {
 	Rows int    `json:"rows"`
 }
 
+// BridgeController is the runtime hook that the HTTP layer uses to
+// drive the collaborative-session writer / viewer hand-off. It mirrors
+// [sshproxy.BridgeController] so callers can promote and demote
+// participants the same way for Telnet sessions.
+type BridgeController interface {
+	SetWriter(userID string)
+}
+
+// BridgeControlSink receives the controller exactly once when the
+// bridge is ready. May be nil.
+type BridgeControlSink interface {
+	Register(controller BridgeController)
+}
+
 // RunBridgeDetachable runs a Telnet TCP bridge that keeps running when the client disconnects.
+// When controlSink is non-nil it receives the live BridgeController so
+// the HTTP layer can hand out the write token at runtime.
 func RunBridgeDetachable(
 	ctx context.Context,
+	endMsg string,
 	host string,
 	port uint16,
 	username, password string,
@@ -35,6 +52,7 @@ func RunBridgeDetachable(
 	stdinRecorder StdinRecorder,
 	initialCols, initialRows int,
 	externalResize <-chan sshproxy.TerminalSize,
+	controlSink BridgeControlSink,
 ) error {
 	dialer := net.Dialer{Timeout: 15 * time.Second}
 	addr := net.JoinHostPort(host, portString(port))
@@ -60,8 +78,11 @@ func RunBridgeDetachable(
 	}()
 
 	_ = sendClientNegotiation(conn)
-	b := newDetachableBridge(ctx, conn, output, username, password, touch, tee, stdinRecorder, initialCols, initialRows, signalBridgeDone, cleanup)
+	b := newDetachableBridge(ctx, endMsg, conn, output, username, password, touch, tee, stdinRecorder, initialCols, initialRows, signalBridgeDone, cleanup)
 	b.bridgeDone = bridgeDone
+	if controlSink != nil {
+		controlSink.Register(b)
+	}
 
 	go b.runStdinPump()
 	go b.runOutputPump()

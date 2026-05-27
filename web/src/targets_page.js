@@ -137,7 +137,7 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
                     activeFtp ? escapeHtml(activeFtp.id) : ''
                   }" data-target-sftp-enabled="${hasSftpEnabled ? '1' : '0'}" data-target-ftp-enabled="${
                     t.ftp_enabled ? '1' : '0'
-                  }" data-target-tftp-enabled="${t.tftp_enabled ? '1' : '0'}"
+                  }" data-target-tftp-enabled="${t.tftp_enabled ? '1' : '0'}" data-target-ssh-host-key-fp="${escapeHtml(t.ssh_host_key_fingerprint || '')}"
                 class="edit-btn-in-group rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 border border-slate-300 shadow-sm transition-colors w-[96px] text-center whitespace-nowrap">
               ${tr('targets.editBtn')}
             </button>

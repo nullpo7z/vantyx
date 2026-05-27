@@ -71,11 +71,14 @@ var Messages = map[string]string{
 	"groups.groupAndUserIDRequired": "group_id and user_id required",
 
 	// Targets.
-	"targets.nameHostRequired": "name and host are required",
-	"targets.groupIDRequired":  "group_id is required",
-	"targets.groupNotFound":    "group not found",
-	"targets.assignFailed":     "failed to assign target to group",
-	"targets.protocolInvalid":  "protocol must be ssh, telnet, vnc, tftp, ftp, or rdp",
+	"targets.nameHostRequired":         "name and host are required",
+	"targets.groupIDRequired":          "group_id is required",
+	"targets.groupNotFound":            "group not found",
+	"targets.assignFailed":             "failed to assign target to group",
+	"targets.protocolInvalid":          "protocol must be ssh, telnet, vnc, tftp, ftp, or rdp",
+	"targets.hostKeyFingerprintInvalid": "ssh_host_key_fingerprint must be empty or in 'SHA256:<base64>' form",
+	"targets.hostKeyOnlySSH":           "host key fingerprint is only meaningful for SSH targets",
+	"targets.hostKeyProbeFailed":       "failed to probe upstream SSH host key",
 
 	// Settings.
 	"settings.invalidProto":  "invalid proto",
@@ -88,6 +91,30 @@ var Messages = map[string]string{
 	"sessions.notFoundOrAccessDenied": "session not found or access denied",
 	"sessions.onlySSHTelnet":          "only SSH and Telnet targets supported",
 	"sessions.eventsUnavailable":      "session events not available",
+
+	// Collaborative session sharing (Phase A).
+	"sharing.unavailable":            "collaborative sessions are not available",
+	"sharing.modeInvalid":            "invitation mode is invalid",
+	"sharing.inviteeNotFound":        "invited user not found",
+	"sharing.inviteeOrTagOnly":       "cannot specify both a user and a tag",
+	"sharing.inviteTagInvalid":         "tag is invalid",
+	"sharing.inviteTagNotForTarget":  "this tag does not grant access to the target",
+	"sharing.inviteeNoTargetAccess":  "invited user cannot access this target",
+	"sharing.linkMaxUsesInvalid":     "invalid link usage limit",
+	"sharing.cannotInviteSelf":       "you cannot invite yourself",
+	"sharing.tokenOrIDRequired":      "invitation token or id required",
+	"sharing.invitationNotFound":     "invitation not found",
+	"sharing.invitationInactive":     "invitation is no longer active",
+	"sharing.invitationOtherUser":    "invitation is for a different user",
+	"sharing.invitationStaleAccess":  "inviter no longer has access to the target",
+	"sharing.userIDRequired":         "user_id required",
+	"sharing.cannotKickOwner":        "the session owner cannot be removed",
+	"sharing.participantNotFound":    "participant not found",
+	"sharing.alreadyWriter":          "you already hold the write token",
+	"sharing.requestIDRequired":      "request_id required",
+	"sharing.writeRequestNotFound":   "write request not found",
+	"sharing.writeRequestNotPending": "write request has already been decided",
+	"sharing.notWriter":              "only the current writer can do this",
 
 	// Command logs.
 	"command.queryFailed": "failed to query command logs",

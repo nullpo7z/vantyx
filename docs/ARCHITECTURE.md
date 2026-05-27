@@ -73,10 +73,97 @@ graph TD
         Handlers --> VNCWS["vnc.go<br/>/ws/vnc + /api/vnc/sessions"]
 
         TermWS --> TermSessMan["TerminalSessionManager<br/>internal/session"]
+        TermWS --> Sharing["Collaboration registry<br/>internal/sharing"]
         RDPWS --> RDPVNCMan["RDPVNCManager<br/>internal/rdpvnc"]
         VNCWS --> RDPVNCMan
     end
 ```
+
+### Collaborative terminal sessions
+
+Terminal sessions can have multiple attached clients. Exactly one
+client holds the *write token* and may forward keystrokes to the
+target; the others attach as read-only viewers and the bridge drops
+their stdin server-side.
+
+The detachable bridges in
+[`internal/sshproxy/bridge_detachable.go`](../internal/sshproxy/bridge_detachable.go)
+and
+[`internal/telnetproxy/bridge_detachable.go`](../internal/telnetproxy/bridge_detachable.go)
+keep an internal map of clients, fan target output out to every one
+of them, and expose a `BridgeController.SetWriter(userID)` hook
+that the HTTP layer uses to switch the writer at runtime without
+disconnecting anyone.
+
+Room state (owner, current writer, participants, pending control
+requests) lives in [`internal/sharing.Registry`](../internal/sharing).
+Persisted invitations live in the `session_invitations` table and
+are accessed through `sharing.Store`. Tokens are stored as SHA-256
+hashes only; the plain token is returned exactly once at creation
+time.
+
+The HTTP surface adds:
+
+| Method & path | Purpose |
+|---|---|
+| `POST /api/terminal/sessions/{id}/invitations` | Owner issues a named or link invitation |
+| `GET /api/terminal/sessions/{id}/invitations` | List own session's invitations |
+| `DELETE /api/terminal/sessions/{id}/invitations/{inv_id}` | Revoke an invitation |
+| `POST /api/terminal/sessions/{id}/join` | Consume an invitation and join as viewer |
+| `GET /api/terminal/sessions/{id}/participants` | Participants + pending write requests |
+| `DELETE /api/terminal/sessions/{id}/participants/{user_id}` | Owner kicks a participant |
+| `POST /api/terminal/sessions/{id}/write-requests` | Viewer requests control |
+| `POST /api/terminal/sessions/{id}/write-requests/{req_id}/grant` | Writer grants control |
+| `POST /api/terminal/sessions/{id}/write-requests/{req_id}/deny` | Writer denies control |
+| `POST /api/terminal/sessions/{id}/write-token/release` | Writer voluntarily releases control |
+
+`/ws/ssh?session_id=...&mode=writer|viewer` is the WebSocket attach;
+viewers also pass `&invite=<plain-token>` on first attach so the
+backend consumes the invitation atomically. SSE events
+(`participant_joined`, `participant_left`,
+`write_request_pending`, `write_request_decided`,
+`write_token_transferred`, `invitation_revoked`,
+`invitation_consumed`) keep every
+participant's UI in sync without polling.
+
+### SSH host key verification (TOFU)
+
+[`internal/sshproxy/hostkey.go`](../internal/sshproxy/hostkey.go) holds
+all host key policy. The bridge's `BridgeOption` set is built from the
+target row at connect time:
+
+- `WithHostKeyFingerprint(target.SSHHostKeyFingerprint)` enforces a
+  constant-time SHA-256 match against the offered key.
+- `WithInsecureSkipHostKeyVerify()` is honoured only when
+  `VANTYX_SSH_INSECURE_IGNORE_HOST_KEY=1` is set in the environment.
+- `WithCapturedFingerprint(*string)` makes the host key callback
+  publish the offered fingerprint into a caller-supplied buffer; this
+  is what the probing endpoint uses to retrieve a fingerprint without
+  persisting anything.
+
+When verification fails, the callback returns either
+`*HostKeyUnknownError` (no fingerprint configured) or
+`*HostKeyMismatchError` (fingerprint does not match). The HTTP layer
+detects these in
+[`internal/httpapi/terminal_hostkey_frame.go`](../internal/httpapi/terminal_hostkey_frame.go)
+and emits a structured WebSocket frame
+(`{"type":"host_key_unknown"|"host_key_mismatch", ...}`) instead of
+the legacy `error: ...` text frame, so the SPA can render a TOFU
+adoption / mismatch dialog and call `PUT
+/api/targets/{id}/ssh-host-key` once the operator approves. Two
+companion endpoints support this flow:
+
+| Method & path | Purpose |
+|---|---|
+| `POST /api/targets/probe-host-key` | Admin-only one-shot dial that returns the offered SHA-256 fingerprint |
+| `PUT /api/targets/{id}/ssh-host-key` | Admin-only adopt (`{"fingerprint":"SHA256:..."}`) or clear (`{"fingerprint":""}`) |
+
+Both endpoints emit dedicated audit events
+(`target_host_key_probed`, `target_host_key_probe_failed`,
+`target_host_key_adopted`, `target_host_key_cleared`,
+`terminal_host_key_unknown_presented`,
+`terminal_host_key_mismatch_presented`) so retrospective review can
+trace every key adoption back to the operator that approved it.
 
 Cross-cutting concerns live in shared files:
 

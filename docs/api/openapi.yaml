@@ -332,6 +332,15 @@ components:
         has_ssh_key:
           type: boolean
           description: SSH 秘密鍵が保存されている場合 true（一覧で返す。値は含めない）
+        ssh_host_key_fingerprint:
+          type: string
+          description: |
+            登録済み SSH ホストキーの SHA-256 フィンガープリント。
+            形式は `SHA256:<base64>`（OpenSSH 標準、`ssh-keygen -lf` と一致）。
+            未登録の場合はフィールドが省略されるか空文字で返ります。
+            初回接続時は WebSocket フレーム `host_key_unknown` が返り、
+            UI 側が `PUT /api/targets/{id}/ssh-host-key` で採用できます。
+          example: "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8"
       required:
         - id
         - name
@@ -1127,6 +1136,102 @@ paths:
         '401':
         '403':
         '404':
+
+  /api/targets/probe-host-key:
+    post:
+      summary: SSH ホストキーの一回限りプローブ（admin）
+      description: |
+        指定された SSH エンドポイントに 1 回だけ接続し、サーバーが提示する
+        ホストキーの SHA-256 フィンガープリントを返します。永続化はされず、
+        Add Target / Edit Target の確認ダイアログ向けの補助 API です。
+
+        ホストキー検証は `WithInsecureSkipHostKeyVerify` を 1 リクエスト
+        だけ有効化して通過させ、コールバック内で `SHA256:<base64>` 形式の
+        値だけをキャプチャします。失敗した場合は `proxy.dialFailed` 系の
+        ローカライズドメッセージで 502 を返します。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [host]
+              properties:
+                host:
+                  type: string
+                  description: 接続先ホスト名 / IP アドレス
+                port:
+                  type: integer
+                  default: 22
+                  description: 省略時は 22
+      responses:
+        '200':
+          description: フィンガープリントを取得
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  host:
+                    type: string
+                  port:
+                    type: integer
+                  fingerprint:
+                    type: string
+                    example: SHA256:abcdef0123456789...
+        '400':
+          description: ホストが空、もしくはリクエストボディが不正
+        '401':
+        '403':
+          description: 非 admin
+        '502':
+          description: 接続失敗（タイムアウト / 拒否 / ルート不到達 など）
+
+  /api/targets/{target_id}/ssh-host-key:
+    put:
+      summary: SSH ホストキーフィンガープリントの登録 / クリア（admin）
+      description: |
+        ターゲットの `ssh_host_key_fingerprint` を更新します。空文字を渡すと
+        登録済みフィンガープリントを削除します（次回接続時に TOFU
+        ダイアログが出ます）。
+
+        フォーマット検証は `access.SetSSHHostKeyFingerprint` 内で行われ、
+        `SHA256:<base64>` 以外（または不正な base64）は 400 を返します。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fingerprint:
+                  type: string
+                  description: 空文字でクリア。それ以外は `SHA256:<base64>` 形式。
+      responses:
+        '200':
+          description: 更新後のターゲット
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Target'
+        '400':
+          description: フォーマット不正（`SHA256:` ではない）
+        '401':
+          description: 未ログイン
+        '403':
+          description: 非 admin
+        '404':
+          description: ターゲットが存在しない
 
   /api/targets/{target_id}/files:
     get:
@@ -2439,6 +2544,238 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/terminal/sessions/{session_id}/invitations:
+    get:
+      summary: 招待一覧（オーナー専用）
+      description: |
+        セッションオーナーが過去に発行した招待の一覧を返します。
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 招待一覧 }
+        '401': { description: 未認証 }
+        '404': { description: 自分のセッションでない }
+    post:
+      summary: 招待を発行（オーナー専用）
+      description: |
+        ターミナルセッションへの招待を発行します。`invitee_user_id` を
+        指定すると指名招待、省略するとリンク招待となります。レスポンスの
+        `token` はリンク招待時のみ意味があり、保存はされません（DB には
+        SHA-256 ハッシュのみ保持）。
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode:
+                  type: string
+                  enum: [viewer, writer_eligible]
+                  default: viewer
+                invitee_user_id: { type: string }
+                ttl_seconds:
+                  type: integer
+                  description: 0 または未指定でデフォルト TTL。`VANTYX_INVITATION_MAX_TTL_SECONDS` が上限。
+      responses:
+        '200': { description: 発行された招待 }
+        '400': { description: 入力エラー（モード不正、自分自身の招待など） }
+        '401': { description: 未認証 }
+        '404': { description: 自分のセッションでない }
+
+  /api/terminal/sessions/{session_id}/invitations/{invitation_id}/join-url:
+    post:
+      summary: 招待リンクを再発行する（オーナー専用）
+      description: |
+        有効な招待に新しい plain token を割り当て、参加 URL を返します。
+        以前の URL は直ちに無効になります。一覧取得では token は返しません。
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: invitation_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 新しい参加 URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  join_url: { type: string }
+                  token: { type: string }
+        '401': { description: 未認証 }
+        '403': { description: 失効済み / 使用済み }
+        '404': { description: 招待またはセッションが見つからない }
+
+  /api/terminal/sessions/{session_id}/invitations/{invitation_id}:
+    delete:
+      summary: 招待を取消す（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: invitation_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: 取消完了 }
+        '401': { description: 未認証 }
+        '404': { description: 招待が存在しない }
+
+  /api/terminal/sessions/{session_id}/join:
+    post:
+      summary: 招待を消費して参加する
+      description: |
+        招待のリンクトークンまたは招待 ID を提示して、対象セッションに
+        観覧者として参加します。書込権限は自動的には付与されません。
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                invitation_token: { type: string, description: リンク招待時のプレーン文字列 }
+                invitation_id: { type: string, description: 指名招待を直接消費する場合 }
+      responses:
+        '200': { description: 参加成功 }
+        '400': { description: トークン未指定など }
+        '401': { description: 未認証 }
+        '403': { description: アクセス権無し }
+        '404': { description: 招待・セッションが存在しない }
+
+  /api/terminal/sessions/{session_id}/participants:
+    get:
+      summary: 参加者一覧
+      description: |
+        オーナー、現 writer、観覧者の一覧と保留中の書込権限リクエスト
+        の状態を返します。
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 参加者リスト }
+        '401': { description: 未認証 }
+        '404': { description: セッションが存在しない }
+
+  /api/terminal/sessions/{session_id}/participants/{user_id}:
+    delete:
+      summary: 参加者を退出させる（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: キック完了 }
+        '401': { description: 未認証 }
+        '403': { description: オーナーでない }
+        '404': { description: セッションまたは参加者が存在しない }
+
+  /api/terminal/sessions/{session_id}/write-requests:
+    post:
+      summary: 書込権限をリクエストする（観覧者）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: リクエスト作成完了 }
+        '401': { description: 未認証 }
+        '404': { description: セッションが存在しない・参加していない }
+
+  /api/terminal/sessions/{session_id}/write-requests/{request_id}/grant:
+    post:
+      summary: 書込権限リクエストを承認し譲渡する（現 writer）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: request_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 譲渡完了 }
+        '401': { description: 未認証 }
+        '403': { description: 現 writer ではない }
+        '404': { description: リクエストが存在しない }
+
+  /api/terminal/sessions/{session_id}/write-requests/{request_id}/deny:
+    post:
+      summary: 書込権限リクエストを拒否する（現 writer）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: request_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 拒否完了 }
+        '401': { description: 未認証 }
+        '403': { description: 現 writer ではない }
+        '404': { description: リクエストが存在しない }
+
+  /api/terminal/sessions/{session_id}/write-token/release:
+    post:
+      summary: 書込権限を自発的に解放する（現 writer）
+      description: |
+        現 writer が任意のタイミングで書込権限を手放し、所有権をオーナー
+        に戻します。所有者以外のユーザーは「希望すれば」呼べますが、現
+        writer でない場合は no-op となり 403 を返します。
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 解放完了 }
+        '401': { description: 未認証 }
+        '403': { description: 現 writer ではない }
+        '404': { description: セッションが存在しない }
 
   /api/file-transfers:
     get:

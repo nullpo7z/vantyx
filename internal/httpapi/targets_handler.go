@@ -14,21 +14,22 @@ import (
 )
 
 type targetResponse struct {
-	ID                   string   `json:"id"`
-	Name                 string   `json:"name"`
-	Host                 string   `json:"host"`
-	Port                 uint16   `json:"port"`
-	Protocol             string   `json:"protocol"`
-	Path                 string   `json:"path"`
-	SSHUsername          string   `json:"ssh_username,omitempty"`
-	HasStoredCredentials bool     `json:"has_stored_credentials,omitempty"`
-	HasSSHKey            bool     `json:"has_ssh_key,omitempty"`
-	NeedsPassword        bool     `json:"needs_password,omitempty"`   // username stored but no password; SPA prompts at connect.
-	NeedsPassphrase      bool     `json:"needs_passphrase,omitempty"` // encrypted private key stored but no passphrase; SPA prompts at connect.
-	Tags                 []string `json:"tags,omitempty"`
-	SFTPEnabled          bool     `json:"sftp_enabled"`
-	FTPEnabled           bool     `json:"ftp_enabled"`
-	TFTPEnabled          bool     `json:"tftp_enabled"`
+	ID                    string   `json:"id"`
+	Name                  string   `json:"name"`
+	Host                  string   `json:"host"`
+	Port                  uint16   `json:"port"`
+	Protocol              string   `json:"protocol"`
+	Path                  string   `json:"path"`
+	SSHUsername           string   `json:"ssh_username,omitempty"`
+	HasStoredCredentials  bool     `json:"has_stored_credentials,omitempty"`
+	HasSSHKey             bool     `json:"has_ssh_key,omitempty"`
+	NeedsPassword         bool     `json:"needs_password,omitempty"`   // username stored but no password; SPA prompts at connect.
+	NeedsPassphrase       bool     `json:"needs_passphrase,omitempty"` // encrypted private key stored but no passphrase; SPA prompts at connect.
+	Tags                  []string `json:"tags,omitempty"`
+	SFTPEnabled           bool     `json:"sftp_enabled"`
+	FTPEnabled            bool     `json:"ftp_enabled"`
+	TFTPEnabled           bool     `json:"tftp_enabled"`
+	SSHHostKeyFingerprint string   `json:"ssh_host_key_fingerprint,omitempty"`
 }
 
 type createTargetRequest struct {
@@ -45,6 +46,12 @@ type createTargetRequest struct {
 	SFTPEnabled             *bool  `json:"sftp_enabled,omitempty"`
 	FTPEnabled              *bool  `json:"ftp_enabled,omitempty"`
 	TFTPEnabled             *bool  `json:"tftp_enabled,omitempty"`
+	// SSHHostKeyFingerprint, when non-empty, is recorded as the
+	// expected SHA-256 fingerprint of the upstream SSH host key.
+	// Format: "SHA256:<base64-without-padding>" (matching
+	// `ssh-keygen -lf`). Empty means "no fingerprint yet — adopt
+	// later via TOFU".
+	SSHHostKeyFingerprint string `json:"ssh_host_key_fingerprint,omitempty"`
 }
 
 type updateTargetRequest struct {
@@ -81,17 +88,18 @@ func isEncryptedPEMBlock(s string) bool {
 // connection hints (NeedsPassword / NeedsPassphrase) used by the SPA.
 func targetToResponse(t *access.Target, tags []string) targetResponse {
 	r := targetResponse{
-		ID:          string(t.ID),
-		Name:        t.Name,
-		Host:        t.Host,
-		Port:        t.Port,
-		Protocol:    string(t.Protocol),
-		Path:        t.Path,
-		SSHUsername: t.SSHUsername,
-		Tags:        tags,
-		SFTPEnabled: t.SFTPEnabled,
-		FTPEnabled:  t.FTPEnabled,
-		TFTPEnabled: t.TFTPEnabled,
+		ID:                    string(t.ID),
+		Name:                  t.Name,
+		Host:                  t.Host,
+		Port:                  t.Port,
+		Protocol:              string(t.Protocol),
+		Path:                  t.Path,
+		SSHUsername:           t.SSHUsername,
+		Tags:                  tags,
+		SFTPEnabled:           t.SFTPEnabled,
+		FTPEnabled:            t.FTPEnabled,
+		TFTPEnabled:           t.TFTPEnabled,
+		SSHHostKeyFingerprint: t.SSHHostKeyFingerprint,
 	}
 	if tags == nil {
 		r.Tags = []string{}
@@ -301,6 +309,21 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	if err := a.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID(req.GroupID), access.TargetID(id)); err != nil {
 		writeJSONErrorKey(w, r, "targets.assignFailed", http.StatusInternalServerError)
 		return
+	}
+	if fp := strings.TrimSpace(req.SSHHostKeyFingerprint); fp != "" {
+		if err := a.TargetStore.SetSSHHostKeyFingerprint(ctx, access.TargetID(id), fp); err != nil {
+			if writeAccessValidationError(w, r, err) {
+				return
+			}
+			writeInternalError(w, err)
+			return
+		}
+		audit("target_host_key_adopted", auditFields{
+			"user_id":     sess.UserID,
+			"target_id":   id,
+			"fingerprint": fp,
+			"source":      "create",
+		})
 	}
 	tftp.NotifyTargetCreated(ctx, a.TargetStore, protocol)
 

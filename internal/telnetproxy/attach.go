@@ -18,6 +18,7 @@ func (f StdinRecorderFunc) RecordInput(p []byte) {
 
 type attachableWriter interface {
 	WriteBinary([]byte) error
+	WriteText([]byte) error
 	Close() error
 }
 
@@ -25,6 +26,10 @@ type wsWriterAdapter struct{ *websocket.Conn }
 
 func (w *wsWriterAdapter) WriteBinary(p []byte) error {
 	return w.WriteMessage(websocket.BinaryMessage, p)
+}
+
+func (w *wsWriterAdapter) WriteText(p []byte) error {
+	return w.WriteMessage(websocket.TextMessage, p)
 }
 
 // StreamAttach attaches a CLI channel to an existing telnet session.
@@ -35,6 +40,7 @@ type StreamAttach struct {
 }
 
 func (s *StreamAttach) WriteBinary(p []byte) error { return s.Write(p) }
+func (s *StreamAttach) WriteText(p []byte) error   { return s.Write(p) }
 
 func (s *StreamAttach) Close() error {
 	if s.CloseFn != nil {

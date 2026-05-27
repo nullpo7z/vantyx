@@ -29,6 +29,77 @@ import {
   setRdpResolutionForTarget,
 } from './window_helpers.js'
 import { buildAppShellHTML } from './header_template.js'
+import { refreshIncomingInvitationsBanner } from './incoming_invitations.js'
+import {
+  createRealtimeWatcher,
+  POLL_MS,
+  shouldRefreshIncomingInvitationsBanner,
+  shouldRefreshSessionList,
+} from './sharing_events.js'
+
+function disconnectAppSessionEvents() {
+  if (window.vantyxAppSharingUnsub) {
+    try {
+      window.vantyxAppSharingUnsub()
+    } catch {
+      /* ignore */
+    }
+    window.vantyxAppSharingUnsub = null
+  }
+  if (window.vantyxSessionEventSource) {
+    try {
+      window.vantyxSessionEventSource.close()
+    } catch {
+      /* ignore */
+    }
+    window.vantyxSessionEventSource = null
+  }
+}
+
+function teardownGlobalRealtimeWatches() {
+  if (typeof window.vantyxStopGlobalIncomingWatch === 'function') {
+    try {
+      window.vantyxStopGlobalIncomingWatch()
+    } catch {
+      /* ignore */
+    }
+    window.vantyxStopGlobalIncomingWatch = null
+  }
+  if (typeof window.vantyxStopGlobalSessionActivityWatch === 'function') {
+    try {
+      window.vantyxStopGlobalSessionActivityWatch()
+    } catch {
+      /* ignore */
+    }
+    window.vantyxStopGlobalSessionActivityWatch = null
+  }
+}
+
+function setupGlobalRealtimeWatches() {
+  teardownGlobalRealtimeWatches()
+
+  window.vantyxStopGlobalIncomingWatch = createRealtimeWatcher({
+    shouldRefresh: shouldRefreshIncomingInvitationsBanner,
+    onRefresh: () => {
+      const banner = document.getElementById('incoming-invitations-banner')
+      if (!banner) return
+      void refreshIncomingInvitationsBanner(banner, {
+        onJoin: window.vantyxIncomingInviteOnJoin,
+      })
+    },
+    pollMs: POLL_MS.incoming,
+  })
+
+  window.vantyxStopGlobalSessionActivityWatch = createRealtimeWatcher({
+    shouldRefresh: shouldRefreshSessionList,
+    onRefresh: () => {
+      if (typeof window.vantyxUpdateActiveSessionCounts === 'function') {
+        window.vantyxUpdateActiveSessionCounts()
+      }
+    },
+    pollMs: POLL_MS.incoming,
+  })
+}
 
 export function renderApp(container) {
   // 画面遷移（renderApp 再呼び出し）時にも保存済みテーマを必ず適用し直す。
@@ -96,7 +167,7 @@ export function renderApp(container) {
     window.open(u.toString(), '_blank', 'noopener')
   }
 
-  // When this tab regains focus, refresh active sessions modal if open.
+  // When this tab regains focus, refresh live session/invitation UI if visible.
   window.addEventListener('focus', () => {
     try {
       const m = document.getElementById('active-sessions-modal')
@@ -105,6 +176,12 @@ export function renderApp(container) {
       }
       if (typeof window.vantyxUpdateActiveSessionCounts === 'function') {
         window.vantyxUpdateActiveSessionCounts()
+      }
+      const incomingBanner = document.getElementById('incoming-invitations-banner')
+      if (incomingBanner) {
+        void refreshIncomingInvitationsBanner(incomingBanner, {
+          onJoin: window.vantyxIncomingInviteOnJoin,
+        })
       }
     } catch { /* ignore */ }
   })
@@ -121,10 +198,7 @@ export function renderApp(container) {
   }
 
   async function showUsersPage() {
-    if (window.vantyxSessionEventSource) {
-      window.vantyxSessionEventSource.close()
-      window.vantyxSessionEventSource = null
-    }
+    disconnectAppSessionEvents()
     setActiveNav('users')
     await renderUsersPage({
       mainContent,
@@ -135,10 +209,7 @@ export function renderApp(container) {
   }
 
   async function showSessionsPage() {
-    if (window.vantyxSessionEventSource) {
-      window.vantyxSessionEventSource.close()
-      window.vantyxSessionEventSource = null
-    }
+    disconnectAppSessionEvents()
     delete mainContent.dataset.treeMode
     setActiveNav('sessions')
     const sessionEndModal = document.getElementById('session-end-modal')
@@ -148,17 +219,11 @@ export function renderApp(container) {
       sessionEndModal,
       openTerminalTab: openTerminalTabWithParent,
       getRdpResolutionForTarget,
-      onSubscribeSSE: (onMessage) => {
-        window.vantyxSessionEventSource = API.subscribeSessionEvents(onMessage)
-      },
     })
   }
 
   async function showRecordingsPage() {
-    if (window.vantyxSessionEventSource) {
-      window.vantyxSessionEventSource.close()
-      window.vantyxSessionEventSource = null
-    }
+    disconnectAppSessionEvents()
     mainContent.className = TREE_MAIN_CLASS
     setActiveNav('recordings')
     await renderRecordingsPage({
@@ -195,18 +260,12 @@ export function renderApp(container) {
   }
 
   async function showAuditLogs() {
-    if (window.vantyxSessionEventSource) {
-      window.vantyxSessionEventSource.close()
-      window.vantyxSessionEventSource = null
-    }
+    disconnectAppSessionEvents()
     await renderAuditPage({ mainContent, meData, setActiveNav })
   }
 
   async function showSettings() {
-    if (window.vantyxSessionEventSource) {
-      window.vantyxSessionEventSource.close()
-      window.vantyxSessionEventSource = null
-    }
+    disconnectAppSessionEvents()
     await renderSettingsPage(mainContent)
   }
 
@@ -1128,9 +1187,8 @@ export function renderApp(container) {
     }
 
     try {
-      if (mode === 'manage' && window.vantyxSessionEventSource) {
-        window.vantyxSessionEventSource.close()
-        window.vantyxSessionEventSource = null
+      if (mode === 'manage') {
+        disconnectAppSessionEvents()
       }
       if (!useCache || !groupsCache) {
         groupsCache = await API.groups()
@@ -1154,32 +1212,37 @@ export function renderApp(container) {
 
       mainContent.dataset.treeMode = mode
       mainContent.innerHTML = `
-        <div class="flex gap-6 w-full h-full">
-          <aside class="w-64 flex-col border-r border-slate-200 bg-white shadow-sm shrink-0 rounded-lg overflow-hidden flex">
-            <div class="px-4 py-3 border-b border-slate-200 text-sm font-semibold text-slate-700 flex items-center justify-between">
-              <span>${t('app.accessGroupsTitle')}</span>
-              ${addGroupBtnHtml}
-            </div>
-            <div class="px-3 py-3 text-xs text-slate-800 overflow-y-auto flex-1 min-h-0">
-              ${treeHtml || `<p class="text-slate-500 p-2">${t('app.noGroups')}</p>`}
-            </div>
-          </aside>
-          <section class="flex-1 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col min-h-0">
-            <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-              <div>
-                <h2 class="text-sm font-semibold text-slate-800">${escapeHtml(label)}</h2>
+        <div class="w-full h-full flex flex-col gap-4">
+          ${!isManageMode ? '<section id="incoming-invitations-banner" class="hidden w-full bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-4 space-y-3"></section>' : ''}
+          <div class="flex gap-6 w-full flex-1 min-h-0">
+            <aside class="w-64 flex-col border-r border-slate-200 bg-white shadow-sm shrink-0 rounded-lg overflow-hidden flex">
+              <div class="px-4 py-3 border-b border-slate-200 text-sm font-semibold text-slate-700 flex items-center justify-between">
+                <span>${t('app.accessGroupsTitle')}</span>
+                ${addGroupBtnHtml}
               </div>
-              <div class="flex items-center gap-2">
-                <span class="text-xs text-slate-500">${t('app.targetsSuffix', { n: targets.length })}</span>
-                ${addTargetBtnHtml}
+              <div class="px-3 py-3 text-xs text-slate-800 overflow-y-auto flex-1 min-h-0">
+                ${treeHtml || `<p class="text-slate-500 p-2">${t('app.noGroups')}</p>`}
               </div>
+            </aside>
+            <div class="flex-1 flex flex-col gap-4 min-h-0">
+              ${!isManageMode ? '<div id="idle-sessions-banner" class="hidden rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900"></div>' : ''}
+              <section class="flex-1 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col min-h-0">
+                <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+                  <div>
+                    <h2 class="text-sm font-semibold text-slate-800">${escapeHtml(label)}</h2>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs text-slate-500">${t('app.targetsSuffix', { n: targets.length })}</span>
+                    ${addTargetBtnHtml}
+                  </div>
+                </div>
+                <div class="px-5 py-4">
+                  ${renderGroupTargetsTable(targets, mode, escapeHtml, renderTagPills)}
+                  ${showMembersSection ? `<div id="group-members-container" class="mt-6 border-t border-slate-200 pt-4"><p class="text-slate-500">${t('app.loading')}</p></div>` : ''}
+                </div>
+              </section>
             </div>
-            <div class="px-5 py-4">
-              ${!isManageMode ? '<div id="idle-sessions-banner" class="hidden mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"></div>' : ''}
-              ${renderGroupTargetsTable(targets, mode, escapeHtml, renderTagPills)}
-              ${showMembersSection ? `<div id="group-members-container" class="mt-6 border-t border-slate-200 pt-4"><p class="text-slate-500">${t('app.loading')}</p></div>` : ''}
-            </div>
-          </section>
+          </div>
         </div>
       `
       const newTreeContainer = mainContent.querySelector('aside .overflow-y-auto')
@@ -1305,6 +1368,7 @@ export function renderApp(container) {
               sftp_enabled: btn.dataset.targetSftpEnabled === '1',
               ftp_enabled: btn.dataset.targetFtpEnabled === '1',
               tftp_enabled: btn.dataset.targetTftpEnabled === '1',
+              ssh_host_key_fingerprint: btn.dataset.targetSshHostKeyFp || '',
             }
             if (target.id) showEditTargetModal(target)
           })
@@ -1383,15 +1447,22 @@ export function renderApp(container) {
           }
         }
         window.vantyxUpdateActiveSessionCounts = updateActiveSessionCounts
-        // 既存の SSE 購読があれば解除してから新規購読
-        if (window.vantyxSessionEventSource) {
-          window.vantyxSessionEventSource.close()
-          window.vantyxSessionEventSource = null
+        const incomingBanner = mainContent.querySelector('#incoming-invitations-banner')
+        window.vantyxIncomingInviteOnJoin = ({ session_id: sid, target_id: tid }) => {
+          const params = new URLSearchParams()
+          params.set('session_id', sid)
+          params.set('mode', 'viewer')
+          if (tid) params.set('target_id', tid)
+          openTerminalTabWithParent(`/terminal?${params.toString()}`)
+        }
+        const refreshIncomingBanner = () => {
+          if (!incomingBanner) return
+          return refreshIncomingInvitationsBanner(incomingBanner, {
+            onJoin: window.vantyxIncomingInviteOnJoin,
+          })
         }
         updateActiveSessionCounts()
-        window.vantyxSessionEventSource = API.subscribeSessionEvents(() => {
-          updateActiveSessionCounts()
-        })
+        refreshIncomingBanner()
         mainContent.querySelectorAll('.active-sessions-btn').forEach((btn) => {
           btn.addEventListener('click', (e) => {
             e.preventDefault()
@@ -1693,6 +1764,15 @@ export function renderApp(container) {
                   </select>
                 </div>
               </div>
+              <div id="add-target-host-key-wrap" class="rounded border border-slate-200 bg-slate-50 px-4 py-3 hidden">
+                <div class="flex items-center justify-between mb-2">
+                  <p class="text-xs font-medium text-slate-700">${t('hostKey.sectionTitle')}</p>
+                  <button type="button" id="add-target-host-key-refetch" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 shadow-sm">${t('hostKey.refetch')}</button>
+                </div>
+                <p class="text-[11px] text-slate-500 mb-1">${t('hostKey.fingerprintLabel')}</p>
+                <div id="add-target-host-key-fp" class="font-mono text-xs break-all bg-white border border-slate-200 rounded px-2 py-1.5 text-slate-700 select-all min-h-[2rem]">${t('hostKey.notRegistered')}</div>
+                <p id="add-target-host-key-status" class="text-[11px] text-slate-500 mt-1"></p>
+              </div>
               <div id="add-target-rdp-res-wrap" class="grid grid-cols-2 gap-4 hidden">
                 <div>
                   <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpWidth')}</label>
@@ -1785,6 +1865,29 @@ export function renderApp(container) {
     const addSftpCheckbox = modal.querySelector('#add-target-enable-sftp')
     const addFtpCheckbox = modal.querySelector('#add-target-enable-ftp')
     const addTftpCheckbox = modal.querySelector('#add-target-enable-tftp')
+    const addHostKeyWrap = modal.querySelector('#add-target-host-key-wrap')
+    const addHostKeyFpEl = modal.querySelector('#add-target-host-key-fp')
+    const addHostKeyStatusEl = modal.querySelector('#add-target-host-key-status')
+    const addHostKeyRefetchBtn = modal.querySelector('#add-target-host-key-refetch')
+    let addCapturedFingerprint = ''
+    let addCapturedKey = ''
+    function setAddHostKeyFp(value) {
+      addCapturedFingerprint = (value || '').trim()
+      if (addCapturedFingerprint) {
+        addHostKeyFpEl.textContent = addCapturedFingerprint
+        addHostKeyFpEl.classList.remove('text-slate-500')
+        addHostKeyFpEl.classList.add('text-slate-800')
+      } else {
+        addHostKeyFpEl.textContent = t('hostKey.notRegistered')
+        addHostKeyFpEl.classList.add('text-slate-500')
+      }
+    }
+    function resetAddHostKey() {
+      addCapturedFingerprint = ''
+      addCapturedKey = ''
+      addHostKeyStatusEl.textContent = ''
+      setAddHostKeyFp('')
+    }
     function syncAddAuthType() {
       const proto = addProtoSelect.value
       if (proto === 'rdp' || proto === 'telnet') {
@@ -1804,6 +1907,12 @@ export function renderApp(container) {
       const hasCreds = proto === 'ssh' || proto === 'telnet' || proto === 'rdp' || proto === 'ftp'
       addCredFields.style.display = hasCreds ? '' : 'none'
       addAuthTypeWrap.classList.toggle('hidden', proto !== 'ssh')
+      if (addHostKeyWrap) {
+        addHostKeyWrap.classList.toggle('hidden', proto !== 'ssh')
+        if (proto !== 'ssh') {
+          resetAddHostKey()
+        }
+      }
       addUsernameLabel.textContent =
         proto === 'telnet' ? t('app.telnetUsernameOpt')
           : proto === 'rdp' ? t('app.rdpUsernameOpt')
@@ -1834,7 +1943,38 @@ export function renderApp(container) {
     modal.querySelectorAll('input[name="add-target-auth-type"]').forEach((radio) => {
       radio.addEventListener('change', syncAddAuthType)
     })
-    syncAddProtocol()
+    // Re-probe whenever host or port changes so we never silently
+    // commit a fingerprint captured from a different host:port pair.
+    const addHostInputForReset = modal.querySelector('#add-target-host')
+    if (addHostInputForReset) addHostInputForReset.addEventListener('input', resetAddHostKey)
+    addPortInput.addEventListener('input', resetAddHostKey)
+    async function probeAddHostKey({ silent = false } = {}) {
+      if (addProtoSelect.value !== 'ssh') return null
+      const host = (addHostInputForReset && addHostInputForReset.value || '').trim()
+      const port = parseInt(addPortInput.value, 10) || 22
+      if (!host) {
+        if (!silent) addHostKeyStatusEl.textContent = t('app.placeholderHost')
+        return null
+      }
+      addHostKeyStatusEl.textContent = t('hostKey.fetching')
+      addHostKeyRefetchBtn.disabled = true
+      try {
+        const result = await API.probeHostKey({ host, port })
+        addCapturedKey = `${host}:${port}`
+        setAddHostKeyFp(result.fingerprint)
+        addHostKeyStatusEl.textContent = t('hostKey.probedAt', { time: new Date().toLocaleTimeString() })
+        return result.fingerprint
+      } catch (err) {
+        addCapturedFingerprint = ''
+        addCapturedKey = ''
+        addHostKeyStatusEl.textContent = t('hostKey.probeFailed', { error: err.message || String(err) })
+        setAddHostKeyFp('')
+        return null
+      } finally {
+        addHostKeyRefetchBtn.disabled = false
+      }
+    }
+    addHostKeyRefetchBtn.addEventListener('click', () => probeAddHostKey())
 
     modal.querySelector('#add-target-close').addEventListener('click', () => {
       modal.classList.add('hidden')
@@ -1892,6 +2032,44 @@ export function renderApp(container) {
         payload.sftp_enabled = protocol === 'ssh' ? enableSftp : false
         payload.ftp_enabled = enableFtp
         payload.tftp_enabled = enableTftp
+      }
+      // SSH targets: TOFU host-key flow.
+      // - If we have not probed yet (or host:port changed), probe now.
+      // - Show a confirm dialog so the operator chooses to trust the
+      //   fingerprint, register without a fingerprint, or cancel.
+      // - On dial failure, fall back to "register without fingerprint
+      //   or cancel" so the user is never silently shipped a target
+      //   with an unknown key.
+      if (protocol === 'ssh') {
+        const probeKey = `${host}:${port}`
+        let fp = addCapturedKey === probeKey ? addCapturedFingerprint : ''
+        if (!fp) {
+          fp = await probeAddHostKey({ silent: true })
+        }
+        if (fp) {
+          const body = t('hostKey.confirmBody', { host, port, fp })
+          const accept = t('hostKey.confirmAccept')
+          const skip = t('hostKey.confirmSkip')
+          const cancel = t('hostKey.confirmCancel')
+          // 3-way confirm: native confirm() can only return yes/no, so
+          // do it as accept (yes) -> skip (custom prompt for no).
+          const ok = window.confirm(`${t('hostKey.confirmTitle')}\n\n${body}\n\n[${accept}] / ${cancel} / ${skip}`)
+          if (ok) {
+            payload.ssh_host_key_fingerprint = fp
+          } else {
+            const skipOk = window.confirm(`${t('hostKey.registerWithoutFingerprint')}?\n\n${cancel}`)
+            if (!skipOk) {
+              return
+            }
+          }
+        } else {
+          // Probe failed: the operator can still register without a
+          // fingerprint if they understand the risk. Otherwise abort.
+          const skipOk = window.confirm(`${addHostKeyStatusEl.textContent || ''}\n\n${t('hostKey.registerWithoutFingerprint')}?`)
+          if (!skipOk) {
+            return
+          }
+        }
       }
       submitBtn.disabled = true
       try {
@@ -2029,6 +2207,18 @@ export function renderApp(container) {
                   </label>
                 </div>
               </div>
+              <div id="edit-target-host-key-wrap" class="rounded border border-slate-200 bg-slate-50 px-4 py-3 hidden">
+                <div class="flex items-center justify-between mb-2">
+                  <p class="text-xs font-medium text-slate-700">${t('hostKey.sectionTitle')}</p>
+                  <div class="flex gap-2">
+                    <button type="button" id="edit-target-host-key-refetch" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 shadow-sm">${t('hostKey.refetch')}</button>
+                    <button type="button" id="edit-target-host-key-clear" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50 shadow-sm">${t('hostKey.clear')}</button>
+                  </div>
+                </div>
+                <p class="text-[11px] text-slate-500 mb-1">${t('hostKey.fingerprintLabel')}</p>
+                <div id="edit-target-host-key-fp" class="font-mono text-xs break-all bg-white border border-slate-200 rounded px-2 py-1.5 text-slate-700 select-all min-h-[2rem]">${escapeHtml(target.ssh_host_key_fingerprint || '') || t('hostKey.notRegistered')}</div>
+                <p id="edit-target-host-key-status" class="text-[11px] text-slate-500 mt-1"></p>
+              </div>
               <div id="edit-target-rdp-res-wrap" class="grid grid-cols-2 gap-4 hidden">
                 <div>
                   <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpWidth')}</label>
@@ -2074,6 +2264,65 @@ export function renderApp(container) {
     const editSftpCheckbox = modal.querySelector('#edit-target-enable-sftp')
     const editFtpCheckbox = modal.querySelector('#edit-target-enable-ftp')
     const editTftpCheckbox = modal.querySelector('#edit-target-enable-tftp')
+    const editHostKeyWrap = modal.querySelector('#edit-target-host-key-wrap')
+    const editHostKeyFpEl = modal.querySelector('#edit-target-host-key-fp')
+    const editHostKeyStatusEl = modal.querySelector('#edit-target-host-key-status')
+    const editHostKeyRefetchBtn = modal.querySelector('#edit-target-host-key-refetch')
+    const editHostKeyClearBtn = modal.querySelector('#edit-target-host-key-clear')
+    // Track the fingerprint the user has staged (probed but not yet
+    // saved). Empty string = same as the persisted value; explicit
+    // "__cleared" sentinel = user pressed Clear and we should send
+    // "" to the API on save.
+    let editStagedFingerprint = ''
+    function syncEditHostKeyClearBtn() {
+      if (!editHostKeyClearBtn) return
+      const persisted = (target.ssh_host_key_fingerprint || '').trim()
+      const staged = editStagedFingerprint
+      const hasFingerprint = staged === '__cleared'
+        ? false
+        : (staged ? true : persisted !== '')
+      editHostKeyClearBtn.disabled = !hasFingerprint
+      editHostKeyClearBtn.classList.toggle('opacity-50', !hasFingerprint)
+      editHostKeyClearBtn.classList.toggle('cursor-not-allowed', !hasFingerprint)
+    }
+    function setEditHostKeyFp(value) {
+      const v = (value || '').trim()
+      if (v) {
+        editHostKeyFpEl.textContent = v
+        editHostKeyFpEl.classList.remove('text-slate-500')
+        editHostKeyFpEl.classList.add('text-slate-800')
+      } else {
+        editHostKeyFpEl.textContent = t('hostKey.notRegistered')
+        editHostKeyFpEl.classList.add('text-slate-500')
+      }
+      syncEditHostKeyClearBtn()
+    }
+    // Render whatever the dataset already gave us first so the
+    // modal does not flash "未登録" when the cached value is fine,
+    // then asynchronously refresh from the API in case the value
+    // was adopted via the terminal-page TOFU flow in a different
+    // tab. If the fresh value differs and the user has not staged
+    // anything yet, swap the displayed fingerprint and update the
+    // baseline `target.ssh_host_key_fingerprint` so save-time diffs
+    // remain accurate.
+    setEditHostKeyFp(target.ssh_host_key_fingerprint || '')
+    ;(async () => {
+      try {
+        const all = await API.targets()
+        const fresh = Array.isArray(all)
+          ? all.find((x) => x && x.id === target.id)
+          : null
+        if (!fresh) return
+        const next = fresh.ssh_host_key_fingerprint || ''
+        if (next === (target.ssh_host_key_fingerprint || '')) return
+        target.ssh_host_key_fingerprint = next
+        if (!editStagedFingerprint) {
+          setEditHostKeyFp(next)
+        } else {
+          syncEditHostKeyClearBtn()
+        }
+      } catch { /* keep cached value */ }
+    })()
 
     function syncEditAuthType() {
       const proto = editProtoSelect.value
@@ -2094,6 +2343,9 @@ export function renderApp(container) {
       const hasCreds = proto === 'ssh' || proto === 'telnet' || proto === 'rdp' || proto === 'ftp'
       editCredFields.style.display = hasCreds ? '' : 'none'
       editAuthTypeWrap.classList.toggle('hidden', proto !== 'ssh')
+      if (editHostKeyWrap) {
+        editHostKeyWrap.classList.toggle('hidden', proto !== 'ssh')
+      }
       editUsernameLabel.textContent =
         proto === 'telnet' ? t('app.telnetUsernameOpt')
           : proto === 'rdp' ? t('app.rdpUsernameOpt')
@@ -2162,6 +2414,38 @@ export function renderApp(container) {
       modal.classList.add('hidden')
       modal.innerHTML = ''
     })
+    if (editHostKeyRefetchBtn) {
+      editHostKeyRefetchBtn.addEventListener('click', async () => {
+        const host = modal.querySelector('#edit-target-host').value.trim()
+        const port = parseInt(modal.querySelector('#edit-target-port').value, 10) || 22
+        if (!host || editProtoSelect.value !== 'ssh') return
+        editHostKeyStatusEl.textContent = t('hostKey.fetching')
+        editHostKeyRefetchBtn.disabled = true
+        try {
+          const result = await API.probeHostKey({ host, port })
+          if (result.fingerprint && result.fingerprint !== (target.ssh_host_key_fingerprint || '')) {
+            editStagedFingerprint = result.fingerprint
+            setEditHostKeyFp(result.fingerprint)
+            editHostKeyStatusEl.textContent = t('hostKey.probedAt', { time: new Date().toLocaleTimeString() })
+          } else {
+            editStagedFingerprint = ''
+            setEditHostKeyFp(result.fingerprint)
+            editHostKeyStatusEl.textContent = t('hostKey.probedAt', { time: new Date().toLocaleTimeString() })
+          }
+        } catch (err) {
+          editHostKeyStatusEl.textContent = t('hostKey.probeFailed', { error: err.message || String(err) })
+        } finally {
+          editHostKeyRefetchBtn.disabled = false
+        }
+      })
+    }
+    if (editHostKeyClearBtn) {
+      editHostKeyClearBtn.addEventListener('click', () => {
+        editStagedFingerprint = '__cleared'
+        setEditHostKeyFp('')
+        editHostKeyStatusEl.textContent = t('hostKey.cleared')
+      })
+    }
     modal.querySelector('#edit-target-form').addEventListener('submit', async (e) => {
       e.preventDefault()
       const form = modal.querySelector('#edit-target-form')
@@ -2219,6 +2503,19 @@ export function renderApp(container) {
           const rdpW = parseInt(editRdpWidthInput.value, 10) || 1920
           const rdpH = parseInt(editRdpHeightInput.value, 10) || 1080
           setRdpResolutionForTarget(targetId, rdpW, rdpH)
+        }
+        // Host key: only call the dedicated endpoint when the user
+        // staged a change. Empty string clears, "SHA256:..." adopts.
+        if (protocol === 'ssh' && editStagedFingerprint) {
+          const fp = editStagedFingerprint === '__cleared' ? '' : editStagedFingerprint
+          try {
+            await API.updateTargetHostKey(targetId, fp)
+          } catch (hkErr) {
+            errorEl.textContent = t('hostKey.updateFailed', { error: hkErr.message || String(hkErr) })
+            errorEl.classList.remove('hidden')
+            submitBtn.disabled = false
+            return
+          }
         }
         await API.setTargetTags(targetId, tags)
         // ファイル転送: FTP の補助ターゲットは引き続き自動作成/削除するが、
@@ -2347,7 +2644,9 @@ export function renderApp(container) {
       meData = await API.me()
       userNameEl.textContent = meData.username
       showAuthenticatedNav(meData.role === 'admin')
+      setupGlobalRealtimeWatches()
     } catch {
+      teardownGlobalRealtimeWatches()
       renderLogin(container)
       return
     }
@@ -2396,6 +2695,7 @@ export function renderApp(container) {
   })
 
   logoutBtn.addEventListener('click', async () => {
+    teardownGlobalRealtimeWatches()
     try {
       await API.logout()
     } catch {

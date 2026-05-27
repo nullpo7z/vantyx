@@ -4,6 +4,12 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import API from './api.js'
 import { t } from './i18n.js'
+import {
+  createRealtimeWatcher,
+  POLL_MS,
+  shouldRefreshTerminalSharing,
+} from './sharing_events.js'
+import { classifyTerminalWsFrameSync } from './terminal_ws_protocol.js'
 
 function escapeHtml(s) {
   const div = document.createElement('div')
@@ -27,6 +33,30 @@ export function renderTerminalPage(container) {
   const urlSessionName = params.get('session_name') ?? ''
   const urlSessionDesc = params.get('session_description') ?? ''
   const hasSessionParamsFromUrl = params.has('session_name') || params.has('session_description')
+  // Collaborative session attach mode. The URL ?mode=viewer flips the
+  // page into a read-only attach: stdin is dropped, a red banner is
+  // shown, and the user can request control via the sharing API. The
+  // optional ?invite=<token> consumes a link invitation before the
+  // WebSocket is opened.
+  const sharingMode = (params.get('mode') || 'writer').toLowerCase() === 'viewer' ? 'viewer' : 'writer'
+  const inviteToken = params.get('invite') || ''
+  let writerUserId = '' // populated from /participants once we have the session id
+  let myUserId = ''
+  const myUserIdReady = API.me()
+    .then((me) => {
+      myUserId = me?.user_id || ''
+    })
+    .catch(() => {})
+  let viewerOwnerName = ''
+  let writerDisplayName = ''
+  let sessionOwnerId = ''
+  let participantsLoaded = false
+  let shownWriteRequestId = ''
+  /** Pending write request awaiting owner review (banner → modal on click). */
+  let pendingWriteRequestApproval = null
+  let myPendingWriteRequest = false
+  let stopSharingWatch = null
+  let sharingEventsSessionId = ''
 
   document.documentElement.classList.add('terminal-standalone')
   document.body.classList.add('terminal-standalone')
@@ -43,6 +73,7 @@ export function renderTerminalPage(container) {
             </div>
           </div>
           <div class="vantyx-header-end">
+            <button id="term-invite-manage" type="button" class="vantyx-page-btn hidden" title="${escapeHtml(t('sharing.inviteTitle'))}">${t('terminal.inviteManage')}</button>
             <button id="term-back" type="button" class="vantyx-page-btn">${t('terminal.back')}</button>
             <button id="term-close" type="button" class="vantyx-page-btn">${t('terminal.endSessionBtn')}</button>
           </div>
@@ -110,6 +141,7 @@ export function renderTerminalPage(container) {
 
   const closeBtn = container.querySelector('#term-close')
   const backBtn = container.querySelector('#term-back')
+  const inviteManageBtn = container.querySelector('#term-invite-manage')
   const cancelBtn = container.querySelector('#term-cancel')
   const connectBtn = container.querySelector('#term-connect')
   const errorEl = container.querySelector('#term-error')
@@ -131,19 +163,70 @@ export function renderTerminalPage(container) {
     const r = term?.rows || 24
     return `${protocol}//${window.location.host}/ws/ssh?target_id=${encodeURIComponent(targetId)}&cols=${c}&rows=${r}`
   }
-  const wsUrlResume = (sid) => `${protocol}//${window.location.host}/ws/ssh?session_id=${encodeURIComponent(sid)}`
+  const wsUrlResume = (sid, mode = sharingMode) => {
+    const m = mode === 'viewer' ? 'viewer' : 'writer'
+    return `${protocol}//${window.location.host}/ws/ssh?session_id=${encodeURIComponent(sid)}&mode=${m}`
+  }
 
   let term = null
   let fitAddon = null
   let resizeObserver = null
   let termStdinAttached = false
+  // Cached creds + form values from the last connectWithCredentials /
+  // connectWithStoredCredentials call so the host-key TOFU adopt /
+  // mismatch dialogs can transparently retry the connection after
+  // adopting the new fingerprint. Cleared on session_ended.
+  let lastCredentials = null
+  // Modal element for the host-key TOFU adopt / mismatch dialog.
+  // We close this proactively when the user navigates away.
+  let hostKeyDialogEl = null
+  // Set to true when the bridge reports a host_key_unknown /
+  // host_key_mismatch frame. The connect-flow ws.onclose handlers
+  // check this to suppress the "session is still running on the
+  // backend" banner — the bridge actually failed before any session
+  // existed, so that banner would be misleading.
+  let sawHostKeyError = false
 
-  /** WebSocket メッセージ共通処理。session_id 受信時も xterm を必ず接続する。 */
-  function handleTerminalWsMessage(ws, ev, { onError, onSessionEnded } = {}) {
+  function handleTerminalMetaObject(ws, o, { onHostKeyEvent } = {}) {
+    if (o && typeof o.session_id === 'string') {
+      setCurrentSessionId(o.session_id)
+      credsWrap.classList.add('hidden')
+      shellWrap.classList.remove('hidden')
+      if (!ws._vantyxAttached) {
+        startXterm(ws)
+        ws._vantyxAttached = true
+      }
+      return true
+    }
+    if (o && o.type === 'host_key_unknown') {
+      sawHostKeyError = true
+      silenceWebSocket(ws)
+      try { ws.close() } catch { /* ignore */ }
+      hideTransientWrapsForHostKeyDialog()
+      onHostKeyEvent?.(o)
+      showHostKeyAdoptDialog(o)
+      return true
+    }
+    if (o && o.type === 'host_key_mismatch') {
+      sawHostKeyError = true
+      silenceWebSocket(ws)
+      try { ws.close() } catch { /* ignore */ }
+      hideTransientWrapsForHostKeyDialog()
+      onHostKeyEvent?.(o)
+      showHostKeyMismatchDialog(o)
+      return true
+    }
+    return false
+  }
+
+  /** WebSocket メッセージ共通処理。制御フレームは xterm に書き込まない。 */
+  function handleTerminalWsMessage(ws, ev, { onError, onSessionEnded, onHostKeyEvent } = {}) {
     if (typeof ev.data === 'string' && ev.data.startsWith('session_ended:')) {
       const msg = ev.data.slice('session_ended:'.length).trim() || t('terminal.sessionEndedSuffix')
       if (term) term.write(`\r\n\n${t('terminal.sessionEndedPrefix')} ${msg}\r\n`)
       currentSessionId = null
+      syncInviteManageButton()
+      detachSharingEvents()
       shellWrap.classList.add('hidden')
       sessionEndedWrap.classList.remove('hidden')
       try { ws.close() } catch { /* ignore */ }
@@ -157,36 +240,253 @@ export function renderTerminalPage(container) {
       try { ws.close() } catch { /* ignore */ }
       return true
     }
-    if (typeof ev.data === 'string' && ev.data.trim().startsWith('{')) {
-      try {
-        const o = JSON.parse(ev.data)
-        if (o && typeof o.session_id === 'string') {
-          setCurrentSessionId(o.session_id)
-          credsWrap.classList.add('hidden')
-          shellWrap.classList.remove('hidden')
-          if (!ws._vantyxAttached) {
-            startXterm(ws)
-            ws._vantyxAttached = true
-          }
-          return true
-        }
-      } catch {
-        /* not JSON */
-      }
+
+    const frameKind = classifyTerminalWsFrameSync(ev.data)
+    if (frameKind.kind === 'empty' || frameKind.kind === 'ready' || frameKind.kind === 'swallow') {
+      return true
     }
+    if (frameKind.kind === 'meta') {
+      handleTerminalMetaObject(ws, frameKind.object, { onHostKeyEvent })
+      return true
+    }
+    if (frameKind.kind !== 'terminal' && frameKind.kind !== 'binary') {
+      return true
+    }
+
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
     if (!ws._vantyxAttached) {
       startXterm(ws)
       ws._vantyxAttached = true
     }
-    if (typeof ev.data === 'string') {
-      term.write(ev.data)
-    } else {
+    if (frameKind.kind === 'terminal' && frameKind.text) {
+      term.write(frameKind.text)
+    } else if (frameKind.kind === 'binary') {
       term.write(new Uint8Array(ev.data))
     }
     return false
   }
+
+  function closeHostKeyDialog() {
+    if (!hostKeyDialogEl) return
+    try { hostKeyDialogEl.remove() } catch { /* ignore */ }
+    hostKeyDialogEl = null
+  }
+
+  /**
+   * Detach onmessage / onclose / onerror from a doomed WebSocket so
+   * its async close handshake cannot race a freshly-opened
+   * replacement and clobber the UI. Used by the host-key TOFU /
+   * mismatch flow where we throw away the stale ws and immediately
+   * dial a new one after the user adopts the key.
+   */
+  function silenceWebSocket(ws) {
+    try { ws.onmessage = null } catch { /* ignore */ }
+    try { ws.onclose = null } catch { /* ignore */ }
+    try { ws.onerror = null } catch { /* ignore */ }
+    try { ws.onopen = null } catch { /* ignore */ }
+  }
+
+  /**
+   * Hide all the post-handshake wraps so the host-key TOFU / mismatch
+   * dialog is the only thing the user sees. Without this, the SPA
+   * may have already swapped to shellWrap or — worse — fallen back to
+   * the misleading "session is still running on the backend" banner
+   * via the ws.onclose path. The bridge actually failed before any
+   * session existed, so those wraps would lie about the state.
+   */
+  function hideTransientWrapsForHostKeyDialog() {
+    try { credsWrap.classList.add('hidden') } catch { /* ignore */ }
+    try { shellWrap.classList.add('hidden') } catch { /* ignore */ }
+    try { disconnectedWrap?.classList.add('hidden') } catch { /* ignore */ }
+    try { sessionEndedWrap?.classList.add('hidden') } catch { /* ignore */ }
+    try { errorEl.classList.add('hidden') } catch { /* ignore */ }
+  }
+
+  /**
+   * Replays the most recent credentials-based connect so the user is
+   * not asked to re-enter their password after adopting a host key.
+   * Falls back to re-showing the credentials form when nothing is
+   * cached (e.g. resume flow).
+   */
+  function reconnectWithLastCredentials() {
+    if (!lastCredentials) {
+      credsWrap.classList.remove('hidden')
+      shellWrap.classList.add('hidden')
+      return
+    }
+    if (lastCredentials.kind === 'stored') {
+      const { sessionName, sessionDescription, password, privateKeyPassphrase } = lastCredentials
+      connectWithStoredCredentials(sessionName, sessionDescription, password, privateKeyPassphrase)
+      return
+    }
+    const { username, password, sessionName, sessionDescription, privateKeyPassphrase } = lastCredentials
+    connectWithCredentials(username, password, sessionName, sessionDescription, privateKeyPassphrase)
+  }
+
+  /**
+   * Generic adopt-or-mismatch modal. Renders {title, body, accept}
+   * with a cancel button. When mismatch=true, also renders a
+   * "I understand the risk" checkbox that gates the accept button.
+   * The accept callback is invoked with no arguments and is expected
+   * to return a Promise that resolves on success.
+   *
+   * `mode` controls the cancel message shown after the user dismisses
+   * the dialog. Both modes render the same error UI ("verification
+   * cancelled — connection cannot be established"), they just differ
+   * in the explanatory body text.
+   */
+  function renderHostKeyDialog({ title, bodyText, acceptLabel, requireCheckbox, onAccept, mode }) {
+    closeHostKeyDialog()
+    const wrap = document.createElement('div')
+    wrap.className = 'fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4'
+    const banner = requireCheckbox
+      ? '<div class="px-5 py-3 border-b border-rose-200 bg-rose-50 text-sm font-semibold text-rose-700 flex items-center gap-2"><span aria-hidden="true">⚠</span><span></span></div>'
+      : ''
+    wrap.innerHTML = `
+      <div class="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 overflow-hidden border border-slate-200/50">
+        <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+          <h3 class="font-semibold text-slate-800" data-host-key-title="1"></h3>
+          <button type="button" data-host-key-close="1" class="text-slate-500 hover:text-slate-700 text-2xl leading-none">&times;</button>
+        </div>
+        ${banner}
+        <div class="px-6 py-5 space-y-4">
+          <pre data-host-key-body="1" class="whitespace-pre-wrap text-sm text-slate-800 font-sans"></pre>
+          ${requireCheckbox ? `<label class="flex items-start gap-2 text-sm text-slate-800"><input type="checkbox" data-host-key-confirm="1" class="mt-0.5 rounded border-slate-300 text-rose-600 focus:ring-rose-500" /><span data-host-key-confirm-label="1"></span></label>` : ''}
+          <p data-host-key-error="1" class="text-sm text-red-600 hidden"></p>
+        </div>
+        <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
+          <button type="button" data-host-key-cancel="1" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"></button>
+          <button type="button" data-host-key-accept="1" class="rounded ${requireCheckbox ? 'bg-rose-600 hover:bg-rose-700' : 'bg-sky-600 hover:bg-sky-700'} px-3 py-1.5 text-xs font-medium text-white shadow-sm" disabled></button>
+        </div>
+      </div>
+    `
+    // Inject text via textContent to keep host-supplied fingerprints
+    // out of any HTML interpolation path.
+    wrap.querySelector('[data-host-key-title="1"]').textContent = title
+    wrap.querySelector('[data-host-key-body="1"]').textContent = bodyText
+    wrap.querySelector('[data-host-key-cancel="1"]').textContent = t('hostKey.confirmCancel')
+    const acceptBtn = wrap.querySelector('[data-host-key-accept="1"]')
+    acceptBtn.textContent = acceptLabel
+    if (requireCheckbox) {
+      const checkboxLabel = wrap.querySelector('[data-host-key-confirm-label="1"]')
+      if (checkboxLabel) checkboxLabel.textContent = t('hostKey.mismatchConfirmCheckbox')
+      const cb = wrap.querySelector('[data-host-key-confirm="1"]')
+      cb.addEventListener('change', () => {
+        acceptBtn.disabled = !cb.checked
+      })
+      const bannerSpan = wrap.querySelector('.bg-rose-50 span:last-child')
+      if (bannerSpan) bannerSpan.textContent = title
+    } else {
+      acceptBtn.disabled = false
+    }
+
+    document.body.appendChild(wrap)
+    hostKeyDialogEl = wrap
+
+    const close = () => {
+      closeHostKeyDialog()
+      // After the user declines we land on a clean
+      // "verification cancelled" screen instead of the misleading
+      // "session continuing on backend" / credentials form combo.
+      // The bridge actually failed before any session existed, so
+      // re-submitting the same credentials would just reproduce the
+      // host-key error.
+      showHostKeyCancelledState(mode)
+    }
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) close() })
+    wrap.querySelector('[data-host-key-close="1"]').addEventListener('click', close)
+    wrap.querySelector('[data-host-key-cancel="1"]').addEventListener('click', close)
+    acceptBtn.addEventListener('click', async () => {
+      acceptBtn.disabled = true
+      const errEl = wrap.querySelector('[data-host-key-error="1"]')
+      errEl.classList.add('hidden')
+      try {
+        await onAccept()
+        closeHostKeyDialog()
+        reconnectWithLastCredentials()
+      } catch (err) {
+        errEl.textContent = t('hostKey.updateFailed', { error: err.message || String(err) })
+        errEl.classList.remove('hidden')
+        acceptBtn.disabled = false
+      }
+    })
+  }
+
+  /**
+   * TOFU adoption dialog: server returned host_key_unknown, meaning
+   * no fingerprint is registered yet. The user can adopt the offered
+   * key and the SPA will retry the connection automatically.
+   */
+  function showHostKeyAdoptDialog(o) {
+    const fp = o.fingerprint || ''
+    const host = o.host || ''
+    const port = o.port || 22
+    const tid = o.target_id || targetId
+    renderHostKeyDialog({
+      title: t('hostKey.adoptTitle'),
+      bodyText: t('hostKey.adoptBody', { host, port, fp }),
+      acceptLabel: t('hostKey.adoptAccept'),
+      requireCheckbox: false,
+      onAccept: () => API.updateTargetHostKey(tid, fp),
+      mode: 'unknown',
+    })
+  }
+
+  /**
+   * Mismatch warning: the offered key does not match the registered
+   * fingerprint. The user must check a "I understand the risk"
+   * checkbox before adopting the new key.
+   */
+  function showHostKeyMismatchDialog(o) {
+    const expected = o.expected || ''
+    const offered = o.offered || ''
+    const host = o.host || ''
+    const port = o.port || 22
+    const tid = o.target_id || targetId
+    renderHostKeyDialog({
+      title: t('hostKey.mismatchTitle'),
+      bodyText: t('hostKey.mismatchBody', { host, port, expected, offered }),
+      acceptLabel: t('hostKey.mismatchAccept'),
+      requireCheckbox: true,
+      onAccept: () => API.updateTargetHostKey(tid, offered),
+      mode: 'mismatch',
+    })
+  }
+
+  /**
+   * Renders the post-cancel state for a host-key TOFU / mismatch
+   * dialog. Hides every other transient wrap and surfaces a concise
+   * explanation in the page-level error banner. We deliberately do
+   * NOT show disconnectedWrap (it advertises "session continuing on
+   * backend", which is wrong here — the bridge died on host-key
+   * verification) nor credsWrap on its own (re-submitting the same
+   * credentials would just reproduce the same error).
+   */
+  function showHostKeyCancelledState(mode) {
+    try { hostKeyDialogEl?.remove() } catch { /* ignore */ }
+    hostKeyDialogEl = null
+    try { shellWrap.classList.add('hidden') } catch { /* ignore */ }
+    try { disconnectedWrap?.classList.add('hidden') } catch { /* ignore */ }
+    try { sessionEndedWrap?.classList.add('hidden') } catch { /* ignore */ }
+    // Wipe the stale "received credentials, connecting..." status
+    // line that the BroadcastChannel auto-connect path leaves in
+    // place; without this it would still claim a connect was in
+    // progress under the new error banner.
+    try {
+      const stale = container.querySelector('#term-broadcast-info')
+      if (stale) stale.textContent = ''
+    } catch { /* ignore */ }
+    const title = t('hostKey.cancelledTitle')
+    const body = mode === 'mismatch'
+      ? t('hostKey.cancelledMismatch')
+      : t('hostKey.cancelledUnknown')
+    errorEl.textContent = `${title} — ${body}`
+    errorEl.classList.remove('hidden')
+    try { credsWrap.classList.remove('hidden') } catch { /* ignore */ }
+    try { connectBtn.disabled = false } catch { /* ignore */ }
+  }
+
   let currentSessionId = resumeSessionId || null
   const currentSessionIdReady = (() => {
     if (currentSessionId) return Promise.resolve(currentSessionId)
@@ -195,9 +495,21 @@ export function renderTerminalPage(container) {
     p._resolve = resolve
     return p
   })()
+  function syncInviteManageButton() {
+    if (!inviteManageBtn) return
+    const show = !!currentSessionId && sharingMode !== 'viewer'
+    inviteManageBtn.classList.toggle('hidden', !show)
+    inviteManageBtn.disabled = !show
+  }
+
   function setCurrentSessionId(v) {
     if (!v) return
     currentSessionId = v
+    syncInviteManageButton()
+    ensureSharingBanner()
+    attachSharingEvents(v)
+    startWriteRequestPolling(v)
+    void refreshParticipants(v)
     if (typeof currentSessionIdReady?._resolve === 'function') {
       try { currentSessionIdReady._resolve(v) } catch { /* ignore */ }
       currentSessionIdReady._resolve = null
@@ -296,6 +608,16 @@ export function renderTerminalPage(container) {
     })
   }
 
+  if (inviteManageBtn) {
+    inviteManageBtn.addEventListener('click', async () => {
+      const sid = currentSessionId
+      if (!sid || sharingMode === 'viewer') return
+      const { openInviteDialog } = await import('./invite_dialog.js')
+      openInviteDialog({ sessionId: sid, targetName, escapeHtml })
+    })
+  }
+  syncInviteManageButton()
+
   // 戻る: セッションは維持したままホームへ（親タブがあれば戻してこのタブを閉じる）
   backBtn.addEventListener('click', () => {
     leavingPage = true
@@ -338,6 +660,7 @@ export function renderTerminalPage(container) {
 
   function connectResume(sessionId) {
     if (!sessionId) return
+    sawHostKeyError = false
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
     errorEl.classList.add('hidden')
@@ -361,6 +684,11 @@ export function renderTerminalPage(container) {
     ws.onclose = () => {
       if (leavingPage) return
       if (term) term.write(`\r\n\n${t('terminal.connectionClosed')}\r\n`)
+      // host_key_unknown / host_key_mismatch closed the WS itself
+      // and is showing its own dialog (or the post-cancel UI). Don't
+      // pretend the session is "still running on the backend" in
+      // that case — there is no surviving session.
+      if (sawHostKeyError) return
       if (currentSessionId) {
         shellWrap.classList.add('hidden')
         disconnectedWrap.classList.remove('hidden')
@@ -389,8 +717,17 @@ export function renderTerminalPage(container) {
     const user = username.trim()
     const name = typeof sessionName === 'string' ? sessionName.trim() : ''
     const description = typeof sessionDescription === 'string' ? sessionDescription.trim() : ''
+    lastCredentials = {
+      kind: 'credentials',
+      username: user,
+      password: password || '',
+      sessionName: name,
+      sessionDescription: description,
+      privateKeyPassphrase: privateKeyPassphrase || '',
+    }
     errorEl.classList.add('hidden')
     connectBtn.disabled = true
+    sawHostKeyError = false
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
 
@@ -444,6 +781,11 @@ export function renderTerminalPage(container) {
       window.clearTimeout(connectTimeout)
       if (term) term.write(`\r\n\n${t('terminal.connectionClosed')}\r\n`)
       connectBtn.disabled = false
+      // Host-key TOFU / mismatch already presented a dialog and
+      // (post-cancel) the explanatory error banner. Don't fall back
+      // to the generic "session continuing on backend" UI or auto-
+      // close the tab — the user needs to interact with the dialog.
+      if (sawHostKeyError) return
       if (!sawFirstMessage && !sawError) {
         sawError = true
         errorEl.textContent = t('terminal.closedNoFirstNew')
@@ -462,10 +804,18 @@ export function renderTerminalPage(container) {
   function connectWithStoredCredentials(sessionName, sessionDescription, password, privateKeyPassphrase) {
     if (!targetId) return
     errorEl.classList.add('hidden')
+    sawHostKeyError = false
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
     const name = typeof sessionName === 'string' ? sessionName.trim() : ''
     const description = typeof sessionDescription === 'string' ? sessionDescription.trim() : ''
+    lastCredentials = {
+      kind: 'stored',
+      sessionName: name,
+      sessionDescription: description,
+      password: password || '',
+      privateKeyPassphrase: privateKeyPassphrase || '',
+    }
     const payload = { use_stored_credentials: true, name, description }
     if (password != null && password !== '') payload.password = password
     if (!isTelnet && privateKeyPassphrase != null && privateKeyPassphrase !== '') payload.private_key_passphrase = privateKeyPassphrase
@@ -514,6 +864,9 @@ export function renderTerminalPage(container) {
       if (leavingPage) return
       window.clearTimeout(connectTimeout)
       if (term) term.write(`\r\n\n${t('terminal.connectionClosed')}\r\n`)
+      // See connectWithCredentials for why the host-key path
+      // bypasses these recovery branches.
+      if (sawHostKeyError) return
       if (!sawFirstMessage && !sawError) {
         sawError = true
         errorEl.textContent = t('terminal.closedNoFirstStored')
@@ -566,7 +919,29 @@ export function renderTerminalPage(container) {
   if (resumeSessionId) {
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
-    connectResume(resumeSessionId)
+    if (sharingMode === 'viewer') {
+      // Show the viewer banner and (optionally) consume the invite
+      // before opening the WebSocket. Failing to consume the invite
+      // is non-fatal: the user may already have joined via the
+      // sessions page, in which case the WebSocket attach succeeds.
+      ensureSharingBanner()
+      if (inviteToken) {
+        joinAsViewer(resumeSessionId, inviteToken).finally(() => {
+          connectResume(resumeSessionId)
+          attachSharingEvents(resumeSessionId)
+          refreshParticipants(resumeSessionId)
+        })
+      } else {
+        connectResume(resumeSessionId)
+        attachSharingEvents(resumeSessionId)
+        refreshParticipants(resumeSessionId)
+      }
+    } else {
+      ensureSharingBanner()
+      connectResume(resumeSessionId)
+      attachSharingEvents(resumeSessionId)
+      void refreshParticipants(resumeSessionId)
+    }
   } else {
     // 保存済み認証: 以前は localStorage で不足分（パスワード/パスフレーズ）を受け渡ししていたが、
     // 機密情報をブラウザ永続ストレージに残さないため BroadcastChannel に統一した。
@@ -609,6 +984,7 @@ export function renderTerminalPage(container) {
     // 親タブから開かれた場合、BroadcastChannel 経由で認証情報を受け取り自動接続する（noopener でも動く）
     if (channelToken && targetId) {
     const infoEl = document.createElement('p')
+    infoEl.id = 'term-broadcast-info'
     infoEl.className = 'text-xs text-slate-500'
     infoEl.textContent = t('terminal.parentTabReceiving')
     container.querySelector('#term-credentials .px-5')?.appendChild(infoEl)
@@ -717,6 +1093,11 @@ export function renderTerminalPage(container) {
     if (!termStdinAttached) {
       termStdinAttached = true
       term.onData((data) => {
+        // Drop input unless we currently hold the write token.
+        // The bridge also enforces this server-side via SetWriter(),
+        // but doing it client-side makes UX predictable even when the
+        // viewer URL stays `mode=viewer` after token transfer.
+        if (!holdsWriteToken()) return
         if (currentWs && currentWs.readyState === WebSocket.OPEN) {
           currentWs.send(new TextEncoder().encode(data))
         }
@@ -753,6 +1134,361 @@ export function renderTerminalPage(container) {
     } catch {
       /* ignore */
     }
+  }
+
+  // ---- Collaborative session (sharing) banner ----------------------
+
+  function removeLegacySharingBanners() {
+    try { container.querySelector('#sharing-viewer-banner')?.remove() } catch { /* ignore */ }
+    try { container.querySelector('#sharing-writer-banner')?.remove() } catch { /* ignore */ }
+    try { container.querySelector('#sharing-demoted-banner')?.remove() } catch { /* ignore */ }
+    try { container.querySelector('#sharing-write-request-banner')?.remove() } catch { /* ignore */ }
+  }
+
+  function ensureSharingBanner() {
+    removeLegacySharingBanners()
+    if (container.querySelector('#sharing-status-banner')) return
+    const root = container.querySelector('.terminal-page-root')
+    if (!root) return
+    const banner = document.createElement('div')
+    banner.id = 'sharing-status-banner'
+    // Color is toggled by renderSharingBanner().
+    banner.className = 'sharing-status-banner shrink-0 text-white text-xs px-3 py-1.5 flex items-center gap-3 justify-between flex-nowrap overflow-hidden'
+    banner.innerHTML = `
+      <span data-banner-text="1" class="min-w-0 flex-1 truncate"></span>
+      <div class="flex items-center gap-2 shrink-0">
+        <button type="button" id="sharing-review-write" class="hidden rounded bg-amber-300 px-2 py-0.5 text-xs font-semibold text-amber-950 hover:bg-amber-200 whitespace-nowrap">${t('sharing.reviewWriteRequest')}</button>
+        <button type="button" id="sharing-request-write" class="rounded bg-white px-2 py-0.5 text-xs font-semibold whitespace-nowrap">${t('sharing.requestWrite')}</button>
+        <button type="button" id="sharing-release-write" class="rounded bg-white px-2 py-0.5 text-xs font-semibold whitespace-nowrap">${t('sharing.releaseToken')}</button>
+      </div>
+    `
+    const header = root.querySelector('header')
+    if (header && header.parentNode === root) header.insertAdjacentElement('afterend', banner)
+    else root.insertBefore(banner, root.firstChild)
+    banner.querySelector('#sharing-request-write')?.addEventListener('click', requestWriteToken)
+    banner.querySelector('#sharing-release-write')?.addEventListener('click', releaseWriteToken)
+    banner.querySelector('#sharing-review-write')?.addEventListener('click', () => {
+      if (pendingWriteRequestApproval) {
+        showIncomingWriteRequestModal(pendingWriteRequestApproval)
+      }
+    })
+    renderSharingBanner()
+  }
+
+  function setViewerBannerOwner(name) {
+    viewerOwnerName = name || viewerOwnerName
+    renderSharingBanner()
+  }
+
+  function renderSharingBanner() {
+    const banner = container.querySelector('#sharing-status-banner')
+    if (!banner) return
+    const span = banner.querySelector('[data-banner-text="1"]')
+    const btnRequest = banner.querySelector('#sharing-request-write')
+    const btnRelease = banner.querySelector('#sharing-release-write')
+    const btnReview = banner.querySelector('#sharing-review-write')
+
+    const canWrite = holdsWriteToken()
+    const holderLabel = writerDisplayName || viewerOwnerName || '—'
+    const awaitingApproval = !!(pendingWriteRequestApproval && canWrite)
+    const isOwner = !!(sessionOwnerId && myUserId && myUserId === sessionOwnerId)
+
+    // Red = write token holder, blue = view-only, amber tint when approval needed.
+    banner.classList.toggle('bg-red-600', canWrite && !awaitingApproval)
+    banner.classList.toggle('bg-amber-600', awaitingApproval)
+    banner.classList.toggle('bg-sky-700', !canWrite && !awaitingApproval)
+
+    if (span) {
+      if (awaitingApproval) {
+        const name = pendingWriteRequestApproval.username || pendingWriteRequestApproval.user_id || ''
+        span.textContent = t('sharing.pendingWriteRequestInline', { name })
+      } else if (canWrite) {
+        span.textContent = t('sharing.youAreWriter')
+      } else if (myPendingWriteRequest) {
+        span.textContent = t('sharing.youAreViewerPending')
+      } else {
+        span.textContent = t('sharing.youAreViewer', { holder: holderLabel })
+      }
+    }
+
+    if (btnReview) {
+      btnReview.classList.toggle('hidden', !awaitingApproval)
+    }
+
+    if (btnRequest) {
+      const showRequest = !canWrite && !awaitingApproval
+      btnRequest.classList.toggle('hidden', !showRequest)
+      btnRequest.classList.toggle('text-sky-900', showRequest)
+      if (showRequest) {
+        if (myPendingWriteRequest) {
+          btnRequest.textContent = t('sharing.requestWriteSent')
+          btnRequest.disabled = true
+        } else {
+          btnRequest.textContent = t('sharing.requestWrite')
+          btnRequest.disabled = false
+        }
+      }
+    }
+
+    if (btnRelease) {
+      const showRelease = canWrite && !awaitingApproval && !isOwner && sessionOwnerId
+      btnRelease.classList.toggle('hidden', !showRelease)
+      btnRelease.classList.toggle('text-red-700', showRelease)
+    }
+  }
+
+  async function joinAsViewer(sessionId, token) {
+    try {
+      const res = await API.joinSession(sessionId, { invitationToken: token })
+      if (res?.role) {
+        // Best-effort: a returning viewer may already have been a
+        // participant; the response is purely informational.
+      }
+    } catch (err) {
+      ensureSharingBanner()
+      const banner = container.querySelector('#sharing-status-banner [data-banner-text="1"]')
+      if (banner) banner.textContent = t('sharing.joinFailed', { error: err?.message || '' })
+    }
+  }
+
+  async function requestWriteToken() {
+    const sid = currentSessionId || resumeSessionId
+    if (!sid) return
+    const btn = container.querySelector('#sharing-request-write')
+    if (btn) btn.disabled = true
+    try {
+      await API.createSessionWriteRequest(sid)
+      myPendingWriteRequest = true
+      renderSharingBanner()
+    } catch (err) {
+      alert(t('sharing.requestWriteFailed', { error: err?.message || '' }))
+      if (btn) btn.disabled = false
+    }
+  }
+
+  async function releaseWriteToken() {
+    const sid = currentSessionId || resumeSessionId
+    if (!sid) return
+    // Release is only meaningful if this tab currently holds the token.
+    if (!holdsWriteToken()) return
+    if (!confirm(t('sharing.releaseTokenConfirm'))) return
+    const btn = container.querySelector('#sharing-release-write')
+    if (btn) btn.disabled = true
+    try {
+      await API.releaseSessionWriteToken(sid)
+      // Best-effort: sync UI immediately instead of waiting for SSE/poll.
+      void refreshParticipants(sid)
+    } catch {
+      alert(t('sharing.releaseFailed'))
+    } finally {
+      if (btn) btn.disabled = false
+    }
+  }
+
+  function attachSharingEvents(sessionId) {
+    if (!sessionId) return
+    if (sharingEventsSessionId === sessionId && stopSharingWatch) return
+    detachSharingEvents()
+    sharingEventsSessionId = sessionId
+    stopSharingWatch = createRealtimeWatcher({
+      shouldRefresh: (payload) => {
+        const sid = currentSessionId || sharingEventsSessionId
+        return shouldRefreshTerminalSharing(payload, sid)
+      },
+      onEvent: (payload) => handleSharingEvent(payload),
+      onRefresh: () => {
+        const sid = currentSessionId || sharingEventsSessionId
+        if (!sid) return
+        void refreshParticipants(sid)
+      },
+      pollMs: POLL_MS.terminalSharing,
+    })
+  }
+
+  function detachSharingEvents() {
+    sharingEventsSessionId = ''
+    if (!stopSharingWatch) return
+    try {
+      stopSharingWatch()
+    } catch {
+      /* ignore */
+    }
+    stopSharingWatch = null
+  }
+
+  /** True when this tab holds the session write token (from server state). */
+  function holdsWriteToken() {
+    if (!myUserId) return false
+    if (!writerUserId) {
+      // Before /participants loads, only the initial writer attach may send stdin.
+      return !participantsLoaded && sharingMode === 'writer'
+    }
+    return myUserId === writerUserId
+  }
+
+  function handleSharingEvent(payload) {
+    switch (payload.type) {
+      case 'write_token_transferred':
+        handleWriteTokenTransferred(payload)
+        return
+      case 'write_request_pending':
+        if (payload.user_id && myUserId && payload.user_id === myUserId) return
+        void (async () => {
+          const sid = payload.session_id || currentSessionId || sharingEventsSessionId
+          await refreshParticipants(sid)
+          if (holdsWriteToken()) queueWriteRequestApproval(payload)
+        })()
+        return
+      case 'write_request_decided':
+        shownWriteRequestId = ''
+        myPendingWriteRequest = false
+        clearWriteRequestApproval()
+        renderSharingBanner()
+        return
+      case 'session_change':
+      case 'participant_joined':
+      case 'participant_left':
+        if (payload.type === 'participant_left' && payload.extra?.reason === 'kicked' && payload.user_id) {
+          // If we were the kicked participant, hand-roll the
+          // session-ended UI so the user knows why their connection
+          // was cut.
+          // The bridge has dropped our WebSocket already.
+        }
+        return
+      case 'invitation_revoked':
+      case 'invitation_updated':
+      case 'invitation_consumed':
+        return
+      default:
+        return
+    }
+  }
+
+  function handleWriteTokenTransferred(payload) {
+    const newWriter = payload.user_id || ''
+    writerUserId = newWriter
+    participantsLoaded = true
+    // A transfer ends any "waiting for approval" state for viewers who
+    // did not receive the token (grant consumed, deny, or release).
+    if (myUserId && newWriter !== myUserId) {
+      myPendingWriteRequest = false
+      clearWriteRequestApproval()
+    }
+    ensureSharingBanner()
+    renderSharingBanner()
+    if (sharingMode === 'viewer') {
+      // Keep best-effort: reload to writer mode for future reattach.
+      refreshSelfRole(payload.session_id, newWriter)
+    }
+  }
+
+  async function refreshSelfRole(sessionId, newWriter) {
+    if (!sessionId) return
+    try {
+      const me = await API.me()
+      if (me?.user_id && newWriter && me.user_id === newWriter) {
+        // We are now the writer. Reloading rejoins as writer.
+        const url = new URL(window.location.href)
+        url.searchParams.set('mode', 'writer')
+        url.searchParams.delete('invite')
+        window.location.replace(url.toString())
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function refreshParticipants(sessionId) {
+    if (!sessionId) return
+    await myUserIdReady
+    ensureSharingBanner()
+    try {
+      const res = await API.listSessionParticipants(sessionId)
+      writerUserId = res?.writer_id || ''
+      sessionOwnerId = res?.owner_id || ''
+      participantsLoaded = true
+      const owner = (res?.items || []).find((p) => p.role === 'owner')
+      if (owner?.username) viewerOwnerName = owner.username
+      const writer = (res?.items || []).find((p) => p.is_writer)
+      writerDisplayName = res?.writer_username || writer?.username || writer?.user_id || ''
+
+      const pending = Array.isArray(res?.pending_requests) ? res.pending_requests : []
+      myPendingWriteRequest = pending.some(
+        (wr) => wr && wr.status === 'pending' && myUserId && wr.requester_id === myUserId,
+      )
+      const first = pending.find((wr) => wr && wr.status === 'pending')
+      if (first && holdsWriteToken()) {
+        queueWriteRequestApproval({
+          session_id: sessionId,
+          user_id: first.requester_id,
+          username: first.requester_name,
+          extra: { request_id: first.id },
+        })
+      } else {
+        clearWriteRequestApproval()
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      renderSharingBanner()
+    }
+  }
+
+  function clearWriteRequestApproval() {
+    pendingWriteRequestApproval = null
+    try { document.getElementById('sharing-write-request-modal')?.remove() } catch { /* ignore */ }
+  }
+
+  function queueWriteRequestApproval(payload) {
+    const reqId = payload?.extra?.request_id || ''
+    if (!reqId) return
+    pendingWriteRequestApproval = payload
+    renderSharingBanner()
+  }
+
+  function showIncomingWriteRequestModal(payload) {
+    const reqId = payload.extra?.request_id || ''
+    if (reqId && reqId === shownWriteRequestId && document.getElementById('sharing-write-request-modal')) {
+      return
+    }
+    if (reqId) shownWriteRequestId = reqId
+    const existing = document.getElementById('sharing-write-request-modal')
+    if (existing) existing.remove()
+    const wrap = document.createElement('div')
+    wrap.id = 'sharing-write-request-modal'
+    wrap.className = 'fixed inset-0 z-[210] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4'
+    wrap.innerHTML = `
+      <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
+        <div class="px-5 py-4 border-b border-slate-200 bg-slate-50">
+          <h3 class="font-semibold text-slate-800">${t('sharing.incomingRequestTitle')}</h3>
+        </div>
+        <div class="px-6 py-5 space-y-4">
+          <p class="text-sm text-slate-700">${t('sharing.incomingRequestBody', { name: escapeHtml(payload.username || payload.user_id || '') })}</p>
+        </div>
+        <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
+          <button type="button" data-deny="1" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">${t('sharing.denyRequest')}</button>
+          <button type="button" data-grant="1" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm">${t('sharing.grantRequest')}</button>
+        </div>
+      </div>
+    `
+    document.body.appendChild(wrap)
+    const close = () => {
+      shownWriteRequestId = ''
+      try { wrap.remove() } catch { /* ignore */ }
+    }
+    wrap.querySelector('[data-deny="1"]').addEventListener('click', async () => {
+      if (!reqId) return close()
+      try { await API.denySessionWriteRequest(payload.session_id, reqId) } catch { /* ignore */ }
+      close()
+    })
+    wrap.querySelector('[data-grant="1"]').addEventListener('click', async () => {
+      if (!reqId) return close()
+      try { await API.grantSessionWriteRequest(payload.session_id, reqId) } catch { alert(t('sharing.grantFailed')) }
+      close()
+    })
+    wrap.addEventListener('click', (e) => {
+      if (e.target === wrap) close()
+    })
   }
 }
 

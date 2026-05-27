@@ -175,6 +175,25 @@ func Migrate(db *sql.DB) error {
 			time TIMESTAMP NOT NULL,
 			line_text TEXT NOT NULL
 		);`,
+		// Collaborative session invitations (Phase A: terminal only).
+		// token_hash is SHA-256(token); plain tokens are never persisted.
+		// invitee_user_id is NULL for link invitations and filled in
+		// at consumption time for audit; the column carries the user
+		// that actually joined either way.
+		`CREATE TABLE IF NOT EXISTS session_invitations (
+			id TEXT PRIMARY KEY,
+			token_hash TEXT NOT NULL UNIQUE,
+			session_id TEXT NOT NULL,
+			session_kind TEXT NOT NULL,
+			target_id TEXT NOT NULL,
+			owner_user_id TEXT NOT NULL,
+			invitee_user_id TEXT,
+			mode TEXT NOT NULL,
+			expires_at INTEGER NOT NULL,
+			used_at INTEGER,
+			revoked_at INTEGER,
+			created_at INTEGER NOT NULL
+		);`,
 		// Background file transfer jobs (persisted across restarts).
 		`CREATE TABLE IF NOT EXISTS file_transfer_jobs (
 			id TEXT PRIMARY KEY,
@@ -271,6 +290,11 @@ func Migrate(db *sql.DB) error {
 		// SHA-256 fingerprint of the upstream SSH host key.
 		// Required by sshproxy / sftp to prevent MITM (ASVS V2.6, CWE-295).
 		{"ssh_host_key_fingerprint", `ALTER TABLE targets ADD COLUMN ssh_host_key_fingerprint TEXT NOT NULL DEFAULT ''`},
+		// Per-target opt-out of host-key verification. Off by default;
+		// the access store reads / writes the column already, but
+		// historically the migration was missing so brand-new DBs
+		// failed at the first SetSSHHostKeyInsecureSkipVerify call.
+		{"ssh_host_key_insecure_skip_verify", `ALTER TABLE targets ADD COLUMN ssh_host_key_insecure_skip_verify INTEGER NOT NULL DEFAULT 0`},
 	} {
 		if err := addColumnIfMissing(ctx, db, "targets", alter.col, alter.ddl); err != nil {
 			return err
@@ -282,5 +306,27 @@ func Migrate(db *sql.DB) error {
 	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_audit_logs_time_id ON audit_logs(time DESC, id DESC)`)
 	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_command_logs_time_id ON command_logs(time DESC, id DESC)`)
 	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_file_transfer_jobs_user_updated ON file_transfer_jobs(user_id, updated_at DESC, id DESC)`)
+	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_session_invitations_session ON session_invitations(session_id)`)
+	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_session_invitations_invitee ON session_invitations(invitee_user_id)`)
+	// Link invitations: max_uses NULL = unlimited; use_count tracks joins.
+	if err := addColumnIfMissing(ctx, db, "session_invitations", "max_uses",
+		`ALTER TABLE session_invitations ADD COLUMN max_uses INTEGER`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(ctx, db, "session_invitations", "use_count",
+		`ALTER TABLE session_invitations ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(ctx, db, "session_invitations", "invite_group_id",
+		`ALTER TABLE session_invitations ADD COLUMN invite_group_id TEXT`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(ctx, db, "session_invitations", "invite_tag",
+		`ALTER TABLE session_invitations ADD COLUMN invite_tag TEXT`); err != nil {
+		return err
+	}
+	// Legacy link rows without max_uses behave as single-use.
+	_, _ = db.ExecContext(ctx, `UPDATE session_invitations SET max_uses = 1
+		WHERE invitee_user_id IS NULL AND max_uses IS NULL`)
 	return nil
 }

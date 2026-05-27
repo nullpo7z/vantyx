@@ -14,8 +14,18 @@ import (
 	"github.com/nullpo7z/vantyx/internal/session"
 )
 
+// clientEntry tracks a single attached telnet client, mirroring the
+// SSH bridge's structure. canWrite controls stdin forwarding so a
+// viewer's input never reaches the upstream telnet socket.
+type clientEntry struct {
+	w        attachableWriter
+	canWrite bool
+	userID   string
+}
+
 type detachableBridge struct {
 	ctx              context.Context
+	endMsg           string
 	conn             net.Conn
 	output           *session.RingBuffer
 	termSize         *terminalSize
@@ -25,7 +35,7 @@ type detachableBridge struct {
 	stdinRecorder    StdinRecorder
 	stdinCh          chan []byte
 	clientMu         sync.Mutex
-	client           attachableWriter
+	clients          map[*clientEntry]struct{}
 	bridgeDone       chan struct{}
 	signalBridgeDone func()
 	cleanup          func()
@@ -34,6 +44,7 @@ type detachableBridge struct {
 
 func newDetachableBridge(
 	ctx context.Context,
+	endMsg string,
 	conn net.Conn,
 	output *session.RingBuffer,
 	username, password string,
@@ -51,6 +62,7 @@ func newDetachableBridge(
 	}
 	return &detachableBridge{
 		ctx:              ctx,
+		endMsg:           endMsg,
 		conn:             conn,
 		output:           output,
 		termSize:         termSize,
@@ -59,10 +71,29 @@ func newDetachableBridge(
 		tee:              tee,
 		stdinRecorder:    stdinRecorder,
 		stdinCh:          make(chan []byte, 256),
+		clients:          make(map[*clientEntry]struct{}),
 		bridgeDone:       make(chan struct{}),
 		signalBridgeDone: signalBridgeDone,
 		cleanup:          cleanup,
 	}
+}
+
+func (b *detachableBridge) broadcastText(p []byte) {
+	if len(p) == 0 {
+		return
+	}
+	b.clientMu.Lock()
+	dead := make([]*clientEntry, 0)
+	for c := range b.clients {
+		if err := c.w.WriteText(p); err != nil {
+			dead = append(dead, c)
+		}
+	}
+	for _, c := range dead {
+		delete(b.clients, c)
+		_ = c.w.Close()
+	}
+	b.clientMu.Unlock()
 }
 
 func (b *detachableBridge) replyTo(iacReply []byte) error {
@@ -106,6 +137,36 @@ func (b *detachableBridge) runStdinPump() {
 	}
 }
 
+// broadcast sends p to every attached client, dropping any that
+// produce a write error.
+func (b *detachableBridge) broadcast(p []byte) {
+	if len(p) == 0 {
+		return
+	}
+	b.clientMu.Lock()
+	dead := make([]*clientEntry, 0)
+	for c := range b.clients {
+		if err := c.w.WriteBinary(p); err != nil {
+			dead = append(dead, c)
+		}
+	}
+	for _, c := range dead {
+		delete(b.clients, c)
+		_ = c.w.Close()
+	}
+	b.clientMu.Unlock()
+}
+
+// SetWriter promotes attached clients owned by userID to writer and
+// downgrades all others. An empty userID demotes every client.
+func (b *detachableBridge) SetWriter(userID string) {
+	b.clientMu.Lock()
+	defer b.clientMu.Unlock()
+	for c := range b.clients {
+		c.canWrite = userID != "" && c.userID == userID
+	}
+}
+
 func (b *detachableBridge) runOutputPump() {
 	defer b.signalBridgeDone()
 	buf := make([]byte, 4096)
@@ -132,12 +193,7 @@ func (b *detachableBridge) runOutputPump() {
 				if b.tee != nil {
 					_, _ = b.tee.Write(filtered)
 				}
-				b.clientMu.Lock()
-				c := b.client
-				b.clientMu.Unlock()
-				if c != nil {
-					_ = c.WriteBinary(filtered)
-				}
+				b.broadcast(filtered)
 			}
 		}
 		if err != nil {
@@ -161,31 +217,35 @@ func (b *detachableBridge) handleResizeMessage(msg []byte) bool {
 	return true
 }
 
-func (b *detachableBridge) attachWebSocket(wsConn *websocket.Conn) {
-	b.clientMu.Lock()
-	if b.client != nil {
-		_ = b.client.Close()
-	}
+func (b *detachableBridge) attachWebSocket(wsConn *websocket.Conn, mode session.AttachMode, userID string) {
 	w := &wsWriterAdapter{wsConn}
-	b.client = w
+	entry := &clientEntry{w: w, canWrite: mode != session.AttachModeViewer, userID: userID}
+	b.clientMu.Lock()
+	b.clients[entry] = struct{}{}
 	b.clientMu.Unlock()
 	replay := b.output.Bytes()
 	if len(replay) > 0 {
-		_ = wsConn.WriteMessage(websocket.BinaryMessage, replay)
+		if err := wsConn.WriteMessage(websocket.BinaryMessage, replay); err != nil {
+			b.detachEntry(entry)
+			return
+		}
 	}
 	cols, rows := b.termSize.get()
 	_, _ = b.conn.Write(encodeNAWS(cols, rows))
-	go b.readWebSocket(w, wsConn)
+	go b.readWebSocket(entry, wsConn)
 }
 
-func (b *detachableBridge) readWebSocket(adapter *wsWriterAdapter, wsConn *websocket.Conn) {
-	defer func() {
-		b.clientMu.Lock()
-		if b.client == adapter {
-			b.client = nil
-		}
-		b.clientMu.Unlock()
-	}()
+func (b *detachableBridge) detachEntry(entry *clientEntry) {
+	b.clientMu.Lock()
+	if _, ok := b.clients[entry]; ok {
+		delete(b.clients, entry)
+	}
+	b.clientMu.Unlock()
+	_ = entry.w.Close()
+}
+
+func (b *detachableBridge) readWebSocket(entry *clientEntry, wsConn *websocket.Conn) {
+	defer b.detachEntry(entry)
 	for {
 		mt, msg, err := wsConn.ReadMessage()
 		if err != nil {
@@ -202,58 +262,88 @@ func (b *detachableBridge) readWebSocket(adapter *wsWriterAdapter, wsConn *webso
 		if mt == websocket.TextMessage && b.handleResizeMessage(msg) {
 			continue
 		}
-		if isDataMessage(mt) {
-			select {
-			case b.stdinCh <- msg:
-			case <-b.ctx.Done():
-				return
-			}
+		if !isDataMessage(mt) {
+			continue
+		}
+		b.clientMu.Lock()
+		canWrite := entry.canWrite
+		b.clientMu.Unlock()
+		if !canWrite {
+			continue
+		}
+		select {
+		case b.stdinCh <- msg:
+		case <-b.ctx.Done():
+			return
 		}
 	}
 }
 
-func (b *detachableBridge) attachStream(sa *StreamAttach) {
+func (b *detachableBridge) attachStream(sa *StreamAttach, mode session.AttachMode, userID string) {
+	entry := &clientEntry{w: sa, canWrite: mode != session.AttachModeViewer, userID: userID}
 	b.clientMu.Lock()
-	if b.client != nil {
-		_ = b.client.Close()
-	}
-	b.client = sa
+	b.clients[entry] = struct{}{}
 	b.clientMu.Unlock()
 	replay := b.output.Bytes()
 	if len(replay) > 0 {
 		_ = sa.WriteBinary(replay)
 	}
-	sa.StartRead(b.stdinCh, func() {
-		b.clientMu.Lock()
-		if c, ok := b.client.(*StreamAttach); ok && c == sa {
-			b.client = nil
+	// Use a per-client buffer so SetWriter can flip writer / viewer
+	// status at runtime without re-attaching the underlying stream.
+	perClient := make(chan []byte, 16)
+	go func() {
+		for data := range perClient {
+			b.clientMu.Lock()
+			canWrite := entry.canWrite
+			b.clientMu.Unlock()
+			if !canWrite {
+				continue
+			}
+			select {
+			case b.stdinCh <- data:
+			case <-b.ctx.Done():
+				return
+			}
 		}
-		b.clientMu.Unlock()
+	}()
+	sa.StartRead(perClient, func() {
+		close(perClient)
+		b.detachEntry(entry)
 	})
 }
 
-func (b *detachableBridge) doAttach(conn interface{}) {
-	switch c := conn.(type) {
+func (b *detachableBridge) doAttach(req session.AttachReq) {
+	switch c := req.Conn.(type) {
 	case *websocket.Conn:
-		b.attachWebSocket(c)
+		b.attachWebSocket(c, req.Mode, req.UserID)
 	case *StreamAttach:
-		b.attachStream(c)
+		b.attachStream(c, req.Mode, req.UserID)
 	}
 }
 
 //nolint:unparam // Error return preserved for signature parity with the bridge variants.
 func (b *detachableBridge) runAttachLoop(initialConn interface{}, attachCh <-chan session.AttachReq) error {
 	if initialConn != nil {
-		b.doAttach(initialConn)
+		if req, ok := initialConn.(session.AttachReq); ok {
+			b.doAttach(req)
+		} else {
+			b.doAttach(session.AttachReq{Conn: initialConn, Mode: session.AttachModeWriter})
+		}
 	}
 	for {
 		select {
 		case <-b.ctx.Done():
+			if b.endMsg != "" {
+				b.broadcastText([]byte(b.endMsg))
+			}
 			return nil
 		case <-b.bridgeDone:
+			if b.endMsg != "" {
+				b.broadcastText([]byte(b.endMsg))
+			}
 			return nil
 		case req := <-attachCh:
-			b.doAttach(req.Conn)
+			b.doAttach(req)
 		}
 	}
 }

@@ -606,13 +606,15 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 		}
 		switch target.Protocol {
 		case access.ProtocolTelnet:
+			endMsg := "session_ended: Telnet session closed"
 			var telStdin telnetproxy.StdinRecorder
 			if stdinRecorder != nil {
 				telStdin = telnetproxy.StdinRecorderFunc(stdinRecorder.RecordInput)
 			}
-			bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, streamAttach, touch, tee, telStdin, sessionCols, sessionRows, bridgeResize)
+			bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, endMsg, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, streamAttach, touch, tee, telStdin, sessionCols, sessionRows, bridgeResize, nil)
 		default:
-			bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, sessionCols, sessionRows, bridgeResize, sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint))
+			endMsg := "session_ended: SSH session closed"
+			bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, endMsg, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, sessionCols, sessionRows, bridgeResize, sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint))
 		}
 	})
 	if err != nil {

@@ -48,6 +48,51 @@ func TestMigrate_Idempotent(t *testing.T) {
 	}
 }
 
+// TestMigrate_AddsSSHHostKeyInsecureSkipVerifyColumn pins the
+// migration that previously slipped through review: the
+// ssh_host_key_insecure_skip_verify column is referenced by
+// internal/access/sqlite_store.go (SetSSHHostKeyInsecureSkipVerify
+// and the SELECT in Get / GetByID), so without the migration a brand-new
+// SQLite database would fail at the first call.
+func TestMigrate_AddsSSHHostKeyInsecureSkipVerifyColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hostkey.db")
+	db, err := Open(Config{Path: path})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	rows, err := db.Query(`PRAGMA table_info(targets)`)
+	if err != nil {
+		t.Fatalf("PRAGMA: %v", err)
+	}
+	defer rows.Close()
+	var found bool
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notnull int
+			dflt    *string
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if name == "ssh_host_key_insecure_skip_verify" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("ssh_host_key_insecure_skip_verify column missing after migrate")
+	}
+}
+
 func TestMigrate_ExecError(t *testing.T) {
 	// Use a closed DB so ExecContext fails
 	db, err := sql.Open("sqlite", "file::memory:?_pragma=foreign_keys(on)")

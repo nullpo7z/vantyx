@@ -9,6 +9,25 @@ file only enumerates open items so it does not double-track them.
 - **RDP bridge.** Currently only VNC is supported; an RDP-to-VNC bridge
   (or FreeRDP wrapper) is planned.
 
+## Collaborative sessions
+
+Phase A (SSH/Telnet) shipped: invitation-based read-only viewer
+attach, single-writer model with request/transfer of the write
+token, named and link invitations, and an in-process bridge that
+fans output out to every viewer. The remaining phases are open:
+
+- **Phase B — VNC.** Multi-client viewer attach for the VNC proxy
+  (likely via `x11vnc -shared` and per-client TCP fan-out in the
+  WebSocket layer).
+- **Phase C — RDP.** Once the VNC fan-out lands, the
+  `xfreerdp + Xvfb + x11vnc` chain reuses it automatically.
+- **Phase D — CLI viewer.** Add a "view-only attach" entry to the
+  `internal/sshd` interactive menu so operators on the SSH CLI can
+  participate as viewers too.
+- **Mandatory recording when viewers are present.** Optional
+  `VANTYX_REQUIRE_RECORDING_WITH_VIEWERS` flag to refuse new
+  invitations on sessions that are not being recorded.
+
 ## External authentication
 
 - **OIDC SSO** — integration with external IdPs (Keycloak / Azure AD /

@@ -189,6 +189,8 @@ func writeAccessValidationError(w http.ResponseWriter, r *http.Request, err erro
 		writeJSONErrorKey(w, r, "tags.lengthInvalid", http.StatusBadRequest)
 	case errors.Is(err, access.ErrTagChars):
 		writeJSONErrorKey(w, r, "tags.charsInvalid", http.StatusBadRequest)
+	case errors.Is(err, access.ErrHostKeyFingerprintInvalid):
+		writeJSONErrorKey(w, r, "targets.hostKeyFingerprintInvalid", http.StatusBadRequest)
 	default:
 		return false
 	}

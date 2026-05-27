@@ -2,6 +2,8 @@ module github.com/nullpo7z/vantyx
 
 go 1.26
 
+toolchain go1.26.3
+
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/creack/pty v1.1.24

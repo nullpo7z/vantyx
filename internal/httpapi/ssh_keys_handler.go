@@ -18,15 +18,15 @@ type sshKeySummaryResponse struct {
 }
 
 type createSSHKeyRequest struct {
-	ID                     string `json:"id"`
-	Label                  string `json:"label"`
-	SSHPrivateKey          string `json:"ssh_private_key"`
+	ID                      string `json:"id"`
+	Label                   string `json:"label"`
+	SSHPrivateKey           string `json:"ssh_private_key"`
 	SSHPrivateKeyPassphrase string `json:"ssh_private_key_passphrase"`
 }
 
 type updateSSHKeyRequest struct {
-	Label                  string  `json:"label"`
-	SSHPrivateKey          *string `json:"ssh_private_key,omitempty"`
+	Label                   string  `json:"label"`
+	SSHPrivateKey           *string `json:"ssh_private_key,omitempty"`
 	SSHPrivateKeyPassphrase *string `json:"ssh_private_key_passphrase,omitempty"`
 }
 

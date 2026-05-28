@@ -45,10 +45,10 @@ const initialAdminPasswordEnv = "VANTYX_INITIAL_ADMIN_PASSWORD"
 // without touching the real database; production callers go through
 // [NewApp] which wires SQLite-backed implementations.
 type App struct {
-	UserStore        auth.UserStore
-	SessionStore     auth.SessionStore
-	TargetStore      access.TargetStore
-	AccessGroupStore access.AccessGroupStore
+	UserStore               auth.UserStore
+	SessionStore            auth.SessionStore
+	TargetStore             access.TargetStore
+	AccessGroupStore        access.AccessGroupStore
 	SSHKeyStore             access.SSHKeyStore
 	CredentialIdentityStore access.CredentialIdentityStore
 

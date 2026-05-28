@@ -36,13 +36,13 @@ func credentialIdentityAAD(id CredentialIdentityID, field string) []byte {
 
 func (s *SQLiteCredentialIdentityStore) summaryFromRow(id, label, user, pw, keyID, keyLabel, keyPass string) CredentialIdentitySummary {
 	sum := CredentialIdentitySummary{
-		ID:          CredentialIdentityID(id),
-		Label:       label,
-		SSHUsername: user,
-		HasPassword: strings.TrimSpace(pw) != "",
-		SSHKeyID:    SSHKeyID(keyID),
-		SSHKeyLabel: keyLabel,
-		HasSSHKey:   strings.TrimSpace(keyID) != "",
+		ID:            CredentialIdentityID(id),
+		Label:         label,
+		SSHUsername:   user,
+		HasPassword:   strings.TrimSpace(pw) != "",
+		SSHKeyID:      SSHKeyID(keyID),
+		SSHKeyLabel:   keyLabel,
+		HasSSHKey:     strings.TrimSpace(keyID) != "",
 		HasPassphrase: strings.TrimSpace(keyPass) != "",
 	}
 	return sum

@@ -121,14 +121,14 @@ var Messages = map[string]string{
 	"command.queryFailed": "failed to query command logs",
 
 	// Recordings.
-	"recordings.idRequired":        "recording_id required",
-	"recordings.formatInvalid":     "format must be cast, gif, or webm",
-	"recordings.notAvailable":      "recordings not available",
-	"recordings.notFound":          "recording not found",
-	"recordings.notConfigured":     "recordings not configured",
-	"recordings.fileNotFound":      "recording file not found",
-	"recordings.convertReadFailed": "failed to read converted file",
-	"recordings.videoExportFailed": "Video export failed.",
+	"recordings.idRequired":         "recording_id required",
+	"recordings.formatInvalid":      "format must be cast, gif, or webm",
+	"recordings.notAvailable":       "recordings not available",
+	"recordings.notFound":           "recording not found",
+	"recordings.notConfigured":      "recordings not configured",
+	"recordings.fileNotFound":       "recording file not found",
+	"recordings.convertReadFailed":  "failed to read converted file",
+	"recordings.videoExportFailed":  "Video export failed.",
 	"recordings.videoToolsRequired": "Video export is unavailable. The server needs agg and ffmpeg installed.",
 
 	// RDP / VNC / TFTP capability checks.

@@ -113,14 +113,14 @@ var Messages = map[string]string{
 	"command.queryFailed": "コマンドログの取得に失敗しました",
 
 	// Recordings.
-	"recordings.idRequired":        "recording_id は必須です",
-	"recordings.formatInvalid":     "format は cast, gif, webm のいずれかである必要があります",
-	"recordings.notAvailable":      "録画機能を利用できません",
-	"recordings.notFound":          "録画が見つかりません",
-	"recordings.notConfigured":     "録画機能が設定されていません",
-	"recordings.fileNotFound":      "録画ファイルが見つかりません",
-	"recordings.convertReadFailed": "変換後ファイルの読み込みに失敗しました",
-	"recordings.videoExportFailed": "動画の書き出しに失敗しました。",
+	"recordings.idRequired":         "recording_id は必須です",
+	"recordings.formatInvalid":      "format は cast, gif, webm のいずれかである必要があります",
+	"recordings.notAvailable":       "録画機能を利用できません",
+	"recordings.notFound":           "録画が見つかりません",
+	"recordings.notConfigured":      "録画機能が設定されていません",
+	"recordings.fileNotFound":       "録画ファイルが見つかりません",
+	"recordings.convertReadFailed":  "変換後ファイルの読み込みに失敗しました",
+	"recordings.videoExportFailed":  "動画の書き出しに失敗しました。",
 	"recordings.videoToolsRequired": "動画の書き出しを利用できません。サーバーに agg と ffmpeg が必要です。",
 
 	// RDP / VNC / TFTP capability checks.

@@ -72,12 +72,20 @@ func (a *App) forcePasswordChangeMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		userID, err := a.currentUserIDWithError(r)
-		if err != nil || userID == "" {
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		if userID == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
 		u, err := a.UserStore.GetByID(userID)
-		if err != nil || u == nil || !u.ForcePasswordChange {
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		if u == nil || !u.ForcePasswordChange {
 			next.ServeHTTP(w, r)
 			return
 		}

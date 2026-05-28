@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -39,6 +40,8 @@ type createTargetRequest struct {
 	Protocol                string `json:"protocol"`
 	Path                    string `json:"path"`
 	GroupID                 string `json:"group_id"`
+	CredentialIdentityID    string `json:"credential_identity_id,omitempty"`
+	SSHKeyID                string `json:"ssh_key_id,omitempty"`
 	SSHUsername             string `json:"ssh_username"`
 	SSHPassword             string `json:"ssh_password"`
 	SSHPrivateKey           string `json:"ssh_private_key"`
@@ -60,6 +63,8 @@ type updateTargetRequest struct {
 	Port                    uint16  `json:"port"`
 	Protocol                string  `json:"protocol"`
 	Path                    string  `json:"path"`
+	CredentialIdentityID    string  `json:"credential_identity_id,omitempty"`
+	SSHKeyID                string  `json:"ssh_key_id,omitempty"`
 	SSHUsername             string  `json:"ssh_username"`
 	SSHPassword             *string `json:"ssh_password,omitempty"`               // nil = leave unchanged, empty string = clear.
 	SSHPrivateKey           *string `json:"ssh_private_key,omitempty"`            // nil = leave unchanged, empty string = clear.
@@ -67,6 +72,70 @@ type updateTargetRequest struct {
 	SFTPEnabled             *bool   `json:"sftp_enabled,omitempty"`
 	FTPEnabled              *bool   `json:"ftp_enabled,omitempty"`
 	TFTPEnabled             *bool   `json:"tftp_enabled,omitempty"`
+}
+
+// applyStoredCredentials copies secrets from an identity or ssh key into the target payload.
+func (a *App) applyStoredCredentials(
+	ctx context.Context,
+	credentialIdentityID, sshKeyID string,
+	username *string,
+	password *string,
+	privateKey *string,
+	passphrase *string,
+	onlyIfEmpty bool,
+) error {
+	credentialIdentityID = strings.TrimSpace(credentialIdentityID)
+	sshKeyID = strings.TrimSpace(sshKeyID)
+	if credentialIdentityID != "" && sshKeyID != "" {
+		return access.ErrCredentialSourceExclusive
+	}
+
+	set := func(cur *string, val string) {
+		if val == "" {
+			return
+		}
+		if onlyIfEmpty && strings.TrimSpace(*cur) != "" {
+			return
+		}
+		*cur = val
+	}
+
+	if credentialIdentityID != "" {
+		ident, err := a.CredentialIdentityStore.GetDecrypted(ctx, access.CredentialIdentityID(credentialIdentityID))
+		if err != nil {
+			return err
+		}
+		if username != nil {
+			set(username, ident.SSHUsername)
+		}
+		if password != nil {
+			set(password, ident.SSHPassword)
+		}
+		if ident.Key != nil {
+			if privateKey != nil {
+				set(privateKey, ident.Key.SSHPrivateKey)
+			}
+			if passphrase != nil {
+				set(passphrase, ident.Key.SSHPrivateKeyPassphrase)
+			}
+		}
+		return nil
+	}
+	if sshKeyID != "" {
+		k, err := a.SSHKeyStore.GetDecrypted(ctx, access.SSHKeyID(sshKeyID))
+		if err != nil {
+			return err
+		}
+		// Username is not stored on keys; caller supplies it manually.
+		if privateKey != nil {
+			set(privateKey, k.SSHPrivateKey)
+		}
+		if passphrase != nil {
+			set(passphrase, k.SSHPrivateKeyPassphrase)
+		}
+		return nil
+	}
+	return nil
 }
 
 // isEncryptedPEMBlock reports whether the PEM block is encrypted
@@ -225,6 +294,8 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	req.Host = strings.TrimSpace(req.Host)
 	req.Path = normalizeTargetPath(req.Path)
 	req.GroupID = strings.TrimSpace(req.GroupID)
+	req.CredentialIdentityID = strings.TrimSpace(req.CredentialIdentityID)
+	req.SSHKeyID = strings.TrimSpace(req.SSHKeyID)
 	if req.Name == "" || req.Host == "" {
 		writeJSONErrorKey(w, r, "targets.nameHostRequired", http.StatusBadRequest)
 		return
@@ -252,6 +323,23 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	if !allowed {
 		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
+		return
+	}
+	if err := a.applyStoredCredentials(ctx, req.CredentialIdentityID, req.SSHKeyID,
+		&req.SSHUsername, &req.SSHPassword, &req.SSHPrivateKey, &req.SSHPrivateKeyPassphrase, true); err != nil {
+		if errors.Is(err, access.ErrCredentialIdentityNotFound) {
+			writeJSONErrorKey(w, r, "credentialIdentities.notFound", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, access.ErrSSHKeyNotFound) {
+			writeJSONErrorKey(w, r, "sshKeys.notFound", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, access.ErrCredentialSourceExclusive) {
+			writeJSONErrorKey(w, r, "targets.credentialSourceExclusive", http.StatusBadRequest)
+			return
+		}
+		writeInternalError(w, err)
 		return
 	}
 	if req.Port == 0 {
@@ -306,6 +394,10 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		writeJSONErrorKey(w, r, "targets.assignFailed", http.StatusInternalServerError)
 		return
 	}
+	// Inherit group tags on creation so tag-based access matches group membership by default.
+	if tags, err := a.AccessGroupStore.TagsForGroup(ctx, access.GroupID(req.GroupID)); err == nil && len(tags) > 0 {
+		_ = a.TargetStore.SetTargetTags(ctx, access.TargetID(id), tags)
+	}
 	if fp := strings.TrimSpace(req.SSHHostKeyFingerprint); fp != "" {
 		if err := a.TargetStore.SetSSHHostKeyFingerprint(ctx, access.TargetID(id), fp); err != nil {
 			if writeAccessValidationError(w, r, err) {
@@ -353,6 +445,8 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Host = strings.TrimSpace(req.Host)
 	req.Path = normalizeTargetPath(req.Path)
+	req.CredentialIdentityID = strings.TrimSpace(req.CredentialIdentityID)
+	req.SSHKeyID = strings.TrimSpace(req.SSHKeyID)
 	if req.Name == "" || req.Host == "" {
 		writeJSONErrorKey(w, r, "targets.nameHostRequired", http.StatusBadRequest)
 		return
@@ -379,6 +473,27 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.SSHPrivateKeyPassphrase != nil {
 		sshPrivateKeyPassphrase = *req.SSHPrivateKeyPassphrase
+	}
+	onlyIfEmpty := true
+	if req.CredentialIdentityID != "" || req.SSHKeyID != "" {
+		onlyIfEmpty = req.SSHPassword == nil && req.SSHPrivateKey == nil && req.SSHPrivateKeyPassphrase == nil
+	}
+	if err := a.applyStoredCredentials(ctx, req.CredentialIdentityID, req.SSHKeyID,
+		&req.SSHUsername, &sshPassword, &sshPrivateKey, &sshPrivateKeyPassphrase, onlyIfEmpty); err != nil {
+		if errors.Is(err, access.ErrCredentialIdentityNotFound) {
+			writeJSONErrorKey(w, r, "credentialIdentities.notFound", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, access.ErrSSHKeyNotFound) {
+			writeJSONErrorKey(w, r, "sshKeys.notFound", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, access.ErrCredentialSourceExclusive) {
+			writeJSONErrorKey(w, r, "targets.credentialSourceExclusive", http.StatusBadRequest)
+			return
+		}
+		writeInternalError(w, err)
+		return
 	}
 	sftpEnabled := cur != nil && cur.SFTPEnabled
 	ftpEnabled := cur != nil && cur.FTPEnabled

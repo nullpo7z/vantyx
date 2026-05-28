@@ -1098,15 +1098,13 @@ func (s *SQLiteTargetStore) Get(ctx context.Context, id TargetID) (*Target, erro
 	return &t, nil
 }
 
-// decryptOrPlain decrypts a stored credential. For v2 ciphertexts the
-// caller-supplied targetID and field bind the AAD; for legacy v1 the
-// AAD is ignored (the value was not AAD-bound at encryption time).
+// decryptOrPlain decrypts a v2 credential. The caller-supplied targetID and field bind the AAD.
 func decryptOrPlain(encKey []byte, stored string, targetID TargetID, field string) string {
 	if stored == "" {
 		return ""
 	}
-	if !strings.HasPrefix(stored, secret.CiphertextVersionPrefix) && !strings.HasPrefix(stored, secret.CiphertextVersionPrefixV2) {
-		// Legacy plaintext or non-versioned data. Refuse it when
+	if !secret.IsEncrypted(stored) {
+		// Plaintext rows (should not occur when encryption is enabled). Refuse when
 		// strict mode is on so a DB write that bypasses Encrypt()
 		// (e.g. a leaked backup re-imported by an attacker) can no
 		// longer be used to inject plaintext credentials

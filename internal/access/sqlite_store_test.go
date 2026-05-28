@@ -180,7 +180,7 @@ func TestSQLiteTargetStore_SSHPassword_EncryptDecryptWithKey(t *testing.T) {
 	if got.SSHUsername != "root" || got.SSHPassword != "mypass" {
 		t.Fatalf("expected root/mypass, got %q/%q", got.SSHUsername, got.SSHPassword)
 	}
-	// Without key, same row returns ciphertext (legacy decrypt returns as-is for v1: prefix when key missing we don't decrypt - we do decrypt only when key is set)
+	// Without key, the store must not return decrypted passwords.
 	gotNoKey, _ := targets.Get(ctx, "t1")
 	if gotNoKey != nil && gotNoKey.SSHPassword == "mypass" {
 		t.Fatal("store without key should not decrypt password")
@@ -915,7 +915,7 @@ func TestSQLiteTargetStore_Get_DecryptFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWithPath: %v", err)
 	}
-	_, err = targets.db.ExecContext(ctx, `UPDATE targets SET ssh_password = 'v1:!!!' WHERE id = 't1'`)
+	_, err = targets.db.ExecContext(ctx, `UPDATE targets SET ssh_password = 'v2:!!!' WHERE id = 't1'`)
 	if err != nil {
 		t.Fatalf("corrupt password: %v", err)
 	}
@@ -940,7 +940,7 @@ func TestSQLiteTargetStore_ListByIDs_DecryptFailure(t *testing.T) {
 	_, _ = groups.Create(ctx, "g1", "G1")
 	_, _ = storeWithKey.CreateWithPath(ctx, "t1", "A", "10.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "u", "p1", "", "", true, false, false)
 	_, _ = storeWithKey.CreateWithPath(ctx, "t2", "B", "10.0.0.2", 22, ProtocolSSH, GroupID("g1"), "g1", "u", "p2", "", "", true, false, false)
-	_, _ = targets.db.ExecContext(ctx, `UPDATE targets SET ssh_password = 'v1:invalid' WHERE id = 't2'`)
+	_, _ = targets.db.ExecContext(ctx, `UPDATE targets SET ssh_password = 'v2:invalid' WHERE id = 't2'`)
 	list, err := storeWithKey.ListByIDs(ctx, []TargetID{"t1", "t2"}, nil)
 	if err != nil {
 		t.Fatalf("ListByIDs: %v", err)

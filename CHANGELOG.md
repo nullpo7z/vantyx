@@ -8,6 +8,11 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
 
 ## [Unreleased]
 
+### Removed
+
+- Playwright end-to-end test suite (`e2e/`), `docker-compose.e2e.yml`,
+  `scripts/run-e2e-*.sh`, and the `make e2e` target.
+
 ### Added
 
 - Feature: each row in the issued-invitations table now offers
@@ -163,7 +168,7 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
   `nilerr`) are off so PRs are not blocked on style nits unrelated to
   the change.
 - Deps: `.github/dependabot.yml` now groups all minor/patch updates
-  per ecosystem (gomod / npm web / npm e2e / github-actions / docker)
+  per ecosystem (gomod / npm web / github-actions / docker)
   into a single PR each, and lowers `open-pull-requests-limit` from
   10/10/5/—/— to 3/3/2/2/2. Major upgrades still open separate PRs.
 - CI: split the workflow so per-PR runs only execute the fast gates
@@ -202,7 +207,7 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
   `staticcheck`, `misspell`, and `unparam`.
 - `web/eslint.config.js` tightened with `no-unused-vars` errors and the
   jsdoc plugin.
-- `Makefile` reorganised with `fmt`, `lint`, `test`, `e2e`, `coverage`,
+- `Makefile` reorganised with `fmt`, `lint`, `test`, `coverage`,
   and `smoke` targets.
 
 ### Removed

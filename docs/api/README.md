@@ -1,6 +1,8 @@
 # Vantyx API specification
 
 - **OpenAPI definition**: [openapi.yaml](./openapi.yaml) (OpenAPI 3.1)
+- **Credentials (Keys / Identities)**: [../credentials.md](../credentials.md) — admin SSH secret library, distinct from CLI public keys (`/api/me/ssh-keys`).
+- **Collaborative terminal sessions**: [../collaborative-sessions.md](../collaborative-sessions.md) — invitations, write token, SSE.
 
 ## In-app reference for administrators
 

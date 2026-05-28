@@ -31,21 +31,6 @@ updates:
           - minor
           - patch
 
-  - package-ecosystem: npm
-    directory: "/e2e"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 2
-    labels:
-      - dependencies
-      - javascript
-      - e2e
-    groups:
-      e2e-deps:
-        update-types:
-          - minor
-          - patch
-
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

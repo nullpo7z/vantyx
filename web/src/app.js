@@ -15,13 +15,13 @@ import { renderUserInfo } from './account_page.js'
 import { renderAuditPage } from './audit_page.js'
 import { renderSettingsPage } from './settings_page.js'
 import { renderGroupTargetsTable } from './targets_page.js'
+import { renderCredentialsPage } from './credentials_page.js'
 import {
   TFTP_CAPABILITY_TAG,
   SFTP_DISABLED_TAG,
   TREE_MAIN_CLASS,
 } from './constants.js'
-import { validateOptionalUserId } from './validation.js'
-import { escapeHtml, renderTagPills, fillExistingTagsPicker } from './dom_helpers.js'
+import { escapeHtml, renderTagPills, fillExistingTagsPicker, authMethodLabel } from './dom_helpers.js'
 import {
   randomToken,
   openPopup,
@@ -115,6 +115,7 @@ export function renderApp(container) {
   const navRecordings = document.getElementById('nav-recordings')
   const navGroups = document.getElementById('nav-groups')
   const navUsers = document.getElementById('nav-users')
+  const navCredentials = document.getElementById('nav-credentials')
   const navAudit = document.getElementById('nav-audit')
   const navSettings = document.getElementById('nav-settings')
 
@@ -209,6 +210,13 @@ export function renderApp(container) {
     })
   }
 
+  async function showCredentialsPage() {
+    disconnectAppSessionEvents()
+    delete mainContent.dataset.treeMode
+    setActiveNav('credentials')
+    await renderCredentialsPage({ mainContent, escapeHtml })
+  }
+
   async function showSessionsPage() {
     disconnectAppSessionEvents()
     delete mainContent.dataset.treeMode
@@ -269,252 +277,6 @@ export function renderApp(container) {
   async function showSettings() {
     disconnectAppSessionEvents()
     await renderSettingsPage(mainContent)
-  }
-
-  function showAddUserModal() {
-    const modal = document.getElementById('add-user-modal')
-    modal.classList.remove('hidden')
-    modal.innerHTML = `
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
-          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">${t('app.addUserTitle')}</h3>
-            <button id="add-user-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
-          </div>
-          <form id="add-user-form">
-            <div class="px-6 py-5 space-y-5">
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldUsername')}</label>
-                <input type="text" id="add-user-username" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderUsername')}" />
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldPassword')}</label>
-                <input type="password" id="add-user-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderStrong')}" />
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldRole')}</label>
-                <select id="add-user-role" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
-                  <option value="user">user</option>
-                  <option value="admin">admin</option>
-                </select>
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldUserIdOpt')}</label>
-                <input type="text" id="add-user-id" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderUserId')}" />
-              </div>
-              <p id="add-user-error" class="text-sm text-red-600 hidden"></p>
-            </div>
-            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="add-user-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
-              <button type="submit" id="add-user-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.add')}</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    `
-    const close = () => {
-      modal.classList.add('hidden')
-      modal.innerHTML = ''
-    }
-    modal.querySelector('#add-user-close').addEventListener('click', close)
-    modal.querySelector('#add-user-cancel').addEventListener('click', close)
-    modal.querySelector('#add-user-form').addEventListener('submit', async (e) => {
-      e.preventDefault()
-      const errorEl = modal.querySelector('#add-user-error')
-      const submitBtn = modal.querySelector('#add-user-submit')
-      errorEl.classList.add('hidden')
-      const username = modal.querySelector('#add-user-username').value.trim()
-      const password = modal.querySelector('#add-user-password').value
-      const role = modal.querySelector('#add-user-role').value || 'user'
-      const rawId = modal.querySelector('#add-user-id').value.trim()
-      const idValidationError = validateOptionalUserId(rawId)
-      if (idValidationError) {
-        errorEl.textContent = idValidationError
-        errorEl.classList.remove('hidden')
-        return
-      }
-      const id = rawId || undefined
-      if (!username || !password) {
-        errorEl.textContent = t('app.addUserError')
-        errorEl.classList.remove('hidden')
-        return
-      }
-      submitBtn.disabled = true
-      try {
-        await API.createUser({ id, username, password, role })
-        close()
-        await showUsersPage()
-      } catch (err) {
-        errorEl.textContent = err.message || t('app.addUserFailed')
-        errorEl.classList.remove('hidden')
-      } finally {
-        submitBtn.disabled = false
-      }
-    })
-  }
-
-  function showEditUserModal(user) {
-    const modal = document.getElementById('edit-tags-modal')
-    modal.classList.remove('hidden')
-    const tagsStr = (user.tags || []).join(', ')
-    modal.innerHTML = `
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
-          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">${t('app.editUserTitle')}</h3>
-            <button id="edit-user-modal-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
-          </div>
-          <form id="edit-user-form">
-            <div class="px-6 py-5 space-y-5">
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldUserId')}</label>
-                <p class="text-sm text-slate-800">${escapeHtml(user.id)}</p>
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldUsername')}</label>
-                <p class="text-sm text-slate-800">${escapeHtml(user.username)}</p>
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldRole')}</label>
-                <p class="text-sm text-slate-800">${escapeHtml(user.role || 'user')}</p>
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldTagsCsv')}</label>
-                <input type="text" id="edit-user-tags-input" value="${escapeHtml(tagsStr)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderTagsCsv')}" />
-                <div id="edit-user-tags-input-picker" class="mt-2"></div>
-              </div>
-              <p id="edit-user-error" class="text-sm text-red-600 hidden"></p>
-            </div>
-            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="edit-user-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
-              <button type="submit" id="edit-user-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.save')}</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    `
-    const close = () => {
-      modal.classList.add('hidden')
-      modal.innerHTML = ''
-    }
-    modal.querySelector('#edit-user-modal-close').addEventListener('click', close)
-    modal.querySelector('#edit-user-cancel').addEventListener('click', close)
-    fillExistingTagsPicker(modal, 'edit-user-tags-input')
-    modal.querySelector('#edit-user-form').addEventListener('submit', async (e) => {
-      e.preventDefault()
-      const errorEl = modal.querySelector('#edit-user-error')
-      const submitBtn = modal.querySelector('#edit-user-submit')
-      const raw = modal.querySelector('#edit-user-tags-input').value.trim()
-      const tags = raw ? raw.split(',').map((t) => t.trim()).filter(Boolean) : []
-      errorEl.classList.add('hidden')
-      submitBtn.disabled = true
-      try {
-        await API.setUserTags(user.id, tags)
-        close()
-        await showUsersPage()
-      } catch (err) {
-        errorEl.textContent = err.message || t('app.saveFailed')
-        errorEl.classList.remove('hidden')
-      } finally {
-        submitBtn.disabled = false
-      }
-    })
-  }
-
-  async function showUserSSHKeysModal(userId, username) {
-    if (!userId) return
-    const modal = document.getElementById('add-ssh-key-modal')
-    modal.classList.remove('hidden')
-    const safeName = escapeHtml(username || userId)
-    modal.innerHTML = `
-      <div class="fixed inset-0 bg-black/40 flex items-center justify-center p-4" id="user-ssh-keys-backdrop">
-        <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl border border-slate-200 max-h-[90vh] flex flex-col">
-          <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between shrink-0">
-            <h3 class="font-semibold text-slate-800">${t('app.sshKeysTitle', { name: safeName })}</h3>
-            <button id="user-ssh-keys-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
-          </div>
-          <div class="px-5 py-4 overflow-auto flex-1 min-h-0">
-            <p class="text-xs text-slate-600 mb-3">${t('app.sshKeysIntro')}</p>
-            <div id="user-ssh-keys-list" class="mb-4">${t('app.sshKeysLoading')}</div>
-            <div class="border-t border-slate-200 pt-4">
-              <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.sshKeyAddLabel')}</label>
-              <textarea id="user-ssh-key-input" rows="2" class="w-full rounded border border-slate-300 px-3 py-2 text-sm font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="ssh-ed25519 AAAAC3... user@host"></textarea>
-              <p id="user-ssh-key-error" class="mt-1 text-sm text-red-600 hidden"></p>
-              <button type="button" id="user-ssh-key-add-btn" class="mt-2 rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700">${t('app.add')}</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    `
-    const close = () => {
-      modal.classList.add('hidden')
-      modal.innerHTML = ''
-    }
-    const renderList = (keys) => {
-      const listEl = modal.querySelector('#user-ssh-keys-list')
-      if (!listEl) return
-      if (!Array.isArray(keys)) keys = []
-      const keyRows = keys.map((k) => {
-        const keyDisplay = (k.key_line || '').length > 56 ? (k.key_line || '').slice(0, 53) + '...' : (k.key_line || '')
-        return `
-          <div class="flex items-center justify-between gap-2 py-2 border-b border-slate-100 text-sm">
-            <span class="font-mono text-slate-700 truncate flex-1" title="${escapeHtml(k.key_line || '')}">${escapeHtml(keyDisplay)}</span>
-            <span class="text-xs text-slate-400 shrink-0">${escapeHtml(k.created_at || '')}</span>
-            <button type="button" class="user-ssh-key-del-btn rounded border border-red-200 px-2 py-0.5 text-xs text-red-700 hover:bg-red-50 shrink-0" data-key-id="${escapeHtml(String(k.id))}">${t('app.sshKeyDelete')}</button>
-          </div>
-        `
-      }).join('')
-      listEl.innerHTML = keyRows
-        ? `<div class="space-y-0">${keyRows}</div>`
-        : `<p class="text-slate-500 text-sm">${t('app.sshKeyEmpty')}</p>`
-      modal.querySelectorAll('.user-ssh-key-del-btn').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          if (!(await uiConfirm(t('app.sshKeyConfirmDelete'), { danger: true }))) return
-          try {
-            await API.deleteUserSSHKey(userId, btn.dataset.keyId)
-            const keys = await API.userSSHKeys(userId)
-            renderList(keys)
-          } catch (e) {
-            await uiAlert(e.message || t('app.sshKeyDeleteFailed'))
-          }
-        })
-      })
-    }
-    modal.querySelector('#user-ssh-keys-close').addEventListener('click', close)
-    modal.querySelector('#user-ssh-keys-backdrop').addEventListener('click', (e) => { if (e.target.id === 'user-ssh-keys-backdrop') close() })
-    modal.querySelector('#user-ssh-key-add-btn').addEventListener('click', async () => {
-      const errorEl = modal.querySelector('#user-ssh-key-error')
-      const raw = (modal.querySelector('#user-ssh-key-input').value || '').trim()
-      const line = raw.split(/\r?\n/)[0]?.trim() || raw
-      errorEl.classList.add('hidden')
-      if (!line) {
-        errorEl.textContent = t('app.sshKeyAddRequired')
-        errorEl.classList.remove('hidden')
-        return
-      }
-      try {
-        await API.addUserSSHKey(userId, line)
-        modal.querySelector('#user-ssh-key-input').value = ''
-        const keys = await API.userSSHKeys(userId)
-        renderList(keys)
-      } catch (err) {
-        errorEl.textContent = err.message || t('app.sshKeyAddFailed')
-        errorEl.classList.remove('hidden')
-      }
-    })
-    try {
-      const keys = await API.userSSHKeys(userId)
-      renderList(keys)
-    } catch (e) {
-      modal.querySelector('#user-ssh-keys-list').innerHTML = `<p class="text-sm text-red-600">${escapeHtml(e.message || t('app.sshKeyFetchFailed'))}</p>`
-    }
-  }
-
-  // Keep legacy user modals reachable and marked as used for now.
-  window._vantyxLegacyUserModals = {
-    showAddUserModal,
-    showEditUserModal,
-    showUserSSHKeysModal,
   }
 
   function showChangePasswordModal() {
@@ -1272,8 +1034,7 @@ export function renderApp(container) {
       const addTargetBtnHtml = isManageMode
         ? `<button type="button" id="btn-add-target-in-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50" ${selectedGroupId ? '' : 'disabled'}>${t('app.addTargetBtn')}</button>`
         : ''
-      const isAdmin = meData?.role === 'admin'
-      const showMembersSection = isManageMode && isAdmin && selectedGroupId
+      const showMembersSection = isManageMode && isAdminRole && selectedGroupId
 
       mainContent.innerHTML = `
         <div class="w-full h-full flex flex-col gap-4">
@@ -1910,6 +1671,40 @@ export function renderApp(container) {
                 </div>
               </div>
               <div id="add-target-cred-fields">
+                <div class="flex items-start justify-between gap-3 mb-3">
+                  <div class="flex-1 space-y-2">
+                    <label class="block text-xs font-medium text-slate-600">${t('app.targetCredentialMode')}</label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="add-target-cred-mode" value="identity" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" checked />
+                      <span class="text-sm text-slate-800">${t('app.targetCredentialModeIdentity')}</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="add-target-cred-mode" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                      <span class="text-sm text-slate-800">${t('app.targetCredentialModeKey')}</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="add-target-cred-mode" value="manual" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                      <span class="text-sm text-slate-800">${t('app.targetCredentialModeManual')}</span>
+                    </label>
+                  </div>
+                  <div class="shrink-0 pt-5">
+                    <button type="button" id="add-target-manage-credentials" class="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">
+                      ${t('app.manageCredentials')}
+                    </button>
+                  </div>
+                </div>
+                <div id="add-target-identity-wrap" class="mb-4">
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetCredentialIdentity')}</label>
+                  <select id="add-target-credential-identity" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                    <option value="">${t('app.credentialsNone')}</option>
+                  </select>
+                </div>
+                <div id="add-target-ssh-key-wrap" class="mb-4 hidden">
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetCredentialKey')}</label>
+                  <select id="add-target-ssh-key" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                    <option value="">${t('app.credentialsPickKey')}</option>
+                  </select>
+                </div>
                 <div id="add-target-auth-type-wrap" class="space-y-3 hidden">
                   <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.authMethodLabel')}</label>
                   <div class="space-y-2">
@@ -1959,6 +1754,12 @@ export function renderApp(container) {
     const defaultPorts = { ssh: 22, telnet: 23, vnc: 5900, rdp: 3389, tftp: 69, ftp: 21 }
     const addProtoSelect = modal.querySelector('#add-target-protocol')
     const addCredFields = modal.querySelector('#add-target-cred-fields')
+    const addIdentityWrap = modal.querySelector('#add-target-identity-wrap')
+    const addIdentitySelect = modal.querySelector('#add-target-credential-identity')
+    const addSshKeyWrap = modal.querySelector('#add-target-ssh-key-wrap')
+    const addSshKeySelect = modal.querySelector('#add-target-ssh-key')
+    const addCredManageBtn = modal.querySelector('#add-target-manage-credentials')
+    const addUsernameWrap = modal.querySelector('#add-target-username-wrap')
     const addAuthTypeWrap = modal.querySelector('#add-target-auth-type-wrap')
     const addPasswordWrap = modal.querySelector('#add-target-password-wrap')
     const addPortInput = modal.querySelector('#add-target-port')
@@ -1980,6 +1781,90 @@ export function renderApp(container) {
     const addHostKeyRefetchBtn = modal.querySelector('#add-target-host-key-refetch')
     let addCapturedFingerprint = ''
     let addCapturedKey = ''
+
+    let addCredentialIdentities = []
+    let addSSHKeys = []
+    function getAddCredMode() {
+      return modal.querySelector('input[name="add-target-cred-mode"]:checked')?.value || 'identity'
+    }
+    async function refreshAddCredentialLists({ keepSelection = true } = {}) {
+      const prevIdent = keepSelection && addIdentitySelect ? addIdentitySelect.value : ''
+      const prevKey = keepSelection && addSshKeySelect ? addSshKeySelect.value : ''
+      if (addIdentitySelect) {
+        addIdentitySelect.innerHTML = `<option value="">${t('app.credentialsNone')}</option>`
+      }
+      if (addSshKeySelect) {
+        addSshKeySelect.innerHTML = `<option value="">${t('app.credentialsPickKey')}</option>`
+      }
+      try {
+        const [identRes, keysRes] = await Promise.all([
+          API.credentialIdentities(),
+          API.sshKeys(),
+        ])
+        addCredentialIdentities = (identRes && identRes.items) || []
+        addSSHKeys = (keysRes && keysRes.items) || []
+        addCredentialIdentities.forEach((ident) => {
+          const opt = document.createElement('option')
+          opt.value = ident.id
+          const auth = authMethodLabel(ident.auth_method)
+          opt.textContent = `${ident.label || ident.id} (${auth})`
+          addIdentitySelect?.appendChild(opt)
+        })
+        addSSHKeys.forEach((k) => {
+          const opt = document.createElement('option')
+          opt.value = k.id
+          opt.textContent = k.label || k.id
+          addSshKeySelect?.appendChild(opt)
+        })
+      } catch {
+        addCredentialIdentities = []
+        addSSHKeys = []
+      }
+      if (prevIdent && addIdentitySelect) addIdentitySelect.value = prevIdent
+      if (prevKey && addSshKeySelect) addSshKeySelect.value = prevKey
+    }
+    function applyAddCredentialIdentity(id) {
+      const ident = (addCredentialIdentities || []).find((x) => x.id === id)
+      if (!ident) return
+      const uEl = modal.querySelector('#add-target-ssh-username')
+      const pwEl = modal.querySelector('#add-target-ssh-password')
+      const kEl = modal.querySelector('#add-target-ssh-private-key')
+      const ppEl = modal.querySelector('#add-target-ssh-key-passphrase')
+      if (uEl) uEl.value = ident.ssh_username || ''
+      if (pwEl) {
+        pwEl.value = ''
+        pwEl.placeholder = ident.has_password ? t('app.credentialsSavedHint') : t('app.targetPasswordHint')
+      }
+      if (kEl) {
+        kEl.value = ''
+        kEl.placeholder = ident.has_ssh_key ? t('app.credentialsSavedHint') : t('app.targetPrivateKeyPlaceholder')
+      }
+      if (ppEl) {
+        ppEl.value = ''
+        if (ident.has_passphrase) ppEl.placeholder = t('app.credentialsSavedHint')
+      }
+    }
+    function syncAddCredentialMode() {
+      const mode = getAddCredMode()
+      const proto = addProtoSelect.value
+      const isSsh = proto === 'ssh'
+      addIdentityWrap?.classList.toggle('hidden', mode !== 'identity')
+      addSshKeyWrap?.classList.toggle('hidden', mode !== 'key')
+      addAuthTypeWrap?.classList.toggle('hidden', !isSsh || mode !== 'manual')
+      const hideManualSecrets = mode === 'identity' || mode === 'key'
+      addPasswordWrap?.classList.toggle('hidden', hideManualSecrets || (isSsh && mode === 'manual' && (modal.querySelector('input[name="add-target-auth-type"]:checked')?.value || 'password') !== 'password'))
+      addKeyWrap?.classList.toggle('hidden', hideManualSecrets || !isSsh || mode !== 'manual' || (modal.querySelector('input[name="add-target-auth-type"]:checked')?.value || 'password') === 'password')
+      addPassphraseWrap?.classList.toggle('hidden', hideManualSecrets || !isSsh || mode !== 'manual' || (modal.querySelector('input[name="add-target-auth-type"]:checked')?.value || 'password') !== 'key_passphrase')
+      addUsernameWrap?.classList.toggle('hidden', mode === 'identity')
+      if (mode === 'identity') applyAddCredentialIdentity(addIdentitySelect?.value?.trim() || '')
+      if (mode === 'manual' && isSsh) syncAddAuthType()
+      else if (!isSsh && (proto === 'rdp' || proto === 'telnet')) {
+        addPasswordWrap?.classList.remove('hidden')
+        addKeyWrap?.classList.add('hidden')
+        addPassphraseWrap?.classList.add('hidden')
+      }
+    }
+
     function setAddHostKeyFp(value) {
       addCapturedFingerprint = (value || '').trim()
       if (addCapturedFingerprint) {
@@ -1998,6 +1883,10 @@ export function renderApp(container) {
       setAddHostKeyFp('')
     }
     function syncAddAuthType() {
+      if (getAddCredMode() !== 'manual') {
+        syncAddCredentialMode()
+        return
+      }
       const proto = addProtoSelect.value
       if (proto === 'rdp' || proto === 'telnet') {
         addPasswordWrap.classList.remove('hidden')
@@ -2046,11 +1935,14 @@ export function renderApp(container) {
       if (defaultPorts[proto] !== undefined) {
         addPortInput.value = defaultPorts[proto]
       }
-      syncAddAuthType()
+      syncAddCredentialMode()
     }
     addProtoSelect.addEventListener('change', syncAddProtocol)
     modal.querySelectorAll('input[name="add-target-auth-type"]').forEach((radio) => {
       radio.addEventListener('change', syncAddAuthType)
+    })
+    modal.querySelectorAll('input[name="add-target-cred-mode"]').forEach((radio) => {
+      radio.addEventListener('change', syncAddCredentialMode)
     })
     // Initial render: apply protocol-dependent visibility immediately.
     // Without this, the dialog can show only a subset of fields until the
@@ -2089,6 +1981,14 @@ export function renderApp(container) {
     }
     addHostKeyRefetchBtn.addEventListener('click', () => probeAddHostKey())
 
+    void refreshAddCredentialLists().then(() => syncAddCredentialMode())
+    addIdentitySelect?.addEventListener('change', () => applyAddCredentialIdentity(addIdentitySelect.value.trim()))
+    addCredManageBtn?.addEventListener('click', async () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+      await showCredentialsPage()
+    })
+
     modal.querySelector('#add-target-close').addEventListener('click', () => {
       modal.classList.add('hidden')
       modal.innerHTML = ''
@@ -2107,19 +2007,46 @@ export function renderApp(container) {
       const host = modal.querySelector('#add-target-host').value.trim()
       const port = parseInt(modal.querySelector('#add-target-port').value, 10) || 22
       const protocol = modal.querySelector('#add-target-protocol').value
+      const credMode = getAddCredMode()
       const ssh_username = modal.querySelector('#add-target-ssh-username').value.trim()
+      const credential_identity_id = addIdentitySelect ? addIdentitySelect.value.trim() : ''
+      const ssh_key_id = addSshKeySelect ? addSshKeySelect.value.trim() : ''
       const authType = protocol === 'ssh' ? (modal.querySelector('input[name="add-target-auth-type"]:checked')?.value || 'password') : 'password'
-      const payload = { name, host, port, protocol, group_id, ssh_username }
-      if (protocol === 'rdp' || protocol === 'ftp' || protocol === 'telnet' || authType === 'password') {
-        const v = modal.querySelector('#add-target-ssh-password').value
-        if (v !== '') payload.ssh_password = v
+      const hasCreds = protocol === 'ssh' || protocol === 'telnet' || protocol === 'rdp' || protocol === 'ftp'
+      if (hasCreds && credMode === 'identity' && !credential_identity_id) {
+        errorEl.textContent = t('app.targetCredentialIdentityRequired')
+        errorEl.classList.remove('hidden')
+        return
       }
-      if (protocol === 'ssh' && (authType === 'key' || authType === 'key_passphrase')) {
-        const keyVal = modal.querySelector('#add-target-ssh-private-key').value.trim()
-        if (keyVal) payload.ssh_private_key = keyVal
-        if (authType === 'key_passphrase') {
-          const pp = modal.querySelector('#add-target-ssh-key-passphrase').value
-          if (pp !== '') payload.ssh_private_key_passphrase = pp
+      if (hasCreds && credMode === 'key') {
+        if (!ssh_key_id) {
+          errorEl.textContent = t('app.targetCredentialKeyRequired')
+          errorEl.classList.remove('hidden')
+          return
+        }
+        if (!ssh_username) {
+          errorEl.textContent = t('app.targetCredentialUsernameRequired')
+          errorEl.classList.remove('hidden')
+          return
+        }
+      }
+      const payload = { name, host, port, protocol, group_id, ssh_username }
+      if (credMode === 'identity' && credential_identity_id) {
+        payload.credential_identity_id = credential_identity_id
+      } else if (credMode === 'key' && ssh_key_id) {
+        payload.ssh_key_id = ssh_key_id
+      } else if (credMode === 'manual') {
+        if (protocol === 'rdp' || protocol === 'ftp' || protocol === 'telnet' || authType === 'password') {
+          const v = modal.querySelector('#add-target-ssh-password').value
+          if (v !== '') payload.ssh_password = v
+        }
+        if (protocol === 'ssh' && (authType === 'key' || authType === 'key_passphrase')) {
+          const keyVal = modal.querySelector('#add-target-ssh-private-key').value.trim()
+          if (keyVal) payload.ssh_private_key = keyVal
+          if (authType === 'key_passphrase') {
+            const pp = modal.querySelector('#add-target-ssh-key-passphrase').value
+            if (pp !== '') payload.ssh_private_key_passphrase = pp
+          }
         }
       }
       if (!name || !host) {
@@ -2252,6 +2179,40 @@ export function renderApp(container) {
                 </div>
               </div>
               <div id="edit-target-cred-fields">
+                <div class="flex items-start justify-between gap-3 mb-3">
+                  <div class="flex-1 space-y-2">
+                    <label class="block text-xs font-medium text-slate-600">${t('app.targetCredentialMode')}</label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="edit-target-cred-mode" value="identity" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                      <span class="text-sm text-slate-800">${t('app.targetCredentialModeIdentity')}</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="edit-target-cred-mode" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                      <span class="text-sm text-slate-800">${t('app.targetCredentialModeKey')}</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="edit-target-cred-mode" value="manual" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" checked />
+                      <span class="text-sm text-slate-800">${t('app.targetCredentialModeManual')}</span>
+                    </label>
+                  </div>
+                  <div class="shrink-0 pt-5">
+                    <button type="button" id="edit-target-manage-credentials" class="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">
+                      ${t('app.manageCredentials')}
+                    </button>
+                  </div>
+                </div>
+                <div id="edit-target-identity-wrap" class="mb-4 hidden">
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetCredentialIdentity')}</label>
+                  <select id="edit-target-credential-identity" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                    <option value="">${t('app.credentialsNone')}</option>
+                  </select>
+                </div>
+                <div id="edit-target-ssh-key-wrap" class="mb-4 hidden">
+                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetCredentialKey')}</label>
+                  <select id="edit-target-ssh-key" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                    <option value="">${t('app.credentialsPickKey')}</option>
+                  </select>
+                </div>
                 <div id="edit-target-auth-type-wrap" class="space-y-3 hidden">
                   <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.authMethodLabel')}</label>
                   <div class="space-y-2">
@@ -2353,6 +2314,12 @@ export function renderApp(container) {
     const editDefaultPorts = { ssh: 22, telnet: 23, vnc: 5900, rdp: 3389, tftp: 69, ftp: 21 }
     const editProtoSelect = modal.querySelector('#edit-target-protocol')
     const editCredFields = modal.querySelector('#edit-target-cred-fields')
+    const editIdentityWrap = modal.querySelector('#edit-target-identity-wrap')
+    const editIdentitySelect = modal.querySelector('#edit-target-credential-identity')
+    const editSshKeyWrap = modal.querySelector('#edit-target-ssh-key-wrap')
+    const editSshKeySelect = modal.querySelector('#edit-target-ssh-key')
+    const editCredManageBtn = modal.querySelector('#edit-target-manage-credentials')
+    const editUsernameWrap = modal.querySelector('#edit-target-username-wrap')
     const editAuthTypeWrap = modal.querySelector('#edit-target-auth-type-wrap')
     const editPasswordWrap = modal.querySelector('#edit-target-password-wrap')
     const editPortInput = modal.querySelector('#edit-target-port')
@@ -2378,6 +2345,80 @@ export function renderApp(container) {
     // "__cleared" sentinel = user pressed Clear and we should send
     // "" to the API on save.
     let editStagedFingerprint = ''
+
+    let editCredentialIdentities = []
+    let editSSHKeys = []
+    function getEditCredMode() {
+      return modal.querySelector('input[name="edit-target-cred-mode"]:checked')?.value || 'manual'
+    }
+    async function refreshEditCredentialLists({ keepSelection = true } = {}) {
+      const prevIdent = keepSelection && editIdentitySelect ? editIdentitySelect.value : ''
+      const prevKey = keepSelection && editSshKeySelect ? editSshKeySelect.value : ''
+      if (editIdentitySelect) {
+        editIdentitySelect.innerHTML = `<option value="">${t('app.credentialsNone')}</option>`
+      }
+      if (editSshKeySelect) {
+        editSshKeySelect.innerHTML = `<option value="">${t('app.credentialsPickKey')}</option>`
+      }
+      try {
+        const [identRes, keysRes] = await Promise.all([
+          API.credentialIdentities(),
+          API.sshKeys(),
+        ])
+        editCredentialIdentities = (identRes && identRes.items) || []
+        editSSHKeys = (keysRes && keysRes.items) || []
+        editCredentialIdentities.forEach((ident) => {
+          const opt = document.createElement('option')
+          opt.value = ident.id
+          const auth = authMethodLabel(ident.auth_method)
+          opt.textContent = `${ident.label || ident.id} (${auth})`
+          editIdentitySelect?.appendChild(opt)
+        })
+        editSSHKeys.forEach((k) => {
+          const opt = document.createElement('option')
+          opt.value = k.id
+          opt.textContent = k.label || k.id
+          editSshKeySelect?.appendChild(opt)
+        })
+      } catch {
+        editCredentialIdentities = []
+        editSSHKeys = []
+      }
+      if (prevIdent && editIdentitySelect) editIdentitySelect.value = prevIdent
+      if (prevKey && editSshKeySelect) editSshKeySelect.value = prevKey
+    }
+    function applyEditCredentialIdentity(id) {
+      const ident = (editCredentialIdentities || []).find((x) => x.id === id)
+      if (!ident) return
+      const uEl = modal.querySelector('#edit-target-ssh-username')
+      const pwEl = modal.querySelector('#edit-target-ssh-password')
+      const kEl = modal.querySelector('#edit-target-ssh-private-key')
+      const ppEl = modal.querySelector('#edit-target-ssh-key-passphrase')
+      if (uEl) uEl.value = ident.ssh_username || uEl.value
+      if (pwEl && ident.has_password) pwEl.placeholder = t('app.credentialsSavedHint')
+      if (kEl && ident.has_ssh_key) kEl.placeholder = t('app.credentialsSavedHint')
+      if (ppEl && ident.has_passphrase) ppEl.placeholder = t('app.credentialsSavedHint')
+    }
+    function syncEditCredentialMode() {
+      const mode = getEditCredMode()
+      const proto = editProtoSelect.value
+      const isSsh = proto === 'ssh'
+      editIdentityWrap?.classList.toggle('hidden', mode !== 'identity')
+      editSshKeyWrap?.classList.toggle('hidden', mode !== 'key')
+      editAuthTypeWrap?.classList.toggle('hidden', !isSsh || mode !== 'manual')
+      const hideManualSecrets = mode === 'identity' || mode === 'key'
+      editPasswordWrap?.classList.toggle('hidden', hideManualSecrets || (isSsh && mode === 'manual' && (modal.querySelector('input[name="edit-target-auth-type"]:checked')?.value || 'password') !== 'password'))
+      editKeyWrap?.classList.toggle('hidden', hideManualSecrets || !isSsh || mode !== 'manual' || (modal.querySelector('input[name="edit-target-auth-type"]:checked')?.value || 'password') === 'password')
+      editPassphraseWrap?.classList.toggle('hidden', hideManualSecrets || !isSsh || mode !== 'manual' || (modal.querySelector('input[name="edit-target-auth-type"]:checked')?.value || 'password') !== 'key_passphrase')
+      editUsernameWrap?.classList.toggle('hidden', mode === 'identity')
+      if (mode === 'identity') applyEditCredentialIdentity(editIdentitySelect?.value?.trim() || '')
+      if (mode === 'manual' && isSsh) syncEditAuthType()
+      else if (!isSsh && (proto === 'rdp' || proto === 'telnet')) {
+        editPasswordWrap?.classList.remove('hidden')
+        editKeyWrap?.classList.add('hidden')
+        editPassphraseWrap?.classList.add('hidden')
+      }
+    }
     function syncEditHostKeyClearBtn() {
       if (!editHostKeyClearBtn) return
       const persisted = (target.ssh_host_key_fingerprint || '').trim()
@@ -2429,6 +2470,10 @@ export function renderApp(container) {
     })()
 
     function syncEditAuthType() {
+      if (getEditCredMode() !== 'manual') {
+        syncEditCredentialMode()
+        return
+      }
       const proto = editProtoSelect.value
       if (proto === 'rdp' || proto === 'telnet') {
         editPasswordWrap.classList.remove('hidden')
@@ -2446,7 +2491,6 @@ export function renderApp(container) {
       const proto = editProtoSelect.value
       const hasCreds = proto === 'ssh' || proto === 'telnet' || proto === 'rdp' || proto === 'ftp'
       editCredFields.style.display = hasCreds ? '' : 'none'
-      editAuthTypeWrap.classList.toggle('hidden', proto !== 'ssh')
       if (editHostKeyWrap) {
         editHostKeyWrap.classList.toggle('hidden', proto !== 'ssh')
       }
@@ -2475,7 +2519,7 @@ export function renderApp(container) {
         if (editFtpCheckbox) editFtpCheckbox.checked = false
         if (editTftpCheckbox) editTftpCheckbox.checked = false
       }
-      syncEditAuthType()
+      syncEditCredentialMode()
     }
     editProtoSelect.addEventListener('change', () => {
       syncEditProtocol()
@@ -2487,12 +2531,23 @@ export function renderApp(container) {
     modal.querySelectorAll('input[name="edit-target-auth-type"]').forEach((radio) => {
       radio.addEventListener('change', syncEditAuthType)
     })
+    modal.querySelectorAll('input[name="edit-target-cred-mode"]').forEach((radio) => {
+      radio.addEventListener('change', syncEditCredentialMode)
+    })
     const initialAuthType = target.protocol === 'ssh'
       ? (target.has_ssh_key ? (target.needs_passphrase ? 'key_passphrase' : 'key') : 'password')
       : 'password'
     const initialAuthRadio = modal.querySelector(`input[name="edit-target-auth-type"][value="${initialAuthType}"]`)
     if (initialAuthRadio) initialAuthRadio.checked = true
     syncEditProtocol()
+
+    void refreshEditCredentialLists().then(() => syncEditCredentialMode())
+    editIdentitySelect?.addEventListener('change', () => applyEditCredentialIdentity(editIdentitySelect.value.trim()))
+    editCredManageBtn?.addEventListener('click', async () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+      await showCredentialsPage()
+    })
 
     // ファイル転送プロトコルの初期状態（SFTP は SSH のときのみ選択可能）
     if ((target.protocol === 'ssh' || target.protocol === 'telnet') && editFileProtocolsWrap) {
@@ -2562,20 +2617,43 @@ export function renderApp(container) {
       const host = modal.querySelector('#edit-target-host').value.trim()
       const port = parseInt(modal.querySelector('#edit-target-port').value, 10) || 22
       const protocol = modal.querySelector('#edit-target-protocol').value
+      const credMode = getEditCredMode()
       const ssh_username = modal.querySelector('#edit-target-ssh-username').value.trim()
+      const credential_identity_id = editIdentitySelect ? editIdentitySelect.value.trim() : ''
+      const ssh_key_id = editSshKeySelect ? editSshKeySelect.value.trim() : ''
       const authType = protocol === 'ssh' ? (modal.querySelector('input[name="edit-target-auth-type"]:checked')?.value || 'password') : 'password'
+      const hasCreds = protocol === 'ssh' || protocol === 'telnet' || protocol === 'rdp' || protocol === 'ftp'
       const clearKeyChecked = modal.querySelector('#edit-target-clear-ssh-key') && modal.querySelector('#edit-target-clear-ssh-key').checked
       let ssh_password, ssh_private_key, ssh_private_key_passphrase
-      if (protocol === 'rdp' || protocol === 'telnet' || authType === 'password') {
-        const pwVal = modal.querySelector('#edit-target-ssh-password').value
-        ssh_password = pwVal === '' ? undefined : pwVal
+      if (hasCreds && credMode === 'identity' && !credential_identity_id) {
+        errorEl.textContent = t('app.targetCredentialIdentityRequired')
+        errorEl.classList.remove('hidden')
+        return
       }
-      if (protocol === 'ssh' && (authType === 'key' || authType === 'key_passphrase')) {
-        const keyVal = modal.querySelector('#edit-target-ssh-private-key').value
-        ssh_private_key = clearKeyChecked ? '' : (keyVal === '' ? undefined : keyVal)
-        if (authType === 'key_passphrase') {
-          const keyPassVal = modal.querySelector('#edit-target-ssh-key-passphrase').value
-          ssh_private_key_passphrase = clearKeyChecked ? '' : (keyPassVal === '' ? undefined : keyPassVal)
+      if (hasCreds && credMode === 'key') {
+        if (!ssh_key_id) {
+          errorEl.textContent = t('app.targetCredentialKeyRequired')
+          errorEl.classList.remove('hidden')
+          return
+        }
+        if (!ssh_username) {
+          errorEl.textContent = t('app.targetCredentialUsernameRequired')
+          errorEl.classList.remove('hidden')
+          return
+        }
+      }
+      if (credMode === 'manual') {
+        if (protocol === 'rdp' || protocol === 'telnet' || authType === 'password') {
+          const pwVal = modal.querySelector('#edit-target-ssh-password').value
+          ssh_password = pwVal === '' ? undefined : pwVal
+        }
+        if (protocol === 'ssh' && (authType === 'key' || authType === 'key_passphrase')) {
+          const keyVal = modal.querySelector('#edit-target-ssh-private-key').value
+          ssh_private_key = clearKeyChecked ? '' : (keyVal === '' ? undefined : keyVal)
+          if (authType === 'key_passphrase') {
+            const keyPassVal = modal.querySelector('#edit-target-ssh-key-passphrase').value
+            ssh_private_key_passphrase = clearKeyChecked ? '' : (keyPassVal === '' ? undefined : keyPassVal)
+          }
         }
       }
       const tagsRaw = modal.querySelector('#edit-target-tags').value.trim()
@@ -2591,6 +2669,11 @@ export function renderApp(container) {
         return
       }
       const updatePayload = { name, host, port, protocol, path: target.path || '', ssh_username }
+      if (credMode === 'identity' && credential_identity_id) {
+        updatePayload.credential_identity_id = credential_identity_id
+      } else if (credMode === 'key' && ssh_key_id) {
+        updatePayload.ssh_key_id = ssh_key_id
+      }
       if (protocol === 'ssh' || protocol === 'telnet') {
         updatePayload.sftp_enabled = protocol === 'ssh' ? enableSftpEdit : false
         updatePayload.ftp_enabled = enableFtpEdit
@@ -2761,6 +2844,13 @@ export function renderApp(container) {
         window.history.replaceState({}, '', url.toString())
       } catch { /* ignore */ }
       showSessionsPage()
+    } else if (initialView === 'credentials') {
+      try {
+        const url = new URL(window.location.href)
+        url.searchParams.delete('view')
+        window.history.replaceState({}, '', url.toString())
+      } catch { /* ignore */ }
+      showCredentialsPage()
     } else {
       showTreeView('home')
     }
@@ -2772,6 +2862,7 @@ export function renderApp(container) {
     navRecordings,
     navGroups,
     navUsers,
+    navCredentials,
     navAudit,
     navSettings,
     getMe: () => meData,
@@ -2780,6 +2871,7 @@ export function renderApp(container) {
     onRecordings: () => showRecordingsPage(),
     onGroups: () => showTreeView('manage'),
     onUsers: () => showUsersPage(),
+    onCredentials: () => showCredentialsPage(),
     onAudit: () => showAuditLogs(),
     onSettings: () => showSettings(),
   })

@@ -506,7 +506,7 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 	sessionDesc, _ := readLine(true, "")
 	sessionDesc = strings.TrimSpace(sessionDesc)
 
-	if target.Protocol == access.ProtocolSSH && target.SSHPrivateKey != "" && strings.HasPrefix(target.SSHPrivateKey, secret.CiphertextVersionPrefix) {
+	if target.Protocol == access.ProtocolSSH && target.SSHPrivateKey != "" && secret.IsEncrypted(target.SSHPrivateKey) {
 		add("Saved credentials could not be decrypted. Check VANTYX_SSH_PASSWORD_ENCRYPTION_KEY.")
 		return status
 	}

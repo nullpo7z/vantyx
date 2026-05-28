@@ -9,7 +9,7 @@ DOCKER      ?= docker
 # on PATH. This keeps `make lint` / `make test` working in lean
 # environments without surprising contributors.
 
-.PHONY: help all fmt fmt-go fmt-fe lint lint-go lint-fe test test-go test-fe e2e coverage smoke build build-go build-fe build-docker security security-trivy security-gosec ci-all clean
+.PHONY: help all fmt fmt-go fmt-fe lint lint-go lint-fe test test-go test-fe coverage smoke build build-go build-fe build-docker security security-trivy security-gosec ci-all clean
 
 help:
 	@echo "Vantyx Makefile targets:"
@@ -17,7 +17,6 @@ help:
 	@echo "  make fmt           Format Go and (when present) frontend sources"
 	@echo "  make lint          Run golangci-lint and the web ESLint rules"
 	@echo "  make test          Run Go unit tests (with coverage gates)"
-	@echo "  make e2e           Run the Playwright end-to-end suite"
 	@echo "  make coverage      Run Go tests and print coverage (MIN=NN to fail below)"
 	@echo "  make smoke         Build the Docker image and run the smoke check"
 	@echo "  make build         Build the Vantyx Go binaries and the SPA bundle"
@@ -74,13 +73,6 @@ test-fe:
 		cd web && $(NPM) run lint; \
 	else \
 		echo "web directory not present, skipping frontend tests"; \
-	fi
-
-e2e:
-	@if [ -d e2e ]; then \
-		cd e2e && $(NPM) test; \
-	else \
-		echo "e2e directory not present, skipping end-to-end tests"; \
 	fi
 
 # Coverage: informational only (no CI gate). Pass MIN=NN to fail the

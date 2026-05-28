@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -131,10 +130,10 @@ func readTerminalCredentials(conn wsReadConn, target *access.Target) (sshproxy.C
 // credentialsDecrypted returns an error if PrivateKey or
 // PrivateKeyPassphrase is still ciphertext (decryption failed at rest).
 func credentialsDecrypted(creds sshproxy.Credentials) error {
-	if creds.PrivateKey != "" && strings.HasPrefix(creds.PrivateKey, secret.CiphertextVersionPrefix) {
+	if creds.PrivateKey != "" && secret.IsEncrypted(creds.PrivateKey) {
 		return errCredentialsNotDecrypted
 	}
-	if creds.PrivateKeyPassphrase != "" && strings.HasPrefix(creds.PrivateKeyPassphrase, secret.CiphertextVersionPrefix) {
+	if creds.PrivateKeyPassphrase != "" && secret.IsEncrypted(creds.PrivateKeyPassphrase) {
 		return errCredentialsNotDecrypted
 	}
 	return nil

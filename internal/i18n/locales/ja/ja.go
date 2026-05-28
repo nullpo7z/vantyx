@@ -64,7 +64,8 @@ var Messages = map[string]string{
 	"groups.groupAndUserIDRequired": "group_id と user_id が必要です",
 
 	// Targets.
-	"targets.nameHostRequired":          "name と host は必須です",
+	"targets.nameHostRequired":             "name と host は必須です",
+	"targets.credentialSourceExclusive":      "credential_identity_id と ssh_key_id は同時に指定できません",
 	"targets.groupIDRequired":           "group_id は必須です",
 	"targets.groupNotFound":             "グループが見つかりません",
 	"targets.assignFailed":              "ターゲットのグループ割り当てに失敗しました",
@@ -72,6 +73,22 @@ var Messages = map[string]string{
 	"targets.hostKeyFingerprintInvalid": "ssh_host_key_fingerprint は空か 'SHA256:<base64>' 形式である必要があります",
 	"targets.hostKeyOnlySSH":            "ホストキーフィンガープリントは SSH ターゲットのみで指定できます",
 	"targets.hostKeyProbeFailed":        "SSH ホストキーの取得に失敗しました",
+
+	// Credential profiles (admin management).
+	"credentials.encryptionKeyRequired": "資格情報の暗号化キーが未設定です（VANTYX_SSH_PASSWORD_ENCRYPTION_KEY）",
+	"credentials.notReady":              "資格情報ライブラリの準備ができていません。サーバー更新後に DB マイグレーションが必要な可能性があります。",
+
+	// SSH keys / identities (admin management).
+	"sshKeys.idRequired":            "key_id は必須です",
+	"sshKeys.notFound":              "SSH 鍵が見つかりません",
+	"sshKeys.exists":                "同じ ID の SSH 鍵が既に存在します",
+	"sshKeys.inUse":                 "この SSH 鍵は Identity で使用中のため削除できません",
+	"sshKeys.privateKeyRequired":    "秘密鍵は必須です",
+	"credentialIdentities.idRequired":     "identity_id は必須です",
+	"credentialIdentities.notFound":       "Identity が見つかりません",
+	"credentialIdentities.exists":         "同じ ID の Identity が既に存在します",
+	"credentialIdentities.usernameRequired": "ユーザー名は必須です",
+	"credentialIdentities.authRequired":     "パスワードまたは SSH 鍵のいずれかが必要です",
 
 	// Settings.
 	"settings.invalidProto":  "プロトコル指定が不正です",

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Vantyx API
-  version: 0.6.0
+  version: 0.7.0
   description: |
     Vantyx バックエンドの公開 HTTP / WebSocket API 仕様。
 
@@ -12,17 +12,20 @@ info:
     - パスワード変更 (POST /api/me/password)。認証済みユーザーが自分のパスワードを変更。
     - UI ロケール設定 (PUT /api/me/locale)。`'' | en | ja` から選択し、サーバー側に永続化（ログイン応答 / GET /api/me の `locale` で取得）。
     - エラーレスポンスの本文 (`message`) は呼び出し元のロケールで返ります。解決順は (1) 認証済みユーザーの保存済みロケール、(2) `Accept-Language` ヘッダー、(3) デフォルト英語、です。
-    - SSH 公開鍵（管理者のみ）: ユーザー管理でユーザーに紐づけて登録。GET/POST/DELETE /api/users/{user_id}/ssh-keys（一覧・追加・削除）。従来の /api/me/ssh-keys は自分用（管理者のみ）。Vantyx CLI（ssh user@vantyx）の公開鍵認証用。
+    - SSH 公開鍵（管理者のみ）: ユーザー管理でユーザーに紐づけて登録。GET/POST/DELETE /api/users/{user_id}/ssh-keys（一覧・追加・削除）。従来の /api/me/ssh-keys は自分用（管理者のみ）。Vantyx CLI（ssh user@vantyx）の公開鍵認証用。**これは接続先用の秘密鍵ライブラリ `/api/ssh-keys` とは別物です。**
+    - 資格情報ライブラリ（管理者のみ、Keys / Identities 分離）: **Keys** — GET/POST/PUT/DELETE /api/ssh-keys（SSH 秘密鍵 PEM のみ、一覧は key_type / has_passphrase のみ返却）。**Identities** — GET/POST/PUT/DELETE /api/credential-identities（ユーザー名 + パスワード / 鍵 / 両方、auth_method 付き）。詳細は docs/credentials.md。
     - アクセスグループの一覧・作成 (GET/POST /api/groups)。一覧は limit / after_id でキーセットページネーション対応。
     - グループメンバー管理（管理者のみ）: GET/POST /api/groups/{group_id}/members、DELETE /api/groups/{group_id}/members/{user_id}。
     - タグ（グループ・ターゲット・ユーザー）: GET/PUT /api/groups/{group_id}/tags、/api/targets/{target_id}/tags、/api/users/{user_id}/tags。同じタグを持つユーザーはそのタグが付いたターゲット（またはそのタグが付いたグループに属するターゲット）にアクセス可能。
     - ユーザー登録・一覧（管理者のみ）: GET /api/users、POST /api/users。
-    - ターゲットの一覧・作成・更新・削除 (GET/POST/PUT/DELETE /api/targets, /api/targets/{target_id})。プロトコルは ssh / telnet / vnc / tftp。一覧は limit / after_id でキーセットページネーション対応。
-    - ターミナル WebSocket (GET /ws/ssh)。認証後、ターゲットへの SSH または Telnet をブリッジ。セッション永続化・レジューム対応（GET /api/terminal/sessions で一覧、session_id で再接続）。
+    - ターゲットの一覧・作成・更新・削除 (GET/POST/PUT/DELETE /api/targets, /api/targets/{target_id})。プロトコルは ssh / telnet / vnc / rdp / ftp / tftp。作成・更新時に credential_identity_id / ssh_key_id でライブラリから秘密情報をコピー可能。一覧は limit / after_id でキーセットページネーション対応。
+    - ターミナル WebSocket (GET /ws/ssh)。認証後、ターゲットへの SSH または Telnet をブリッジ。セッション永続化・レジューム対応（GET /api/terminal/sessions で一覧、session_id で再接続）。mode=writer|viewer、招待トークン（invite=）で共同セッションに参加。
+    - 共同ターミナルセッション（SSH/Telnet）: 招待の発行・参加・参加者一覧・キック・書き込み権リクエスト/付与/解放（/api/terminal/sessions/{id}/invitations ほか）。指名招待は GET /api/invitations/incoming。UI 同期は GET /api/events/sessions（SSE）。詳細は docs/collaborative-sessions.md。
+    - SSH ホスト鍵 TOFU: POST /api/targets/probe-host-key、PUT /api/targets/{id}/ssh-host-key。接続時は WebSocket フレーム host_key_unknown / host_key_mismatch。
     - VNC WebSocket (GET /ws/vnc)。認証後、protocol=vnc のターゲットへ noVNC 用に RFB をブリッジ。クエリ target_id 必須。
     - ファイル転送: GET /api/targets/{target_id}/files（一覧・クエリ path）、GET /api/targets/{target_id}/files/download（ダウンロード・クエリ path）、POST /api/targets/{target_id}/files/upload（multipart: path, file）、DELETE /api/targets/{target_id}/files（削除・クエリ path）。SSH ターゲットは SFTP（保存済み認証必須）、リモート TFTP ターゲットは TFTP クライアント（認証不要・一覧・削除未対応）。
     - 組み込み TFTP サーバー（Vantyx 内蔵）: GET /api/tftp/targets/{target_id}/files/*。protocol=tftp のターゲット向け。ローカルディスク（VANTYX_TFTP_ROOT）上のファイルを操作。
-    - バックグラウンドファイル転送: GET /api/file-transfers（自分のジョブ一覧）、GET /api/file-transfers/{transfer_id}（状態）、DELETE /api/file-transfers/{transfer_id}（キャンセル）、GET /api/file-transfers/{transfer_id}/content（完了したダウンロードの取得）、POST /api/file-transfers/download（JSON: backend, target_id, path → 202）、POST /api/file-transfers/upload（multipart: backend, target_id, path, file → 202）。backend は remote（SFTP/FTP/リモート TFTP）または tftp_server（組み込み TFTP）。ジョブはプロセス内メモリのみ（再起動で消失）。単一ファイル上限 64MB。アップロードは receiving（ブラウザ→Vantyx 受信）中に離脱すると失敗しうる。
+    - バックグラウンドファイル転送: GET /api/file-transfers（自分のジョブ一覧）、GET /api/file-transfers/{transfer_id}（状態）、DELETE /api/file-transfers/{transfer_id}（キャンセル）、GET /api/file-transfers/{transfer_id}/content（完了したダウンロードの取得）、POST /api/file-transfers/download（JSON: backend, target_id, path → 202）、POST /api/file-transfers/upload（multipart: backend, target_id, path, file → 202）。backend は remote（SFTP/FTP/リモート TFTP）または tftp_server（組み込み TFTP）。ジョブは SQLite（file_transfer_jobs）に永続化。単一ファイル上限 64MB。アップロードは receiving（ブラウザ→Vantyx 受信）中に離脱すると失敗しうる。
     - 録画: GET /api/recordings（メタデータ一覧。クエリ target_id でフィルタ可）。GET /api/recordings/{recording_id}/file でファイル取得。クエリ format=cast|gif|webm（省略時 cast）。cast=Asciinema 形式。gif/webm は agg（および WebM は ffmpeg）必要、未導入時 503。ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象。
     - CLI SSH ゲートウェイ: VANTYX_SSH_LISTEN で有効化。ssh user@vantyx でログイン後、メニューからターゲット選択してプロキシ接続。VANTYX_RECORDINGS_DIR 設定時は CLI 接続も録画対象。
     - OpenAPI 仕様 (GET /api/spec) と Swagger UI (GET /docs) は admin のみアクセス可。
@@ -303,6 +306,68 @@ components:
             type: string
       required:
         - tags
+    SSHKeySummary:
+      type: object
+      description: 管理者用 SSH 秘密鍵（Key）。一覧・作成応答。PEM 本文は含まない。
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        key_type:
+          type: string
+          description: PEM 解析結果（例 RSA, ED25519, ECDSA）。不明時は UNKNOWN または省略。
+        has_passphrase:
+          type: boolean
+      required:
+        - id
+        - label
+        - has_passphrase
+    SSHKeyListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SSHKeySummary'
+      required:
+        - items
+    CredentialIdentitySummary:
+      type: object
+      description: 管理者用ログイン Identity。秘密値は含まない。
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        ssh_username:
+          type: string
+        has_password:
+          type: boolean
+        ssh_key_id:
+          type: string
+        ssh_key_label:
+          type: string
+        has_ssh_key:
+          type: boolean
+        has_passphrase:
+          type: boolean
+          description: 参照 Key にパスフレーズがある場合 true
+        auth_method:
+          type: string
+          enum: [password, key, password_and_key]
+      required:
+        - id
+        - label
+    CredentialIdentityListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CredentialIdentitySummary'
+      required:
+        - items
     Target:
       type: object
       description: 接続先ターゲット（サーバー）の情報。
@@ -324,14 +389,33 @@ components:
           maximum: 65535
         protocol:
           type: string
-          enum: ["ssh", "telnet", "vnc", "tftp"]
-          description: "ssh=SSH ターミナル/SFTP, telnet=Telnet ターミナル, vnc=VNC リモートデスクトップ, tftp=TFTP ファイル転送"
+          enum: ["ssh", "telnet", "vnc", "rdp", "ftp", "tftp"]
+          description: "ssh=SSH ターミナル/SFTP, telnet=Telnet, vnc=VNC, rdp=RDP, ftp=FTP, tftp=TFTP"
+        ssh_username:
+          type: string
+          description: 保存済み SSH ユーザー名（値は返す。パスワード・秘密鍵は含めない）
         has_stored_credentials:
           type: boolean
-          description: SSH ユーザー名・パスワードが保存されている場合 true（一覧で返す。値は含めない）
+          description: SSH ユーザー名など資格情報が保存されている場合 true
         has_ssh_key:
           type: boolean
-          description: SSH 秘密鍵が保存されている場合 true（一覧で返す。値は含めない）
+          description: SSH 秘密鍵が保存されている場合 true（値は含めない）
+        needs_password:
+          type: boolean
+          description: ユーザー名のみ保存され接続時にパスワード入力が必要な場合 true
+        needs_passphrase:
+          type: boolean
+          description: 暗号化された秘密鍵のみ保存され接続時にパスフレーズ入力が必要な場合 true
+        sftp_enabled:
+          type: boolean
+        ftp_enabled:
+          type: boolean
+        tftp_enabled:
+          type: boolean
+        tags:
+          type: array
+          items:
+            type: string
         ssh_host_key_fingerprint:
           type: string
           description: |
@@ -825,6 +909,252 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/ssh-keys:
+    get:
+      summary: SSH 秘密鍵（Key）一覧
+      description: 管理者用の秘密鍵ライブラリ。PEM 本文は返しません。テーブル未作成時は 503。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Key 一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeyListResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: ssh_keys テーブル未準備または暗号化鍵未設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: SSH 秘密鍵（Key）の追加
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                label:
+                  type: string
+                ssh_private_key:
+                  type: string
+                  description: PEM 形式の秘密鍵
+                ssh_private_key_passphrase:
+                  type: string
+              required:
+                - id
+                - label
+                - ssh_private_key
+      responses:
+        '201':
+          description: 作成された Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeySummary'
+        '400':
+          description: バリデーションエラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 同一 ID が既に存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 暗号化鍵未設定など
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/ssh-keys/{key_id}:
+    put:
+      summary: SSH 秘密鍵（Key）の更新
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label:
+                  type: string
+                ssh_private_key:
+                  type: string
+                ssh_private_key_passphrase:
+                  type: string
+      responses:
+        '200':
+          description: 更新後の Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeySummary'
+        '404':
+          description: 存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: SSH 秘密鍵（Key）の削除
+      description: Identity から参照されている場合 409。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 削除完了
+        '409':
+          description: Identity から参照中
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/credential-identities:
+    get:
+      summary: Identity 一覧
+      description: 管理者用ログインプロファイル。秘密値は返しません。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Identity 一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialIdentityListResponse'
+        '403':
+          description: 管理者以外
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: Identity の追加
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                label:
+                  type: string
+                ssh_username:
+                  type: string
+                ssh_password:
+                  type: string
+                ssh_key_id:
+                  type: string
+                  description: 認証に Key を使う場合
+              required:
+                - id
+                - label
+      responses:
+        '201':
+          description: 作成された Identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialIdentitySummary'
+
+  /api/credential-identities/{identity_id}:
+    put:
+      summary: Identity の更新
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: identity_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label:
+                  type: string
+                ssh_username:
+                  type: string
+                ssh_password:
+                  type: string
+                  description: 空文字でパスワードクリア
+                ssh_key_id:
+                  type: string
+                  description: 空文字で Key 参照を解除
+      responses:
+        '200':
+          description: 更新後
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialIdentitySummary'
+    delete:
+      summary: Identity の削除
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: identity_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 削除完了
+
   /api/targets:
     get:
       summary: アクセス可能なターゲット一覧
@@ -868,7 +1198,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
       summary: ターゲット（サーバー）の追加
-      description: 認証済みユーザーが新しいターゲットを追加し、指定したアクセスグループに紐づけます（ユーザーはそのグループに所属している必要があります）。
+      description: 管理者が新しいターゲットを追加し、指定したアクセスグループに紐づけます。`credential_identity_id` と `ssh_key_id` は同時に指定できません。
       security:
         - cookieAuth: []
       requestBody:
@@ -897,14 +1227,34 @@ paths:
                   default: 22
                 protocol:
                   type: string
-                  enum: ["ssh", "telnet", "vnc", "tftp"]
+                  enum: ["ssh", "telnet", "vnc", "rdp", "ftp", "tftp"]
                   default: ssh
+                credential_identity_id:
+                  type: string
+                  description: 指定時、Identity からユーザー名・パスワード・鍵をコピー（リクエストの非空フィールドが優先）。
+                ssh_key_id:
+                  type: string
+                  description: 指定時、Key から秘密鍵をコピー。ssh_username はリクエストで必須。
                 ssh_username:
                   type: string
                   description: SSH ログイン用ユーザー名（任意）。保存すると接続時に利用可能。
                 ssh_password:
                   type: string
                   description: SSH パスワード（任意）。保存時は AES-256-GCM で暗号化（OWASP ASVS L2）。鍵未設定時は 503 を返す。
+                ssh_private_key:
+                  type: string
+                  description: PEM 秘密鍵（手入力モード）
+                ssh_private_key_passphrase:
+                  type: string
+                ssh_host_key_fingerprint:
+                  type: string
+                  description: 初回登録時に期待する SSH ホストキー SHA256 フィンガープリント
+                sftp_enabled:
+                  type: boolean
+                ftp_enabled:
+                  type: boolean
+                tftp_enabled:
+                  type: boolean
               required:
                 - name
                 - group_id
@@ -984,15 +1334,30 @@ paths:
                   default: 22
                 protocol:
                   type: string
-                  enum: ["ssh", "telnet", "vnc", "tftp"]
+                  enum: ["ssh", "telnet", "vnc", "rdp", "ftp", "tftp"]
                   default: ssh
                 path:
+                  type: string
+                credential_identity_id:
+                  type: string
+                ssh_key_id:
                   type: string
                 ssh_username:
                   type: string
                 ssh_password:
                   type: string
-                  description: 空文字で保存済みパスワードをクリア。非空のときは暗号化して保存（鍵必須）。
+                  description: 省略で変更なし。空文字でクリア。非空で暗号化保存（鍵必須）。
+                ssh_private_key:
+                  type: string
+                  description: 省略で変更なし。空文字でクリア。
+                ssh_private_key_passphrase:
+                  type: string
+                sftp_enabled:
+                  type: boolean
+                ftp_enabled:
+                  type: boolean
+                tftp_enabled:
+                  type: boolean
               required:
                 - name
                 - host

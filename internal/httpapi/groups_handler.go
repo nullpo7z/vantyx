@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 
@@ -38,6 +39,38 @@ type tagsResponse struct {
 
 type setTagsRequest struct {
 	Tags []string `json:"tags"`
+}
+
+// defaultGroupTag derives a tag from the group identifier so it always matches
+// the backend tag validation (alnum, hyphen, underscore; 1–64 chars).
+func defaultGroupTag(groupID string) string {
+	s := strings.TrimSpace(groupID)
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '/' || r == ' ' || r == '\t' || r == '.':
+			b.WriteByte('_')
+		case r == '-' || r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r):
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+		if b.Len() >= 64 {
+			break
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		return ""
+	}
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	return out
 }
 
 // handleGroups returns access groups the current user belongs to,
@@ -173,6 +206,10 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	if err := a.AccessGroupStore.AddUserToGroup(ctx, access.UserID(userID), access.GroupID(id)); err != nil {
 		writeInternalError(w, err)
 		return
+	}
+	// Create a default group tag on creation so targets can inherit it.
+	if tag := defaultGroupTag(id); tag != "" {
+		_ = a.AccessGroupStore.SetGroupTags(ctx, access.GroupID(id), []string{tag})
 	}
 
 	w.Header().Set("Content-Type", "application/json")

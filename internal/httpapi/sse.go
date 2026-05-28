@@ -18,10 +18,9 @@ import (
 // write_token_transferred, ...) only to clients that should care
 // about them. Routing is done via the optional ToUsers field on
 // [sessionEventEnvelope]; an empty list reverts to global broadcast
-// for backwards compatibility.
 type SessionEventBroker struct {
 	mu      sync.RWMutex
-	clients map[chan []byte]string // channel -> userID ("" for legacy callers)
+	clients map[chan []byte]string // channel -> userID ("" = broadcast all events)
 }
 
 // NewSessionEventBroker creates a new broker. Call Run() to start the fan-out goroutine.
@@ -29,8 +28,7 @@ func NewSessionEventBroker() *SessionEventBroker {
 	return &SessionEventBroker{clients: make(map[chan []byte]string)}
 }
 
-// Subscribe adds a client channel for the legacy global broadcast
-// stream. Existing tests rely on this signature.
+// Subscribe adds a client channel that receives every event (tests and global session_change).
 func (b *SessionEventBroker) Subscribe() chan []byte {
 	return b.SubscribeFor("")
 }
@@ -118,6 +116,10 @@ func (a *App) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	// Initial comment helps reverse proxies open the stream promptly.
+	if _, err := w.Write([]byte(": connected\n\n")); err != nil {
+		return
+	}
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}

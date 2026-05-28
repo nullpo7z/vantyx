@@ -15,7 +15,7 @@ import (
 // It returns true when:
 //
 //   - The Origin header is missing and VANTYX_ALLOW_WS_NO_ORIGIN=1 with
-//     a loopback peer (for local dev / Playwright tests).
+//     a loopback peer (for local development).
 //   - The origin appears in VANTYX_WS_ALLOWED_ORIGINS (exact match).
 //   - The origin matches the request's own scheme + host.
 func allowedWebSocketOrigin(r *http.Request) bool {

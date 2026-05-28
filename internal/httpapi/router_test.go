@@ -3,9 +3,13 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -322,6 +326,179 @@ func TestApp_CreateTarget_Success(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("new target %s not in admin's target list", created.ID)
+	}
+}
+
+func TestApp_CreateTarget_RejectsBothCredentialSources(t *testing.T) {
+	t.Setenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)))
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
+	sess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	body := []byte(`{"name":"T","host":"10.0.0.1","port":22,"protocol":"ssh","group_id":"default","credential_identity_id":"i1","ssh_key_id":"k1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/targets", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 when both credential sources set, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func testRSAPrivateKeyPEM(t *testing.T) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	der := x509.MarshalPKCS1PrivateKey(key)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der}))
+}
+
+func TestApp_SSHKeysAndIdentities_CRUD_AndApplyOnCreateTarget(t *testing.T) {
+	t.Setenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)))
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("default"))
+
+	sess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+	pemKey := testRSAPrivateKeyPEM(t)
+
+	// Create SSH key
+	body := []byte(fmt.Sprintf(`{"id":"k1","label":"github","ssh_private_key":%q}`, pemKey))
+	req := httptest.NewRequest(http.MethodPost, "/api/ssh-keys", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("create ssh key expected 201, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	var keyResp map[string]any
+	if err := json.NewDecoder(w.Result().Body).Decode(&keyResp); err != nil {
+		t.Fatalf("decode key: %v", err)
+	}
+	if keyResp["key_type"] != "RSA" {
+		t.Fatalf("expected key_type RSA, got %v", keyResp["key_type"])
+	}
+	if _, ok := keyResp["ssh_private_key"]; ok {
+		t.Fatalf("create key response must not include ssh_private_key")
+	}
+
+	// List keys — no secrets
+	req = httptest.NewRequest(http.MethodGet, "/api/ssh-keys", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("list keys expected 200, got %d", w.Result().StatusCode)
+	}
+
+	// Create identity (password + key)
+	body = []byte(`{"id":"i1","label":"home-infra","ssh_username":"root","ssh_password":"secret","ssh_key_id":"k1"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/credential-identities", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("create identity expected 201, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	var identResp map[string]any
+	if err := json.NewDecoder(w.Result().Body).Decode(&identResp); err != nil {
+		t.Fatalf("decode identity: %v", err)
+	}
+	if identResp["auth_method"] != "password_and_key" {
+		t.Fatalf("expected auth_method password_and_key, got %v", identResp["auth_method"])
+	}
+
+	// Target with identity
+	body = []byte(`{"name":"T-identity","host":"10.0.0.11","port":22,"protocol":"ssh","group_id":"default","credential_identity_id":"i1"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/targets", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("create target with identity expected 201, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	var created targetResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&created); err != nil {
+		t.Fatalf("decode target: %v", err)
+	}
+	if created.SSHUsername != "root" || !created.HasStoredCredentials {
+		t.Fatalf("unexpected target after identity apply: %+v", created)
+	}
+
+	// Target with ssh key + manual username
+	body = []byte(`{"name":"T-key","host":"10.0.0.12","port":22,"protocol":"ssh","group_id":"default","ssh_key_id":"k1","ssh_username":"deploy"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/targets", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("create target with ssh key expected 201, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	if err := json.NewDecoder(w.Result().Body).Decode(&created); err != nil {
+		t.Fatalf("decode target: %v", err)
+	}
+	if created.SSHUsername != "deploy" || !created.HasSSHKey {
+		t.Fatalf("unexpected target after key apply: %+v", created)
+	}
+
+	// Delete identity then key
+	req = httptest.NewRequest(http.MethodDelete, "/api/credential-identities/i1", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("delete identity expected 204, got %d", w.Result().StatusCode)
+	}
+	req = httptest.NewRequest(http.MethodDelete, "/api/ssh-keys/k1", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("delete key expected 204, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_SSHKeys_NonAdminForbidden(t *testing.T) {
+	t.Setenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)))
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	if _, err := app.UserStore.CreateUser("user1", "user1", "User123!", auth.RoleUser); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("user1"), access.GroupID("default"))
+
+	sess, err := app.SessionStore.Create("user1")
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/ssh-keys", nil)
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin list ssh-keys expected 403, got %d", w.Result().StatusCode)
 	}
 }
 
@@ -919,6 +1096,94 @@ func TestApp_CreateGroup_EmptyName_BadRequest(t *testing.T) {
 	res := w.Result()
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 for empty name, got %d", res.StatusCode)
+	}
+}
+
+func TestApp_CreateGroup_CreatesDefaultGroupTag(t *testing.T) {
+	ctx := context.Background()
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	sess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	body := []byte(`{"name":"Home","path":""}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/groups", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	var created groupResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	tags, err := app.AccessGroupStore.TagsForGroup(ctx, access.GroupID(created.ID))
+	if err != nil {
+		t.Fatalf("TagsForGroup: %v", err)
+	}
+	if len(tags) != 1 {
+		t.Fatalf("expected 1 default tag, got %v", tags)
+	}
+}
+
+func TestApp_CreateTarget_InheritsGroupTags(t *testing.T) {
+	ctx := context.Background()
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	sess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	// Create group via API so the default group tag is created.
+	body := []byte(`{"name":"Home","path":""}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/groups", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("create group expected 201, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	var grp groupResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&grp); err != nil {
+		t.Fatalf("decode group: %v", err)
+	}
+
+	// Create target in the group.
+	body = []byte(`{"name":"T1","host":"10.0.0.10","port":22,"protocol":"ssh","group_id":"` + grp.ID + `"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/targets", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("create target expected 201, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	var created targetResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&created); err != nil {
+		t.Fatalf("decode target: %v", err)
+	}
+
+	ttags, err := app.TargetStore.TagsForTarget(ctx, access.TargetID(created.ID))
+	if err != nil {
+		t.Fatalf("TagsForTarget: %v", err)
+	}
+	found := false
+	for _, tag := range ttags {
+		if tag == "home" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected inherited tag %q, got %v", "home", ttags)
 	}
 }
 

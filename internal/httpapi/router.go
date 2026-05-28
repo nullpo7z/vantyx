@@ -49,6 +49,8 @@ type App struct {
 	SessionStore     auth.SessionStore
 	TargetStore      access.TargetStore
 	AccessGroupStore access.AccessGroupStore
+	SSHKeyStore             access.SSHKeyStore
+	CredentialIdentityStore access.CredentialIdentityStore
 
 	TerminalSessionManager terminalSessionStarter
 	LoginRateLimiter       *loginRateLimiter
@@ -204,6 +206,8 @@ func NewApp() *App {
 	}
 	targetStore := access.NewSQLiteTargetStore(db, storeCfg, encKey)
 	groupStore := access.NewSQLiteAccessGroupStore(db, storeCfg)
+	sshKeyStore := access.NewSQLiteSSHKeyStore(db, storeCfg, encKey)
+	credIdentityStore := access.NewSQLiteCredentialIdentityStore(db, sshKeyStore, storeCfg, encKey)
 	terminalSessions := session.NewManager()
 	applyTerminalSessionIdleWarn(terminalSessions)
 	rdpSessions := rdpvnc.NewManager()
@@ -238,6 +242,8 @@ func NewApp() *App {
 		SessionStore:            sessionStore,
 		TargetStore:             targetStore,
 		AccessGroupStore:        groupStore,
+		SSHKeyStore:             sshKeyStore,
+		CredentialIdentityStore: credIdentityStore,
 		TerminalSessionManager:  terminalSessions,
 		LoginRateLimiter:        newLoginRateLimiter(),
 		DB:                      db,
@@ -353,6 +359,15 @@ func (a *App) NewRouter() http.Handler {
 	r.Delete("/api/targets/{target_id}", a.handleDeleteTarget)
 	r.Get("/api/targets/{target_id}/tags", a.handleTargetTags)
 	r.Put("/api/targets/{target_id}/tags", a.handleSetTargetTags)
+	// SSH keys and identities (admin-only credential library).
+	r.Get("/api/ssh-keys", a.handleSSHKeysList)
+	r.Post("/api/ssh-keys", a.handleSSHKeysCreate)
+	r.Put("/api/ssh-keys/{key_id}", a.handleSSHKeysUpdate)
+	r.Delete("/api/ssh-keys/{key_id}", a.handleSSHKeysDelete)
+	r.Get("/api/credential-identities", a.handleCredentialIdentitiesList)
+	r.Post("/api/credential-identities", a.handleCredentialIdentitiesCreate)
+	r.Put("/api/credential-identities/{identity_id}", a.handleCredentialIdentitiesUpdate)
+	r.Delete("/api/credential-identities/{identity_id}", a.handleCredentialIdentitiesDelete)
 	// SSH host-key probing (TOFU helper) and host-key adoption /
 	// clearing. Both are admin-only and audited.
 	r.Post("/api/targets/probe-host-key", a.handleProbeHostKey)

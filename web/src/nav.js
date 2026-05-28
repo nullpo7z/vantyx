@@ -10,6 +10,7 @@ let state = {
   navRecordings: null,
   navGroups: null,
   navUsers: null,
+  navCredentials: null,
   navAudit: null,
   navSettings: null,
   navApiRef: null,
@@ -17,15 +18,36 @@ let state = {
 }
 
 function navLinks() {
-  const { navTargets, navSessions, navRecordings, navGroups, navUsers, navAudit, navSettings, navApiRef } = state
-  return [navTargets, navSessions, navRecordings, navGroups, navUsers, navAudit, navSettings, navApiRef].filter(Boolean)
+  const {
+    navTargets,
+    navSessions,
+    navRecordings,
+    navGroups,
+    navUsers,
+    navCredentials,
+    navAudit,
+    navSettings,
+    navApiRef,
+  } = state
+  return [
+    navTargets,
+    navSessions,
+    navRecordings,
+    navGroups,
+    navUsers,
+    navCredentials,
+    navAudit,
+    navSettings,
+    navApiRef,
+  ].filter(Boolean)
 }
 
 function isAdminOnlyNav(el) {
-  const { navGroups, navUsers, navAudit, navSettings, navApiRef } = state
+  const { navGroups, navUsers, navCredentials, navAudit, navSettings, navApiRef } = state
   return (
     el === navGroups ||
     el === navUsers ||
+    el === navCredentials ||
     el === navAudit ||
     el === navSettings ||
     el === navApiRef
@@ -49,6 +71,7 @@ function setNavLinkVisible(el, visible) {
  * @param {HTMLElement} opts.navRecordings
  * @param {HTMLElement} opts.navGroups
  * @param {HTMLElement} opts.navUsers
+ * @param {HTMLElement} opts.navCredentials
  * @param {HTMLElement} opts.navAudit
  * @param {HTMLElement} opts.navSettings
  * @param {() => ({role: string} | null)} opts.getMe
@@ -57,6 +80,7 @@ function setNavLinkVisible(el, visible) {
  * @param {() => void} opts.onRecordings
  * @param {() => void} opts.onGroups
  * @param {() => void} opts.onUsers
+ * @param {() => void} opts.onCredentials
  * @param {() => void} opts.onAudit
  * @param {() => void} opts.onSettings
  */
@@ -66,6 +90,7 @@ export function initNav({
   navRecordings,
   navGroups,
   navUsers,
+  navCredentials,
   navAudit,
   navSettings,
   getMe,
@@ -74,11 +99,23 @@ export function initNav({
   onRecordings,
   onGroups,
   onUsers,
+  onCredentials,
   onAudit,
   onSettings,
 }) {
   const navApiRef = document.getElementById('nav-api-ref')
-  state = { navTargets, navSessions, navRecordings, navGroups, navUsers, navAudit, navSettings, navApiRef, getMe }
+  state = {
+    navTargets,
+    navSessions,
+    navRecordings,
+    navGroups,
+    navUsers,
+    navCredentials,
+    navAudit,
+    navSettings,
+    navApiRef,
+    getMe,
+  }
 
   navTargets.addEventListener('click', (e) => {
     e.preventDefault()
@@ -119,6 +156,15 @@ export function initNav({
     })
   }
 
+  if (navCredentials) {
+    navCredentials.addEventListener('click', (e) => {
+      e.preventDefault()
+      const me = state.getMe && state.getMe()
+      if (!me || me.role !== 'admin') return
+      if (typeof onCredentials === 'function') onCredentials()
+    })
+  }
+
   if (navAudit) {
     navAudit.addEventListener('click', (e) => {
       e.preventDefault()
@@ -142,7 +188,7 @@ export function initNav({
  * Mark the supplied tab as active and refresh per-link visibility based
  * on the current user's role.
  *
- * @param {'targets'|'sessions'|'recordings'|'groups'|'users'|'audit'|'settings'} tab
+ * @param {'targets'|'sessions'|'recordings'|'groups'|'users'|'credentials'|'audit'|'settings'} tab
  */
 export function setActiveNav(tab) {
   const { navTargets, navRecordings, navGroups, getMe } = state
@@ -162,6 +208,7 @@ export function setActiveNav(tab) {
     recordings: state.navRecordings,
     groups: state.navGroups,
     users: state.navUsers,
+    credentials: state.navCredentials,
     audit: state.navAudit,
     settings: state.navSettings,
   }[tab]

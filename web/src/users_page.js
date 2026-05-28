@@ -1,17 +1,7 @@
 import API from './api.js'
 import { t } from './i18n.js'
+import { validateOptionalUserId } from './validation.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
-
-const ID_MAX_LENGTH = 512
-const ID_PATTERN = /^[A-Za-z0-9_-]+$/
-
-function validateOptionalUserId(rawId) {
-  if (!rawId) return null
-  if (rawId.length > ID_MAX_LENGTH || !ID_PATTERN.test(rawId)) {
-    return t('users.validateUserId')
-  }
-  return null
-}
 
 // ユーザー管理ページ全体を描画する
 export async function renderUsersPage({

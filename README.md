@@ -13,43 +13,76 @@ exposes a unified REST + WebSocket API for the bundled single-page UI.
 
 ## Highlights
 
-- **Browser terminal** for SSH and Telnet (xterm.js + WebSocket), with
-  session resume, NAWS, and persistent shells.
-- **Browser remote desktop** for VNC via noVNC (RDP bridge is on the [roadmap](docs/roadmap.md)).
-- **File transfer** UI for SFTP, FTP, remote TFTP, and a built-in TFTP server
-  for network-equipment provisioning.
-- **CLI gateway**: log into Vantyx via `ssh user@vantyx` and proxy out to
-  any target you have access to.
-- **Session recording**: every interactive shell can be recorded in
-  asciinema format and replayed in the UI.
-- **Audit pipeline**: every API call and session event is captured and can
-  be forwarded to an external syslog / SIEM endpoint.
-- Follows the spirit of **OWASP ASVS Level 2** (best-effort, not a formal audit) for sensitive-data storage and transport.
+- **Browser terminal** for SSH and Telnet (xterm.js + WebSocket): session
+  resume, NAWS, persistent shells, and SSH host-key TOFU with fingerprint
+  adoption on the target record.
+- **Collaborative terminal sessions** (SSH / Telnet): invite other users to
+  the same session—one writer, read-only viewers, named or link invitations,
+  write-token request/grant, and live UI sync over SSE. See
+  [docs/collaborative-sessions.md](docs/collaborative-sessions.md).
+- **Browser remote desktop**: VNC via noVNC; RDP targets use an
+  xfreerdp + Xvfb + x11vnc chain in the browser. Multi-user VNC attach is on
+  the [roadmap](docs/roadmap.md).
+- **File transfer** for SFTP, FTP, remote TFTP, and a built-in TFTP server,
+  plus background transfer jobs with progress SSE.
+- **Credential library** (admin): separate **Keys** (private PEM only) and
+  **Identities** (username + auth). Apply to targets via Identity, Key + manual
+  username, or inline entry. See [docs/credentials.md](docs/credentials.md).
+- **Tag-based access control** on groups, targets, and users.
+- **CLI gateway**: `ssh user@vantyx` and proxy to allowed targets.
+- **Session recording** in asciinema format (browser and CLI sessions).
+- **Audit pipeline** with optional syslog / SIEM forwarding.
+- Follows the spirit of **OWASP ASVS Level 2** (best-effort, not a formal audit)
+  for sensitive-data storage and transport.
 
 ## Quickstart (Docker)
 
+Published image: [`nullpo7z/vantyx:latest`](https://hub.docker.com/r/nullpo7z/vantyx)
+
 ```bash
-docker compose up --build
+git clone https://github.com/nullpo7z/vantyx.git
+cd vantyx
+cp .env.example .env
+# Edit .env: set VANTYX_EXTERNAL_HOST (browser hostname/IP) and
+# VANTYX_SSH_PASSWORD_ENCRYPTION_KEY (from: openssl rand -base64 32)
+# Edit /path/to/vantyx in docker-compose.yml (e.g. /opt/vantyx)
+mkdir -p /path/to/vantyx/{certs,data,recordings}
+
+docker compose pull    # fetch nullpo7z/vantyx:latest (no local build)
+docker compose up -d   # uses docker-compose.yml (operations)
 ```
 
-| Port    | Purpose                                                                                        |
-|---------|------------------------------------------------------------------------------------------------|
-| `80`    | Always 301-redirects to HTTPS (cannot be disabled).                                            |
-| `443`   | The application (REST API + SPA). Inside the container the listeners bind to `8080` / `8443`. |
-| `69/udp`| Forwarded to the embedded TFTP server (`6969/udp` inside the container).                       |
+Open `https://<VANTYX_EXTERNAL_HOST>/` in your browser (you may need to accept
+the self-signed TLS warning on first start).
 
-- **TLS**: on first start, if `/app/certs/tls.crt` and `tls.key` are absent, a
-  self-signed certificate is generated and persisted in the `vantyx_certs`
-  volume. Replace it by mounting your own certificate and setting
-  `VANTYX_TLS_CERT_FILE` / `VANTYX_TLS_KEY_FILE`.
-- **Default admin**: `admin` / `Admin123!` — change it immediately after
-  first login.
-- **Data persistence**: SQLite lives at `data/vantyx.db` by default. Override
-  with `VANTYX_SQLITE_PATH` and mount the directory in your container.
+To build from source while developing, use [docker-compose.dev.yml](docker-compose.dev.yml):
 
-For server-IP TLS coverage, add SANs through `VANTYX_TLS_SANS`
-(comma-separated DNS names or IPs). When the value changes, delete the
-`vantyx_certs` volume so the certificate is regenerated.
+```bash
+docker compose -f docker-compose.dev.yml up --build -d
+```
+
+| Port     | Purpose                                                                                        |
+|----------|------------------------------------------------------------------------------------------------|
+| `80`     | Always 301-redirects to HTTPS (cannot be disabled).                                            |
+| `443`    | The application (REST API + SPA). Inside the container the listeners bind to `8080` / `8443`. |
+| `2222`   | CLI SSH gateway (`ssh -p 2222 admin@<host>`)                                                   |
+| `69/udp` | Forwarded to the embedded TFTP server (`6969/udp` inside the container).                       |
+
+- **TLS**: a self-signed certificate is created on first start under
+  `/path/to/vantyx/certs`. For production, mount your own cert via
+  `VANTYX_TLS_CERT_FILE` / `VANTYX_TLS_KEY_FILE`, or set `VANTYX_TLS_SANS` and
+  remove `certs` to regenerate.
+- **Initial admin**: username `admin`. If `VANTYX_INITIAL_ADMIN_PASSWORD` is unset, a random
+  password is printed once to the container logs on first start; you must change it on first
+  login. Set `VANTYX_INITIAL_ADMIN_PASSWORD` in `.env` to choose your own before first boot.
+- **Data persistence**: host paths `/path/to/vantyx/data` (SQLite) and
+  `/path/to/vantyx/recordings`. Create the directories and edit the paths in
+  `docker-compose.yml` before `docker compose up`.
+
+| Compose file | Purpose |
+|--------------|---------|
+| [docker-compose.yml](docker-compose.yml) | **Operations** — pull `nullpo7z/vantyx:latest` (no `build`) |
+| [docker-compose.dev.yml](docker-compose.dev.yml) | **Development** — `docker compose … up --build` from the repo |
 
 ## Architecture
 
@@ -113,7 +146,6 @@ Lint, test, and coverage:
 make fmt    # gofmt + goimports + eslint --fix
 make lint   # golangci-lint + eslint
 make test   # go test ./... + go vet ./...
-make e2e    # Playwright E2E (requires Docker)
 ```
 
 ## Security

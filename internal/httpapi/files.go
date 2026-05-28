@@ -140,7 +140,7 @@ func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, use
 			writeJSONErrorKey(w, r, "files.sftpDisabled", http.StatusForbidden)
 			return nil, false
 		}
-		if target.SSHPrivateKey != "" && strings.HasPrefix(target.SSHPrivateKey, secret.CiphertextVersionPrefix) {
+		if target.SSHPrivateKey != "" && secret.IsEncrypted(target.SSHPrivateKey) {
 			writeJSONErrorKey(w, r, "files.credentialsDecryptFailed", http.StatusInternalServerError)
 			return nil, false
 		}

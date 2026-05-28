@@ -123,7 +123,6 @@ const ja = {
     sshKeysLoading: '読み込み中…',
     sshKeyAddLabel: '公開鍵を追加（authorized_keys 形式の1行）',
     sshKeyDelete: '削除',
-    sshKeyConfirmDelete: 'この公開鍵を削除しますか？',
     sshKeyDeleteFailed: '削除に失敗しました',
     sshKeyAddRequired: '公開鍵を1行で入力してください。',
     sshKeyAddFailed: '登録に失敗しました。',

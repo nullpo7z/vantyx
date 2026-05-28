@@ -127,7 +127,6 @@ const en = {
     sshKeysLoading: 'Loading…',
     sshKeyAddLabel: 'Add a public key (one line in authorized_keys format)',
     sshKeyDelete: 'Delete',
-    sshKeyConfirmDelete: 'Delete this public key?',
     sshKeyDeleteFailed: 'Failed to delete',
     sshKeyAddRequired: 'Enter a public key on a single line.',
     sshKeyAddFailed: 'Failed to register.',

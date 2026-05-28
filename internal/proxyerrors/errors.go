@@ -81,9 +81,9 @@ func WrapTCPDialError(proto string, err error) error {
 		}
 		return &UserFacingError{
 			Err:        err,
-			Message:    "Failed to connect to " + proto + ": " + msg + " (check host, port, and that the service is running).",
+			Message:    "Failed to connect to " + proto + ". Check host, port, and that the service is running.",
 			MessageKey: "proxy.dialFailed",
-			Vars:       []any{"proto", proto, "reason", msg},
+			Vars:       []any{"proto", proto},
 		}
 	}
 }

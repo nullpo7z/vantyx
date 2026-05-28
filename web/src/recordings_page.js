@@ -2,6 +2,80 @@ import API from './api.js'
 import * as AsciinemaPlayer from 'asciinema-player'
 import 'asciinema-player/dist/bundle/asciinema-player.css'
 import { t } from './i18n.js'
+import { showProgressOverlay, uiAlert } from './ui_dialog.js'
+
+function formatBytes(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v) || v < 0) return '0 B'
+  if (v < 1024) return `${v} B`
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`
+  if (v < 1024 * 1024 * 1024) return `${(v / (1024 * 1024)).toFixed(1)} MB`
+  return `${(v / (1024 * 1024 * 1024)).toFixed(1)} GB`
+}
+
+async function downloadRecordingWithProgress(url, filename, formatLabel) {
+  const progress = showProgressOverlay({
+    title: t('recordings.downloadProgressTitle'),
+    message: t('recordings.downloadConverting', { format: formatLabel }),
+  })
+  progress.setProgress(null)
+
+  try {
+    const res = await fetch(url, { credentials: 'include' })
+    if (!res.ok) {
+      if (res.status === 503) {
+        throw new Error(t('recordings.downloadFailedNoTools'))
+      }
+      throw new Error(t('recordings.downloadFailed'))
+    }
+
+    const total = Number.parseInt(res.headers.get('Content-Length') || '', 10) || 0
+    const body = res.body
+    if (!body) {
+      progress.setMessage(t('recordings.downloadReceiving'))
+      if (total > 0) progress.setProgress(0)
+      const blob = await res.blob()
+      progress.setProgress(100)
+      return blob
+    }
+
+    progress.setMessage(t('recordings.downloadReceiving'))
+    const reader = body.getReader()
+    const chunks = []
+    let loaded = 0
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value)
+      loaded += value.length
+      if (total > 0) {
+        if (loaded === value.length) progress.setProgress(0)
+        const pct = Math.min(100, Math.round((loaded / total) * 100))
+        progress.setProgress(pct)
+        progress.setDetail(
+          t('recordings.downloadProgressDetail', {
+            percent: pct,
+            loaded: formatBytes(loaded),
+            total: formatBytes(total),
+          }),
+        )
+      } else {
+        progress.setProgress(null)
+        progress.setDetail(t('recordings.downloadProgressBytes', { loaded: formatBytes(loaded) }))
+      }
+    }
+
+    progress.setProgress(100)
+    progress.setMessage(t('recordings.downloadSaving'))
+    return new Blob(chunks, { type: res.headers.get('Content-Type') || undefined })
+  } finally {
+    progress.close()
+  }
+}
+
+/** Overlay opacity for recording playback watermark (0–1). */
+const RECORDING_WATERMARK_OPACITY = 0.32
 
 function defaultDateRange() {
   const to = new Date()
@@ -40,7 +114,7 @@ export async function renderRecordingsPage({
   const fromVal = recordingsFilterFrom || dates.from
   const toVal = recordingsFilterTo || dates.to
 
-  function showRecordingPlayerModal(recordingId, label, userId, sessionId) {
+  function showRecordingPlayerModal(recordingId, label, userId, sessionId, startedAt) {
     const modal = document.getElementById('recording-player-modal')
     if (!modal) return
     modal.classList.remove('hidden')
@@ -48,6 +122,29 @@ export async function renderRecordingsPage({
     const watermarkText = [userId, sessionId].filter(Boolean).length
       ? [userId && `User: ${userId}`, sessionId && `Session: ${sessionId}`].filter(Boolean).join(' · ')
       : ''
+    // Always render a watermark layer so it can't silently disappear when
+    // metadata is missing. Fall back to recordingId. Include timestamps.
+    const ts = String(startedAt || '').trim()
+    const stamp = ts ? `Recorded: ${ts}` : `Generated: ${new Date().toISOString()}`
+    const watermarkLabel =
+      (watermarkText ? `${watermarkText} · ${stamp}` : '') ||
+      (recordingId ? `Recording: ${recordingId} · ${stamp}` : `Vantyx · ${stamp}`)
+    const wmHtml = (() => {
+      const esc = (s) => escapeHtml(String(s || ''))
+      const line = esc(watermarkLabel)
+      const block = `
+        <div class="w-[420px] h-[300px] p-4 flex items-center justify-center">
+          <div class="transform -rotate-12 font-mono text-sm leading-tight text-center text-white/70"
+            style="text-shadow: 0 0 1px rgba(0,0,0,0.55), 0 0 3px rgba(0,0,0,0.35);">
+            <div>${line}</div>
+            <div class="mt-1">${line}</div>
+          </div>
+        </div>
+      `
+      // 60 blocks is enough to cover typical modal sizes with wrapping.
+      return Array.from({ length: 60 }).map(() => block).join('')
+    })()
+
     modal.innerHTML = `
       <div id="recording-player-backdrop" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-slate-900 rounded-lg shadow-xl w-full max-w-4xl mx-4 overflow-hidden border border-slate-700 flex flex-col max-h-[90vh]">
@@ -55,15 +152,11 @@ export async function renderRecordingsPage({
             <h3 class="font-semibold text-slate-200">${escapeHtml(t('recordings.playerTitle', { label: label || recordingId }))}</h3>
             <button id="recording-player-close" class="text-slate-400 hover:text-white text-2xl leading-none transition-colors">&times;</button>
           </div>
-          <div id="recording-player-wrapper" class="p-4 overflow-auto flex-1 min-h-0 relative">
+          <div id="recording-player-wrapper" class="p-4 overflow-auto flex-1 min-h-0 min-h-[60vh] relative">
             <div id="recording-player-container"></div>
-            ${
-              watermarkText
-                ? `<div id="recording-watermark" class="absolute inset-0 pointer-events-none flex items-end justify-center pb-2 text-slate-500/70 text-xs font-mono select-none" aria-hidden="true">${escapeHtml(
-                    watermarkText,
-                  )}</div>`
-                : ''
-            }
+            <div id="recording-watermark" class="absolute inset-0 pointer-events-none select-none flex flex-wrap content-start z-[999]" style="opacity: ${RECORDING_WATERMARK_OPACITY}" aria-hidden="true">
+              ${wmHtml}
+            </div>
           </div>
         </div>
       </div>
@@ -75,6 +168,25 @@ export async function renderRecordingsPage({
     } catch (err) {
       container.innerHTML = `<p class="text-sm text-red-400">${escapeHtml(t('recordings.loadingPlayer', { error: err.message || String(err) }))}</p>`
     }
+
+    const ensureWatermarkPlacement = () => {
+      const wm = modal.querySelector('#recording-watermark')
+      const wrap = modal.querySelector('#recording-player-wrapper')
+      if (!wm || !wrap) return
+      const fsEl = document.fullscreenElement
+      const target = fsEl || wrap
+      if (wm.parentElement !== target) {
+        if (target instanceof HTMLElement) {
+          const pos = window.getComputedStyle(target).position
+          if (pos === 'static' || !pos) target.style.position = 'relative'
+        }
+        target.appendChild(wm)
+      }
+    }
+
+    const onFsChange = () => ensureWatermarkPlacement()
+    document.addEventListener('fullscreenchange', onFsChange)
+    ensureWatermarkPlacement()
     const close = () => {
       if (player && typeof player.dispose === 'function') {
         try {
@@ -82,6 +194,11 @@ export async function renderRecordingsPage({
         } catch {
           /* ignore */
         }
+      }
+      try {
+        document.removeEventListener('fullscreenchange', onFsChange)
+      } catch {
+        /* ignore */
       }
       modal.classList.add('hidden')
       modal.innerHTML = ''
@@ -154,7 +271,7 @@ export async function renderRecordingsPage({
                   r.id,
                 )}" data-label="${escapeHtml(label)}" data-user-id="${escapeHtml(r.user_id || '')}" data-session-id="${escapeHtml(
                   r.session_id || '',
-                )}">${t('recordings.play')}</button>
+                )}" data-started-at="${escapeHtml(r.started_at || '')}">${t('recordings.play')}</button>
                 <a href="/api/recordings/${encodeURIComponent(r.id)}/file?format=cast" download="${escapeHtml(
                   r.id,
                 )}.cast" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">.cast</a>
@@ -314,30 +431,35 @@ export async function renderRecordingsPage({
           btn.dataset.label || '',
           btn.dataset.userId || '',
           btn.dataset.sessionId || '',
+          btn.dataset.startedAt || '',
         )
       })
     })
     mainContent.querySelectorAll('.recording-download-video').forEach((a) => {
       a.addEventListener('click', async (e) => {
         e.preventDefault()
+        if (a.dataset.downloading === '1') return
         const url = a.getAttribute('href')
         const format = a.dataset.format || 'gif'
+        const formatLabel = format.toUpperCase()
         const filename = a.getAttribute('download') || `recording.${format}`
+        const prevText = a.textContent
+        a.dataset.downloading = '1'
+        a.classList.add('opacity-50', 'pointer-events-none')
+        a.textContent = t('recordings.downloading')
         try {
-          const res = await fetch(url, { credentials: 'include' })
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({ message: res.statusText }))
-            alert(err.message || t('recordings.downloadFailedNoTools'))
-            return
-          }
-          const blob = await res.blob()
+          const blob = await downloadRecordingWithProgress(url, filename, formatLabel)
           const x = document.createElement('a')
           x.href = URL.createObjectURL(blob)
           x.download = filename
           x.click()
           URL.revokeObjectURL(x.href)
         } catch (err) {
-          alert(err.message || t('recordings.downloadFailed'))
+          await uiAlert(err instanceof Error ? err.message : t('recordings.downloadFailed'))
+        } finally {
+          delete a.dataset.downloading
+          a.classList.remove('opacity-50', 'pointer-events-none')
+          a.textContent = prevText
         }
       })
     })

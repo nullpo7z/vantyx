@@ -3,11 +3,30 @@ import { t as tr } from './i18n.js'
 /** 組み込み TFTP 用の内部ターゲット（SSH/Telnet の TFTP トグルで自動作成）。一覧には出さず SSH 行の「ファイル」から操作する。 */
 function isEmbeddedTftpCompanionTarget(t, targets) {
   if (t.protocol !== 'tftp' || !t.host) return false
+  // 手動で追加された protocol=tftp ターゲットは補助ではないので隠さない。
+  // 補助ターゲットは UI が `${name} (TFTP)` の形式で作る。
+  const name = (t.name || '').trim()
+  if (!name.endsWith(' (TFTP)')) return false
   return targets.some(
     (x) =>
       x.host === t.host &&
       (x.protocol === 'ssh' || x.protocol === 'telnet') &&
       x.tftp_enabled,
+  )
+}
+
+/** 旧 UI が自動作成した FTP 補助ターゲット。一覧には出さず SSH 行の ftp_enabled で操作する。 */
+function isEmbeddedFtpCompanionTarget(t, targets) {
+  if (t.protocol !== 'ftp' || !t.host) return false
+  // 手動で追加された protocol=ftp ターゲットは補助ではないので隠さない。
+  // 補助ターゲットは UI が `${name} (FTP)` の形式で作っていた。
+  const name = (t.name || '').trim()
+  if (!name.endsWith(' (FTP)')) return false
+  return targets.some(
+    (x) =>
+      x.host === t.host &&
+      (x.protocol === 'ssh' || x.protocol === 'telnet') &&
+      x.ftp_enabled,
   )
 }
 
@@ -55,14 +74,13 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
   const targetTags = (t) => (Array.isArray(t.tags) ? t.tags : [])
   // ホスト単位で TFTP/FTP ターゲット有無と、SSH/Telnet の機能フラグを管理する。
   const tftpActiveByHost = {}
-  const ftpActiveByHost = {}
   const tftpCapableByTargetId = {}
   targets.forEach((t) => {
     if (t.protocol === 'tftp' && t.host) {
-      tftpActiveByHost[t.host] = t
-    }
-    if (t.protocol === 'ftp' && t.host) {
-      ftpActiveByHost[t.host] = t
+      // ホームの TFTP トグルが作る補助ターゲットのみ ON として扱う。
+      if (isEmbeddedTftpCompanionTarget(t, targets)) {
+        tftpActiveByHost[t.host] = t
+      }
     }
   })
   targets.forEach((t) => {
@@ -70,7 +88,12 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
       tftpCapableByTargetId[t.id] = true
     }
   })
-  const visibleTargets = targets.filter((t) => !isEmbeddedTftpCompanionTarget(t, targets))
+  // ホーム画面では補助ターゲットを隠すが、サーバー管理では全ターゲットを表示して管理できるようにする。
+  const visibleTargets = isManageMode
+    ? targets
+    : targets.filter(
+      (t) => !isEmbeddedTftpCompanionTarget(t, targets) && !isEmbeddedFtpCompanionTarget(t, targets),
+    )
   const rows = visibleTargets
     .slice()
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
@@ -78,19 +101,20 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
       const tags = targetTags(t)
       const isTftpCapableHost = !!tftpCapableByTargetId[t.id]
       const activeTftp = t.protocol === 'ssh' || t.protocol === 'telnet' ? tftpActiveByHost[t.host] || null : null
-      const activeFtp = t.protocol === 'ssh' || t.protocol === 'telnet' ? ftpActiveByHost[t.host] || null : null
+      const hasFtpEnabled =
+        (t.protocol === 'ssh' || t.protocol === 'telnet') && !!t.ftp_enabled
       // SFTP 有効判定は DB の sftp_enabled のみを使用する（タグには依存しない）。
       const hasSftpEnabled = t.protocol !== 'ssh' ? true : t.sftp_enabled !== false
       const showFileBtn =
-        (t.protocol === 'ssh' &&
-          ((hasSftpEnabled && (t.has_stored_credentials || t.has_ssh_key)) || activeFtp || activeTftp)) ||
+        ((t.protocol === 'ssh' || t.protocol === 'telnet') &&
+          (((t.protocol === 'ssh' && hasSftpEnabled && (t.has_stored_credentials || t.has_ssh_key))) || hasFtpEnabled || activeTftp)) ||
         t.protocol === 'ftp' ||
         t.protocol === 'tftp'
       // ホーム画面では、「TFTP を使用するホスト」（サーバー管理で機能フラグ ON のホスト）のみトグルを表示する。
       // トグルがない行でも同じ幅のプレースホルダを表示しておき、横幅のガタつきを防ぐ。
       const tftpToggleHtml =
         !isManageMode && (t.protocol === 'ssh' || t.protocol === 'telnet') && isTftpCapableHost
-          ? `<label class="group inline-flex items-center justify-end gap-2 text-[11px] text-slate-600 mr-2 cursor-pointer w-[96px]">
+          ? `<label class="group vantyx-switch inline-flex items-center justify-end gap-2 text-[11px] text-slate-600 mr-2 cursor-pointer w-[96px]">
                 <input
                   type="checkbox"
                   class="tftp-toggle sr-only"
@@ -98,10 +122,10 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
                   data-tftp-host="${escapeHtml(t.host)}"
                   data-tftp-existing-id="${activeTftp ? escapeHtml(activeTftp.id) : ''}"
                   ${activeTftp ? 'checked' : ''} />
-                <span class="inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-slate-300 bg-slate-200 transition-colors duration-200 group-has-[:checked]:border-sky-500 group-has-[:checked]:bg-sky-600">
-                  <span class="pointer-events-none inline-block h-4 w-4 shrink-0 translate-x-0.5 rounded-full bg-white shadow transition-transform duration-200 group-has-[:checked]:translate-x-4"></span>
+                <span class="vantyx-switch-track inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-[background-color,border-color] duration-200" aria-hidden="true">
+                  <span class="vantyx-switch-thumb pointer-events-none inline-block h-4 w-4 shrink-0 translate-x-0.5 rounded-full transition-transform duration-200 group-has-[:checked]:translate-x-4" aria-hidden="true"></span>
                 </span>
-                <span>TFTP</span>
+                <span class="vantyx-switch-label">TFTP</span>
               </label>`
           : '<span class="inline-block w-[96px] mr-2"></span>'
       return `
@@ -133,8 +157,6 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
                     t.needs_passphrase ? '1' : '0'
                   }" data-target-has-tftp-for-host="${activeTftp ? '1' : '0'}" data-target-tftp-id="${
                     activeTftp ? escapeHtml(activeTftp.id) : ''
-                  }" data-target-has-ftp-for-host="${activeFtp ? '1' : '0'}" data-target-ftp-id="${
-                    activeFtp ? escapeHtml(activeFtp.id) : ''
                   }" data-target-sftp-enabled="${hasSftpEnabled ? '1' : '0'}" data-target-ftp-enabled="${
                     t.ftp_enabled ? '1' : '0'
                   }" data-target-tftp-enabled="${t.tftp_enabled ? '1' : '0'}" data-target-ssh-host-key-fp="${escapeHtml(t.ssh_host_key_fingerprint || '')}"
@@ -161,6 +183,7 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
                 data-files-protocol="${escapeHtml(t.protocol)}"
                 data-files-host="${escapeHtml(t.host)}"
                 data-files-sftp-enabled="${hasSftpEnabled ? '1' : '0'}"
+                data-files-ftp-enabled="${hasFtpEnabled ? '1' : '0'}"
                 data-files-disabled="${showFileBtn ? '0' : '1'}"
               >${tr('targets.filesBtnLabel')}</button>
               ${renderHomeConnectButton(t, escapeHtml)}

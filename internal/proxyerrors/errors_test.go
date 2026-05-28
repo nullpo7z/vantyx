@@ -97,7 +97,7 @@ func TestBridgeErrorKey_CoversAllBranches(t *testing.T) {
 			err:      errors.New("some other dial error"),
 			proto:    "SSH",
 			wantKey:  "proxy.dialFailed",
-			wantVars: []any{"proto", "SSH", "reason", "some other dial error"},
+			wantVars: []any{"proto", "SSH"},
 		},
 	}
 	for _, tc := range cases {

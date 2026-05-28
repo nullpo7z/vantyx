@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,53 @@ import (
 
 	"github.com/nullpo7z/vantyx/internal/auth"
 )
+
+var (
+	errRecordingVideoTools  = errors.New("recording video tools missing")
+	errRecordingVideoExport = errors.New("recording video export failed")
+)
+
+func (a *App) userCanViewSessionRecordings(ctx context.Context, userID, sessionID string) bool {
+	userID = strings.TrimSpace(userID)
+	sessionID = strings.TrimSpace(sessionID)
+	if userID == "" || sessionID == "" || a == nil || a.DB == nil {
+		return false
+	}
+	var n int
+	// A user may view a session's recordings once they have consumed an invitation
+	// for that session (named invite or single-use link). This is backed by the
+	// persistent session_invitations table rather than the in-memory room state.
+	//
+	// NOTE: multi-use link invitations only record the first consumer's user ID
+	// today (invitee_user_id is COALESCE'd), so this check is best-effort for that
+	// mode until we introduce a per-consumer usage table.
+	err := a.DB.QueryRowContext(ctx, `
+		SELECT COUNT(1)
+		FROM session_invitations
+		WHERE session_id = ?
+		  AND invitee_user_id = ?
+		  AND revoked_at IS NULL
+		  AND use_count > 0
+	`, sessionID, userID).Scan(&n)
+	return err == nil && n > 0
+}
+
+// auditRecordingExportFailure logs tool/export failures for operators; never
+// returned to API clients.
+func auditRecordingExportFailure(stage string, out []byte, runErr error) {
+	detail := strings.TrimSpace(string(out))
+	if detail == "" && runErr != nil {
+		detail = runErr.Error()
+	}
+	const maxDetail = 4096
+	if len(detail) > maxDetail {
+		detail = detail[:maxDetail] + "…"
+	}
+	audit("recording_export_failed", auditFields{
+		"stage":  stage,
+		"detail": detail,
+	})
+}
 
 // handleListRecordings returns recordings for the current user
 // (metadata only, no file_path). Admins may pass user_id to list
@@ -60,8 +109,24 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	channelType := strings.TrimSpace(q.Get("channel_type"))
 	sessionID := strings.TrimSpace(q.Get("session_id"))
 
-	query := `SELECT id, user_id, target_id, session_id, channel_type, started_at, ended_at, COALESCE(session_name, ''), COALESCE(session_description, '') FROM recordings WHERE user_id = ?`
-	args := []interface{}{filterUserID}
+	query := `SELECT id, user_id, target_id, session_id, channel_type, started_at, ended_at, COALESCE(session_name, ''), COALESCE(session_description, '') FROM recordings WHERE `
+	args := []interface{}{}
+	// Normal users can list:
+	//  - their own recordings
+	//  - recordings of sessions they joined via invitations
+	// Admins listing another user stay scoped to that user's recordings only.
+	if filterUserID == userID {
+		query += `(user_id = ? OR session_id IN (
+			SELECT session_id FROM session_invitations
+			WHERE invitee_user_id = ?
+			  AND revoked_at IS NULL
+			  AND use_count > 0
+		))`
+		args = append(args, filterUserID, userID)
+	} else {
+		query += `user_id = ?`
+		args = append(args, filterUserID)
+	}
 	if targetID != "" {
 		query += ` AND target_id = ?`
 		args = append(args, targetID)
@@ -150,7 +215,11 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var filePath string
-	err := a.DB.QueryRowContext(r.Context(), `SELECT file_path FROM recordings WHERE id = ? AND user_id = ?`, recordingID, userID).Scan(&filePath)
+	var sessionID sql.NullString
+	var startedAt sql.NullString
+	var ownerID string
+	err := a.DB.QueryRowContext(r.Context(), `SELECT file_path, session_id, started_at, user_id FROM recordings WHERE id = ?`, recordingID).
+		Scan(&filePath, &sessionID, &startedAt, &ownerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSONErrorKey(w, r, "recordings.notFound", http.StatusNotFound)
 		return
@@ -158,6 +227,25 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeInternalError(w, err)
 		return
+	}
+	ownerID = strings.TrimSpace(ownerID)
+	// Authorization: owner can always fetch; admins can fetch any; invitees can fetch
+	// recordings for sessions they joined.
+	if ownerID != userID {
+		allowed := false
+		if a.UserStore != nil {
+			if u, uerr := a.UserStore.GetByID(userID); uerr == nil && u != nil && u.Role == auth.RoleAdmin {
+				allowed = true
+			}
+		}
+		if !allowed && sessionID.Valid && strings.TrimSpace(sessionID.String) != "" {
+			allowed = a.userCanViewSessionRecordings(r.Context(), userID, sessionID.String)
+		}
+		if !allowed {
+			// Fail closed and avoid leaking that the recording exists.
+			writeJSONErrorKey(w, r, "recordings.notFound", http.StatusNotFound)
+			return
+		}
 	}
 	recordingDir := os.Getenv("VANTYX_RECORDINGS_DIR")
 	if recordingDir == "" {
@@ -215,15 +303,21 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.Close()
-	// GIF or WebM: convert with agg (and ffmpeg for webm).
-	outPath, contentType, disposition, err := convertCastToVideo(castPath, format)
+	// GIF or WebM: convert with agg + ffmpeg, then burn a watermark.
+	wmText := watermarkTextForRecording(userID, sessionID.String, startedAt.String)
+	outPath, contentType, disposition, err := convertCastToVideo(castPath, format, wmText)
 	if err != nil {
-		audit("recording_convert_failed", auditFields{
-			"id":     recordingID,
-			"format": format,
-			"error":  err.Error(),
-		})
-		writeJSONErrorKey(w, r, "recordings.videoUnavailable", http.StatusServiceUnavailable, "error", err)
+		key := "recordings.videoExportFailed"
+		if errors.Is(err, errRecordingVideoTools) {
+			key = "recordings.videoToolsRequired"
+		} else if !errors.Is(err, errRecordingVideoExport) {
+			audit("recording_convert_failed", auditFields{
+				"id":     recordingID,
+				"format": format,
+				"error":  err.Error(),
+			})
+		}
+		writeJSONErrorKey(w, r, key, http.StatusServiceUnavailable)
 		return
 	}
 	defer os.Remove(outPath)
@@ -233,19 +327,151 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer out.Close()
+	if st, statErr := out.Stat(); statErr == nil && st.Size() >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(st.Size(), 10))
+	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", disposition)
 	_, _ = io.Copy(w, out)
+}
+
+func watermarkTextForRecording(userID, sessionID, startedAt string) string {
+	userID = strings.TrimSpace(userID)
+	sessionID = strings.TrimSpace(sessionID)
+	startedAt = strings.TrimSpace(startedAt)
+	stamp := ""
+	if startedAt != "" {
+		stamp = "Recorded: " + startedAt
+	} else {
+		stamp = "Generated: " + time.Now().UTC().Format(time.RFC3339)
+	}
+	base := ""
+	if userID != "" && sessionID != "" {
+		base = "User: " + userID + " · Session: " + sessionID
+	} else if userID != "" {
+		base = "User: " + userID
+	} else if sessionID != "" {
+		base = "Session: " + sessionID
+	} else {
+		base = "Vantyx"
+	}
+	return base + " · " + stamp
+}
+
+func writeWatermarkTextFile(dir, text string) (string, error) {
+	f, err := os.CreateTemp(dir, "wm-*.txt")
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	_, werr := f.WriteString(strings.ReplaceAll(text, "\n", " ") + "\n")
+	cerr := f.Close()
+	if werr != nil {
+		_ = os.Remove(name)
+		return "", werr
+	}
+	if cerr != nil {
+		_ = os.Remove(name)
+		return "", cerr
+	}
+	return name, nil
+}
+
+// Watermark tile geometry matches web playback (recordings_page.js).
+const (
+	watermarkTileW     = 420
+	watermarkTileH     = 300
+	watermarkFontSize  = "16"
+	watermarkFontAlpha = "0.28"
+	// Tailwind -rotate-12
+	watermarkRotateRad = "-12*PI/180"
+)
+
+func probeVideoSize(path string) (width, height int, err error) {
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		return 0, 0, err
+	}
+	cmd := exec.Command(ffprobe, "-v", "error", "-select_streams", "v:0",
+		"-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path) // #nosec G204
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, 0, err
+	}
+	parts := strings.Split(strings.TrimSpace(string(out)), "x")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("ffprobe: unexpected size %q", strings.TrimSpace(string(out)))
+	}
+	w, err1 := strconv.Atoi(parts[0])
+	h, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil || w <= 0 || h <= 0 {
+		return 0, 0, fmt.Errorf("ffprobe: invalid dimensions %q", strings.TrimSpace(string(out)))
+	}
+	return w, h, nil
+}
+
+func drawtextOnWatermarkTile(textFile string) string {
+	// Two stacked lines like the SPA watermark block.
+	base := "drawtext=textfile=" + textFile +
+		":reload=0:fontsize=" + watermarkFontSize +
+		":fontcolor=white@" + watermarkFontAlpha +
+		":shadowcolor=black@0.35:shadowx=1:shadowy=1"
+	return base + ":x=(w-text_w)/2:y=(h-text_h)/2-10," +
+		base + ":x=(w-text_w)/2:y=(h-text_h)/2+10," +
+		"rotate=angle=" + watermarkRotateRad + ":fillcolor=black@0:ow=iw:oh=ih"
+}
+
+// buildTiledWatermarkFilter returns a filter_complex prefix that tiles a
+// -12° rotated watermark (same as recording playback) over [0:v], using
+// [1:v] as the transparent tile source.
+func buildTiledWatermarkFilter(videoW, videoH int, textFile string) (filter string, lastLabel string) {
+	cols := (videoW + watermarkTileW - 1) / watermarkTileW
+	rows := (videoH + watermarkTileH - 1) / watermarkTileH
+	if cols < 1 {
+		cols = 1
+	}
+	if rows < 1 {
+		rows = 1
+	}
+
+	var b strings.Builder
+	b.WriteString("[1:v]")
+	b.WriteString(drawtextOnWatermarkTile(textFile))
+	b.WriteString("[wm];")
+
+	cur := "[0:v]"
+	idx := 0
+	for row := 0; row < rows; row++ {
+		for col := 0; col < cols; col++ {
+			idx++
+			next := fmt.Sprintf("[vt%d]", idx)
+			b.WriteString(cur)
+			b.WriteString("[wm]overlay=")
+			b.WriteString(strconv.Itoa(col * watermarkTileW))
+			b.WriteString(":")
+			b.WriteString(strconv.Itoa(row * watermarkTileH))
+			b.WriteString(next)
+			b.WriteString(";")
+			cur = next
+		}
+	}
+	return strings.TrimSuffix(b.String(), ";"), cur
 }
 
 // convertCastToVideo converts a .cast file to gif or webm using agg
 // (and ffmpeg for webm). It returns (outPath, contentType,
 // contentDisposition, error); the caller is responsible for
 // os.Remove(outPath).
-func convertCastToVideo(castPath, format string) (string, string, string, error) {
+func convertCastToVideo(castPath, format, watermarkText string) (string, string, string, error) {
 	aggPath, err := exec.LookPath("agg")
 	if err != nil {
-		return "", "", "", errors.New("agg not found in PATH (install asciinema-agg for GIF/WebM export)")
+		auditRecordingExportFailure("agg_lookup", nil, err)
+		return "", "", "", errRecordingVideoTools
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		auditRecordingExportFailure("ffmpeg_lookup", nil, err)
+		return "", "", "", errRecordingVideoTools
 	}
 	dir := filepath.Dir(castPath)
 	gifFile, err := os.CreateTemp(dir, "rec-*.gif")
@@ -265,31 +491,94 @@ func convertCastToVideo(castPath, format string) (string, string, string, error)
 	cmd := exec.Command(aggPath, "--", castPath, gifPath) // #nosec G204 -- paths from validated castPath and temp file; `--` blocks option injection.
 	if out, runErr := cmd.CombinedOutput(); runErr != nil {
 		_ = os.Remove(gifPath)
-		return "", "", "", errors.New(strings.TrimSpace(string(out)) + ": " + runErr.Error())
+		auditRecordingExportFailure("agg", out, runErr)
+		return "", "", "", errRecordingVideoExport
 	}
+	wmFile := ""
+	if strings.TrimSpace(watermarkText) != "" {
+		wmFile, err = writeWatermarkTextFile(dir, watermarkText)
+		if err != nil {
+			_ = os.Remove(gifPath)
+			return "", "", "", err
+		}
+		defer os.Remove(wmFile)
+	}
+
+	wmTextFileEsc := ""
+	if wmFile != "" {
+		// Path may contain ":"; escape it for ffmpeg filters.
+		wmTextFileEsc = strings.ReplaceAll(wmFile, ":", "\\:")
+	}
+
 	if format == "gif" {
-		return gifPath, "image/gif", `attachment; filename="recording.gif"`, nil
+		outGif, err := os.CreateTemp(dir, "rec-wm-*.gif")
+		if err != nil {
+			_ = os.Remove(gifPath)
+			return "", "", "", err
+		}
+		outGifPath := outGif.Name()
+		outGif.Close()
+		// Better GIF quality: palettegen/paletteuse after watermark.
+		filter := "[0:v]split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"
+		var args []string
+		if wmTextFileEsc != "" {
+			vw, vh := 1920, 1080
+			if w, h, perr := probeVideoSize(gifPath); perr == nil {
+				vw, vh = w, h
+			}
+			tiled, last := buildTiledWatermarkFilter(vw, vh, wmTextFileEsc)
+			filter = tiled + ";" + last + "split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"
+			args = []string{
+				"-y", "-i", gifPath,
+				"-f", "lavfi", "-i", fmt.Sprintf("color=c=black@0:s=%dx%d,format=rgba", watermarkTileW, watermarkTileH),
+				"-filter_complex", filter,
+				"-loop", "0", outGifPath,
+			}
+		} else {
+			args = []string{"-y", "-i", gifPath, "-filter_complex", filter, "-loop", "0", outGifPath}
+		}
+		cmd = exec.Command(ffmpegPath, args...) // #nosec G204
+		if out, runErr := cmd.CombinedOutput(); runErr != nil {
+			_ = os.Remove(outGifPath)
+			auditRecordingExportFailure("ffmpeg_gif", out, runErr)
+			return "", "", "", errRecordingVideoExport
+		}
+		_ = os.Remove(gifPath)
+		return outGifPath, "image/gif", `attachment; filename="recording.gif"`, nil
 	}
-	// WebM: ffmpeg -i gifPath -c:v libvpx-vp9 -pix_fmt yuv420p -an -b:v 0 -crf 30 out.webm.
-	// Use yuv420p (not yuva420p) because terminal GIFs from agg are
-	// opaque. -vf scale ensures even dimensions.
-	ffmpegPath, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		return "", "", "", errors.New("ffmpeg not found in PATH (required for WebM export)")
-	}
+
 	webmFile, err := os.CreateTemp(dir, "rec-*.webm")
 	if err != nil {
 		return "", "", "", err
 	}
 	webmPath := webmFile.Name()
 	webmFile.Close()
-	cmd = exec.Command(ffmpegPath, "-y", "-i", gifPath,
+	args := []string{
+		"-y", "-i", gifPath,
 		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
 		"-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p", "-an", "-b:v", "0", "-crf", "30",
-		webmPath) // #nosec G204
+		webmPath,
+	}
+	if wmTextFileEsc != "" {
+		vw, vh := 1920, 1080
+		if w, h, perr := probeVideoSize(gifPath); perr == nil {
+			vw, vh = w, h
+		}
+		tiled, last := buildTiledWatermarkFilter(vw, vh, wmTextFileEsc)
+		filter := tiled + ";" + last + "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+		args = []string{
+			"-y", "-i", gifPath,
+			"-f", "lavfi", "-i", fmt.Sprintf("color=c=black@0:s=%dx%d,format=rgba", watermarkTileW, watermarkTileH),
+			"-filter_complex", filter,
+			"-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p", "-an", "-b:v", "0", "-crf", "30",
+			webmPath,
+		}
+	}
+	cmd = exec.Command(ffmpegPath, args...) // #nosec G204
 	if out, runErr := cmd.CombinedOutput(); runErr != nil {
 		_ = os.Remove(webmPath)
-		return "", "", "", errors.New("ffmpeg: " + strings.TrimSpace(string(out)))
+		auditRecordingExportFailure("ffmpeg_webm", out, runErr)
+		return "", "", "", errRecordingVideoExport
 	}
 	return webmPath, "video/webm", `attachment; filename="recording.webm"`, nil
 }

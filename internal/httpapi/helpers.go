@@ -111,6 +111,19 @@ func writeJSONErrorKey(w http.ResponseWriter, r *http.Request, key string, code 
 	writeJSONError(w, i18n.TR(r, key, vars...), code)
 }
 
+// writeJSONErrorKeyAudited returns a localized message for key without
+// embedding err.Error() in the API response. err is recorded in audit
+// logs for operators.
+func writeJSONErrorKeyAudited(w http.ResponseWriter, r *http.Request, key string, code int, err error) {
+	if err != nil {
+		audit("api_error", auditFields{
+			"i18n_key": key,
+			"error":    err.Error(),
+		})
+	}
+	writeJSONErrorKey(w, r, key, code)
+}
+
 // writeInternalError audits err and returns a generic 500 response so
 // the client never sees raw error text (OWASP ASVS V8.1).
 //
@@ -149,7 +162,12 @@ func writeProxyError(w http.ResponseWriter, r *http.Request, err error, code int
 		writeJSONErrorKey(w, r, key, code, vars...)
 		return
 	}
-	writeJSONError(w, proxyerrors.BridgeErrorMessage(err), code)
+	if err != nil {
+		audit("proxy_error", auditFields{
+			"error": err.Error(),
+		})
+	}
+	writeJSONErrorKey(w, r, "common.gatewayFailed", code)
 }
 
 // writeAccessValidationError responds with a localized 400 when err is

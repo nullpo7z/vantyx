@@ -130,6 +130,51 @@ body {
 .dark input[type='checkbox'],
 .dark input[type='radio'] { accent-color: var(--vantyx-accent-nav); }
 
+/* TFTP などのカスタムトグル（ホーム画面）。ダークモードでも OFF/ON が判別できるよう
+   トラックとつまみの色を明示する（.bg-white / .bg-slate-200 の一括上書きに依存しない）。 */
+.vantyx-switch-track {
+  border: 1px solid var(--vantyx-border-strong);
+  background-color: #cbd5e1;
+}
+.vantyx-switch-thumb {
+  background-color: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.25);
+}
+.vantyx-switch-label {
+  color: var(--vantyx-text-muted);
+  font-weight: 500;
+}
+.group:has(.tftp-toggle:checked) .vantyx-switch-track,
+.vantyx-switch:has(:checked) .vantyx-switch-track {
+  border-color: #0284c7;
+  background-color: #0ea5e9;
+}
+.group:has(.tftp-toggle:checked) .vantyx-switch-label,
+.vantyx-switch:has(:checked) .vantyx-switch-label {
+  color: #0369a1;
+}
+.dark .vantyx-switch-track {
+  background-color: #64748b;
+  border-color: #94a3b8;
+}
+.dark .vantyx-switch-thumb {
+  background-color: #f8fafc;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+.dark .group:has(.tftp-toggle:checked) .vantyx-switch-track,
+.dark .vantyx-switch:has(:checked) .vantyx-switch-track {
+  border-color: #38bdf8;
+  background-color: #0284c7;
+}
+.dark .group:has(.tftp-toggle:checked) .vantyx-switch-label,
+.dark .vantyx-switch:has(:checked) .vantyx-switch-label {
+  color: #7dd3fc;
+}
+.vantyx-switch:has(:focus-visible) .vantyx-switch-track {
+  outline: 2px solid var(--vantyx-accent-nav);
+  outline-offset: 2px;
+}
+
 /* テーマ切替トグルのアイコン制御 */
 .theme-icon-dark { display: none; }
 .dark .theme-icon-light { display: none; }

@@ -56,6 +56,20 @@ func addColumnIfMissing(ctx context.Context, db *sql.DB, table, col, ddl string)
 	return nil
 }
 
+const schemaMarkCurrent = "schema_v2026_05_28"
+
+func hasMigrationMark(ctx context.Context, db *sql.DB, name string) bool {
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM migration_marks WHERE name = ?`, name).Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
+}
+
+func setMigrationMark(ctx context.Context, db *sql.DB, name string) {
+	_, _ = db.ExecContext(ctx, `INSERT OR IGNORE INTO migration_marks(name) VALUES (?)`, name)
+}
+
 // Migrate applies the minimal schema required for Vantyx.
 // It is safe to call multiple times; CREATE TABLE statements use IF NOT EXISTS.
 func Migrate(db *sql.DB) error {
@@ -220,6 +234,12 @@ func Migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	// Fast-path: the schema is already at the current version.
+	// This avoids re-running dozens of pragma_table_info probes on every startup,
+	// which is especially expensive in test suites that create many temp DBs.
+	if hasMigrationMark(ctx, db, schemaMarkCurrent) {
+		return nil
+	}
 	// Optional columns for targets (SSH credentials).
 	for _, alter := range []struct {
 		col, ddl string
@@ -328,5 +348,6 @@ func Migrate(db *sql.DB) error {
 	// Legacy link rows without max_uses behave as single-use.
 	_, _ = db.ExecContext(ctx, `UPDATE session_invitations SET max_uses = 1
 		WHERE invitee_user_id IS NULL AND max_uses IS NULL`)
+	setMigrationMark(ctx, db, schemaMarkCurrent)
 	return nil
 }

@@ -252,6 +252,7 @@ type fileTransferDownloadRequest struct {
 	Backend  string `json:"backend"`
 	TargetID string `json:"target_id"`
 	Path     string `json:"path"`
+	Transfer string `json:"transfer,omitempty"` // "ftp" or "sftp" for SSH/Telnet targets
 }
 
 // handleFileTransferStartDownload starts a background download.
@@ -314,9 +315,10 @@ func (a *App) handleFileTransferStartDownload(w http.ResponseWriter, r *http.Req
 		writeInternalError(w, err)
 		return
 	}
+	transfer := strings.ToLower(strings.TrimSpace(req.Transfer))
 	go func() {
 		defer cancel()
-		a.runDownloadJob(ctx, job, target, backend, pathParam)
+		a.runDownloadJob(ctx, job, target, backend, pathParam, transfer)
 	}()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -339,7 +341,7 @@ func (a *App) handleFileTransferUpload(w http.ResponseWriter, r *http.Request) {
 	const memoryThresholdMB = 8 // overflow spills to disk (CWE-770).
 	r.Body = http.MaxBytesReader(w, r.Body, maxFileTransferMB<<20)
 	if err := r.ParseMultipartForm(memoryThresholdMB << 20); err != nil { // #nosec G120
-		writeJSONErrorKey(w, r, "files.invalidMultipart", http.StatusBadRequest, "error", err)
+		writeJSONErrorKeyAudited(w, r, "files.invalidMultipart", http.StatusBadRequest, err)
 		return
 	}
 	backend := filetransfer.Backend(strings.TrimSpace(r.FormValue("backend")))
@@ -363,7 +365,7 @@ func (a *App) handleFileTransferUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	file, hdr, err := r.FormFile("file")
 	if err != nil {
-		writeJSONErrorKey(w, r, "files.fileRequired", http.StatusBadRequest, "error", err)
+		writeJSONErrorKeyAudited(w, r, "files.fileRequired", http.StatusBadRequest, err)
 		return
 	}
 	defer file.Close()
@@ -371,7 +373,7 @@ func (a *App) handleFileTransferUpload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if backend == filetransfer.BackendRemote && !protocols.SupportsFileTransfer(target.Protocol) {
+	if backend == filetransfer.BackendRemote && !fileTransferAllowedForTarget(target) {
 		writeJSONErrorKey(w, r, "transfers.notSupportedForTarget", http.StatusBadRequest)
 		return
 	}
@@ -420,8 +422,9 @@ func (a *App) handleFileTransferUpload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(job.Snapshot())
+	transfer := strings.ToLower(strings.TrimSpace(r.FormValue("transfer")))
 	go func() {
 		defer cancel()
-		a.runUploadJob(ctx, job, target, backend, pathParam, tempPath)
+		a.runUploadJob(ctx, job, target, backend, pathParam, tempPath, transfer)
 	}()
 }

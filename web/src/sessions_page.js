@@ -1,6 +1,7 @@
 import API from './api.js'
 import { t } from './i18n.js'
 import { createRealtimeWatcher, POLL_MS, shouldRefreshSessionList } from './sharing_events.js'
+import { uiAlert } from './ui_dialog.js'
 import {
   buildSessionsTableHTML,
   bindSessionListActions,
@@ -179,7 +180,7 @@ export async function renderSessionsPage({
           await cancelBackgroundTransfer(id)
           renderTransfers()
         } catch (err) {
-          alert(err.message || t('sessions.cancelTransferFailed'))
+          await uiAlert(err.message || t('sessions.cancelTransferFailed'))
         }
       })
     })

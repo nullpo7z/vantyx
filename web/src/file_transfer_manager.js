@@ -368,6 +368,7 @@ export async function startBackgroundDownload(opts) {
     backend: opts.backend,
     target_id: opts.targetId,
     path: opts.path,
+    transfer: opts.transfer,
   })
   const ids = loadWatchedIds()
   ids.push(snap.id)
@@ -407,6 +408,7 @@ export function startBackgroundUpload(opts) {
     form.append('target_id', opts.targetId)
     form.append('path', opts.path)
     form.append('file', opts.file)
+    if (opts.transfer) form.append('transfer', opts.transfer)
     const xhr = new XMLHttpRequest()
     xhr.open('POST', '/api/file-transfers/upload')
     xhr.withCredentials = true

@@ -8,6 +8,7 @@ import {
 } from './file_transfer_manager.js'
 import { openTerminalForTarget } from './terminal_launch.js'
 import { t as tr } from './i18n.js'
+import { uiConfirm } from './ui_dialog.js'
 
 function escapeHtml(s) {
   if (s == null) return ''
@@ -43,6 +44,7 @@ export function renderFilesPage(container) {
   const protocol = params.get('protocol') || ''
   const isTftp = protocol === 'tftp'
   const isFtp = protocol === 'ftp'
+  const fileTransferOpts = isFtp ? { transfer: 'ftp' } : {}
   const showTerminalBtn = !isTftp && !isFtp
 
   let currentPath = '/'
@@ -162,6 +164,7 @@ export function renderFilesPage(container) {
         backend: transferBackend,
         targetId,
         path: remotePath,
+        transfer: fileTransferOpts.transfer,
       })
       const t = transfers.find((x) => x.id === tid)
       if (t) t.serverId = snap.id
@@ -179,6 +182,7 @@ export function renderFilesPage(container) {
         targetId,
         path: remotePath,
         file,
+        transfer: fileTransferOpts.transfer,
         onProgress: (pct) => setTransferProgress(tid, pct),
       })
       const t = transfers.find((x) => x.id === tid)
@@ -275,7 +279,7 @@ export function renderFilesPage(container) {
     const refreshBtn = container.querySelector('#files-refresh')
     if (refreshBtn) refreshBtn.disabled = true
     try {
-      const entries = await API.filesList(targetId, currentPath)
+      const entries = await API.filesList(targetId, currentPath, fileTransferOpts)
       renderContent(entries)
     } catch (err) {
       setError(err.message || tr('files.listFailedSimple'))
@@ -389,7 +393,7 @@ export function renderFilesPage(container) {
   const refreshBtn = container.querySelector('#files-refresh')
   if (refreshBtn) refreshBtn.addEventListener('click', () => loadList())
 
-  container.addEventListener('click', (e) => {
+  container.addEventListener('click', async (e) => {
     const row = e.target.closest('.files-row')
     const bread = e.target.closest('.files-breadcrumb')
     const download = e.target.closest('.files-download')
@@ -415,8 +419,8 @@ export function renderFilesPage(container) {
       const path = del.dataset.path
       const name = del.dataset.name || path
       if (!path || path === '/' || path === '') return
-      if (!window.confirm(tr('files.confirmDeleteSimple', { name }))) return
-      API.filesDelete(targetId, path)
+      if (!(await uiConfirm(tr('files.confirmDeleteSimple', { name }), { danger: true }))) return
+      API.filesDelete(targetId, path, fileTransferOpts)
         .then(() => loadList())
         .catch((err) => setError(err.message || tr('files.deleteFailedSimple')))
     }

@@ -7,6 +7,9 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "predev": "node scripts/check-node.mjs",
+    "prebuild": "node scripts/check-node.mjs",
+    "prelint": "node scripts/check-node.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",

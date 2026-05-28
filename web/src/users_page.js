@@ -1,5 +1,6 @@
 import API from './api.js'
 import { t } from './i18n.js'
+import { uiAlert, uiConfirm } from './ui_dialog.js'
 
 const ID_MAX_LENGTH = 512
 const ID_PATTERN = /^[A-Za-z0-9_-]+$/
@@ -40,26 +41,30 @@ export async function renderUsersPage({
           <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(u.username)}</td>
           <td class="px-4 py-2 text-sm text-slate-600">${escapeHtml(u.role || 'user')}</td>
           <td class="px-4 py-2">
+            <button type="button"
+              class="user-ssh-keys-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 shrink-0"
+              data-user-id="${escapeHtml(u.id)}"
+              data-username="${escapeHtml(u.username)}">
+              ${t('users.keysBtn')}
+            </button>
+          </td>
+          <td class="px-4 py-2">
             <div class="flex flex-wrap items-center gap-2">
-              ${
-                userTags.length
-                  ? renderTagPills(userTags)
-                  : '<span class="text-xs text-slate-400">—</span>'
-              }
               <button type="button"
-                class="edit-user-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                class="edit-user-btn shrink-0 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
                 data-user-id="${escapeHtml(u.id)}"
                 data-username="${escapeHtml(u.username)}"
                 data-user-role="${escapeHtml(u.role || 'user')}"
                 data-user-tags="${escapeHtml((userTags || []).join(','))}">
                 ${t('users.edit')}
               </button>
-              <button type="button"
-                class="user-ssh-keys-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                data-user-id="${escapeHtml(u.id)}"
-                data-username="${escapeHtml(u.username)}">
-                ${t('users.keysBtn')}
-              </button>
+              <div class="flex flex-wrap items-center gap-2 min-w-0">
+                ${
+                  userTags.length
+                    ? renderTagPills(userTags)
+                    : '<span class="text-xs text-slate-400">—</span>'
+                }
+              </div>
             </div>
           </td>
         </tr>
@@ -81,12 +86,13 @@ export async function renderUsersPage({
                   <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('users.headerId')}</th>
                   <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('users.headerUsername')}</th>
                   <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('users.headerRole')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('users.headerKeys')}</th>
                   <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('users.headerTags')}</th>
                 </tr>
               </thead>
               <tbody>${
                 rows ||
-                `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">${t('users.listEmpty')}</td></tr>`
+                `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">${t('users.listEmpty')}</td></tr>`
               }</tbody>
             </table>
           </div>
@@ -340,13 +346,13 @@ async function showUserSSHKeysModal({ userId, username, escapeHtml }) {
       : `<p class="text-slate-500 text-sm">${t('users.keysNone')}</p>`
     modal.querySelectorAll('.user-ssh-key-del-btn').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        if (!confirm(t('users.keyConfirmDelete'))) return
+        if (!(await uiConfirm(t('users.keyConfirmDelete'), { danger: true }))) return
         try {
           await API.deleteUserSSHKey(userId, btn.dataset.keyId)
           const keys = await API.userSSHKeys(userId)
           renderList(keys)
         } catch (e) {
-          alert(e.message || t('users.keyDeleteFailed'))
+          await uiAlert(e.message || t('users.keyDeleteFailed'))
         }
       })
     })

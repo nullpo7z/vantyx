@@ -253,7 +253,7 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 				"target_id": targetID,
 				"error":     err.Error(),
 			})
-			writeJSONErrorKey(w, r, "rdp.bridgeFailed", http.StatusInternalServerError, "error", err)
+			writeJSONErrorKey(w, r, "rdp.bridgeFailed", http.StatusInternalServerError)
 			return
 		}
 		if a.RDPVNCManager != nil {

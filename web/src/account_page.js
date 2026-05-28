@@ -1,5 +1,6 @@
 import API from './api.js'
 import { t } from './i18n.js'
+import { uiAlert } from './ui_dialog.js'
 
 export function renderUserInfo({ mainContent, meData, escapeHtml, onChangePassword }) {
   if (!meData) return
@@ -88,7 +89,7 @@ export function showChangePasswordModal() {
     try {
       await API.changePassword(current, newPass)
       close()
-      alert(t('account.success'))
+      await uiAlert(t('account.success'))
     } catch (err) {
       errorEl.textContent = err.message || t('account.failed')
       errorEl.classList.remove('hidden')

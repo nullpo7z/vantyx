@@ -10,6 +10,8 @@ import {
   shouldRefreshTerminalSharing,
 } from './sharing_events.js'
 import { classifyTerminalWsFrameSync } from './terminal_ws_protocol.js'
+import { createHostKeyDialogController } from './host_key_dialog.js'
+import { uiAlert, uiConfirm } from './ui_dialog.js'
 
 function escapeHtml(s) {
   const div = document.createElement('div')
@@ -177,17 +179,9 @@ export function renderTerminalPage(container) {
   // mismatch dialogs can transparently retry the connection after
   // adopting the new fingerprint. Cleared on session_ended.
   let lastCredentials = null
-  // Modal element for the host-key TOFU adopt / mismatch dialog.
-  // We close this proactively when the user navigates away.
-  let hostKeyDialogEl = null
-  // Set to true when the bridge reports a host_key_unknown /
-  // host_key_mismatch frame. The connect-flow ws.onclose handlers
-  // check this to suppress the "session is still running on the
-  // backend" banner — the bridge actually failed before any session
-  // existed, so that banner would be misleading.
-  let sawHostKeyError = false
+  let hostKeyCtrl = null
 
-  function handleTerminalMetaObject(ws, o, { onHostKeyEvent } = {}) {
+  function handleTerminalMetaObject(ws, o) {
     if (o && typeof o.session_id === 'string') {
       setCurrentSessionId(o.session_id)
       credsWrap.classList.add('hidden')
@@ -198,29 +192,12 @@ export function renderTerminalPage(container) {
       }
       return true
     }
-    if (o && o.type === 'host_key_unknown') {
-      sawHostKeyError = true
-      silenceWebSocket(ws)
-      try { ws.close() } catch { /* ignore */ }
-      hideTransientWrapsForHostKeyDialog()
-      onHostKeyEvent?.(o)
-      showHostKeyAdoptDialog(o)
-      return true
-    }
-    if (o && o.type === 'host_key_mismatch') {
-      sawHostKeyError = true
-      silenceWebSocket(ws)
-      try { ws.close() } catch { /* ignore */ }
-      hideTransientWrapsForHostKeyDialog()
-      onHostKeyEvent?.(o)
-      showHostKeyMismatchDialog(o)
-      return true
-    }
+    if (hostKeyCtrl?.handleHostKeyMeta(ws, o)) return true
     return false
   }
 
   /** WebSocket メッセージ共通処理。制御フレームは xterm に書き込まない。 */
-  function handleTerminalWsMessage(ws, ev, { onError, onSessionEnded, onHostKeyEvent } = {}) {
+  function handleTerminalWsMessage(ws, ev, { onError, onSessionEnded } = {}) {
     if (typeof ev.data === 'string' && ev.data.startsWith('session_ended:')) {
       const msg = ev.data.slice('session_ended:'.length).trim() || t('terminal.sessionEndedSuffix')
       if (term) term.write(`\r\n\n${t('terminal.sessionEndedPrefix')} ${msg}\r\n`)
@@ -246,7 +223,7 @@ export function renderTerminalPage(container) {
       return true
     }
     if (frameKind.kind === 'meta') {
-      handleTerminalMetaObject(ws, frameKind.object, { onHostKeyEvent })
+      handleTerminalMetaObject(ws, frameKind.object)
       return true
     }
     if (frameKind.kind !== 'terminal' && frameKind.kind !== 'binary') {
@@ -265,26 +242,6 @@ export function renderTerminalPage(container) {
       term.write(new Uint8Array(ev.data))
     }
     return false
-  }
-
-  function closeHostKeyDialog() {
-    if (!hostKeyDialogEl) return
-    try { hostKeyDialogEl.remove() } catch { /* ignore */ }
-    hostKeyDialogEl = null
-  }
-
-  /**
-   * Detach onmessage / onclose / onerror from a doomed WebSocket so
-   * its async close handshake cannot race a freshly-opened
-   * replacement and clobber the UI. Used by the host-key TOFU /
-   * mismatch flow where we throw away the stale ws and immediately
-   * dial a new one after the user adopts the key.
-   */
-  function silenceWebSocket(ws) {
-    try { ws.onmessage = null } catch { /* ignore */ }
-    try { ws.onclose = null } catch { /* ignore */ }
-    try { ws.onerror = null } catch { /* ignore */ }
-    try { ws.onopen = null } catch { /* ignore */ }
   }
 
   /**
@@ -324,135 +281,12 @@ export function renderTerminalPage(container) {
     connectWithCredentials(username, password, sessionName, sessionDescription, privateKeyPassphrase)
   }
 
-  /**
-   * Generic adopt-or-mismatch modal. Renders {title, body, accept}
-   * with a cancel button. When mismatch=true, also renders a
-   * "I understand the risk" checkbox that gates the accept button.
-   * The accept callback is invoked with no arguments and is expected
-   * to return a Promise that resolves on success.
-   *
-   * `mode` controls the cancel message shown after the user dismisses
-   * the dialog. Both modes render the same error UI ("verification
-   * cancelled — connection cannot be established"), they just differ
-   * in the explanatory body text.
-   */
-  function renderHostKeyDialog({ title, bodyText, acceptLabel, requireCheckbox, onAccept, mode }) {
-    closeHostKeyDialog()
-    const wrap = document.createElement('div')
-    wrap.className = 'fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4'
-    const banner = requireCheckbox
-      ? '<div class="px-5 py-3 border-b border-rose-200 bg-rose-50 text-sm font-semibold text-rose-700 flex items-center gap-2"><span aria-hidden="true">⚠</span><span></span></div>'
-      : ''
-    wrap.innerHTML = `
-      <div class="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 overflow-hidden border border-slate-200/50">
-        <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-          <h3 class="font-semibold text-slate-800" data-host-key-title="1"></h3>
-          <button type="button" data-host-key-close="1" class="text-slate-500 hover:text-slate-700 text-2xl leading-none">&times;</button>
-        </div>
-        ${banner}
-        <div class="px-6 py-5 space-y-4">
-          <pre data-host-key-body="1" class="whitespace-pre-wrap text-sm text-slate-800 font-sans"></pre>
-          ${requireCheckbox ? `<label class="flex items-start gap-2 text-sm text-slate-800"><input type="checkbox" data-host-key-confirm="1" class="mt-0.5 rounded border-slate-300 text-rose-600 focus:ring-rose-500" /><span data-host-key-confirm-label="1"></span></label>` : ''}
-          <p data-host-key-error="1" class="text-sm text-red-600 hidden"></p>
-        </div>
-        <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-          <button type="button" data-host-key-cancel="1" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"></button>
-          <button type="button" data-host-key-accept="1" class="rounded ${requireCheckbox ? 'bg-rose-600 hover:bg-rose-700' : 'bg-sky-600 hover:bg-sky-700'} px-3 py-1.5 text-xs font-medium text-white shadow-sm" disabled></button>
-        </div>
-      </div>
-    `
-    // Inject text via textContent to keep host-supplied fingerprints
-    // out of any HTML interpolation path.
-    wrap.querySelector('[data-host-key-title="1"]').textContent = title
-    wrap.querySelector('[data-host-key-body="1"]').textContent = bodyText
-    wrap.querySelector('[data-host-key-cancel="1"]').textContent = t('hostKey.confirmCancel')
-    const acceptBtn = wrap.querySelector('[data-host-key-accept="1"]')
-    acceptBtn.textContent = acceptLabel
-    if (requireCheckbox) {
-      const checkboxLabel = wrap.querySelector('[data-host-key-confirm-label="1"]')
-      if (checkboxLabel) checkboxLabel.textContent = t('hostKey.mismatchConfirmCheckbox')
-      const cb = wrap.querySelector('[data-host-key-confirm="1"]')
-      cb.addEventListener('change', () => {
-        acceptBtn.disabled = !cb.checked
-      })
-      const bannerSpan = wrap.querySelector('.bg-rose-50 span:last-child')
-      if (bannerSpan) bannerSpan.textContent = title
-    } else {
-      acceptBtn.disabled = false
-    }
-
-    document.body.appendChild(wrap)
-    hostKeyDialogEl = wrap
-
-    const close = () => {
-      closeHostKeyDialog()
-      // After the user declines we land on a clean
-      // "verification cancelled" screen instead of the misleading
-      // "session continuing on backend" / credentials form combo.
-      // The bridge actually failed before any session existed, so
-      // re-submitting the same credentials would just reproduce the
-      // host-key error.
-      showHostKeyCancelledState(mode)
-    }
-    wrap.addEventListener('click', (e) => { if (e.target === wrap) close() })
-    wrap.querySelector('[data-host-key-close="1"]').addEventListener('click', close)
-    wrap.querySelector('[data-host-key-cancel="1"]').addEventListener('click', close)
-    acceptBtn.addEventListener('click', async () => {
-      acceptBtn.disabled = true
-      const errEl = wrap.querySelector('[data-host-key-error="1"]')
-      errEl.classList.add('hidden')
-      try {
-        await onAccept()
-        closeHostKeyDialog()
-        reconnectWithLastCredentials()
-      } catch (err) {
-        errEl.textContent = t('hostKey.updateFailed', { error: err.message || String(err) })
-        errEl.classList.remove('hidden')
-        acceptBtn.disabled = false
-      }
-    })
-  }
-
-  /**
-   * TOFU adoption dialog: server returned host_key_unknown, meaning
-   * no fingerprint is registered yet. The user can adopt the offered
-   * key and the SPA will retry the connection automatically.
-   */
-  function showHostKeyAdoptDialog(o) {
-    const fp = o.fingerprint || ''
-    const host = o.host || ''
-    const port = o.port || 22
-    const tid = o.target_id || targetId
-    renderHostKeyDialog({
-      title: t('hostKey.adoptTitle'),
-      bodyText: t('hostKey.adoptBody', { host, port, fp }),
-      acceptLabel: t('hostKey.adoptAccept'),
-      requireCheckbox: false,
-      onAccept: () => API.updateTargetHostKey(tid, fp),
-      mode: 'unknown',
-    })
-  }
-
-  /**
-   * Mismatch warning: the offered key does not match the registered
-   * fingerprint. The user must check a "I understand the risk"
-   * checkbox before adopting the new key.
-   */
-  function showHostKeyMismatchDialog(o) {
-    const expected = o.expected || ''
-    const offered = o.offered || ''
-    const host = o.host || ''
-    const port = o.port || 22
-    const tid = o.target_id || targetId
-    renderHostKeyDialog({
-      title: t('hostKey.mismatchTitle'),
-      bodyText: t('hostKey.mismatchBody', { host, port, expected, offered }),
-      acceptLabel: t('hostKey.mismatchAccept'),
-      requireCheckbox: true,
-      onAccept: () => API.updateTargetHostKey(tid, offered),
-      mode: 'mismatch',
-    })
-  }
+  hostKeyCtrl = createHostKeyDialogController({
+    targetId,
+    onReconnect: reconnectWithLastCredentials,
+    onBeforeDialog: hideTransientWrapsForHostKeyDialog,
+    onCancelled: showHostKeyCancelledState,
+  })
 
   /**
    * Renders the post-cancel state for a host-key TOFU / mismatch
@@ -464,8 +298,7 @@ export function renderTerminalPage(container) {
    * credentials would just reproduce the same error).
    */
   function showHostKeyCancelledState(mode) {
-    try { hostKeyDialogEl?.remove() } catch { /* ignore */ }
-    hostKeyDialogEl = null
+    hostKeyCtrl?.closeHostKeyDialog()
     try { shellWrap.classList.add('hidden') } catch { /* ignore */ }
     try { disconnectedWrap?.classList.add('hidden') } catch { /* ignore */ }
     try { sessionEndedWrap?.classList.add('hidden') } catch { /* ignore */ }
@@ -659,7 +492,7 @@ export function renderTerminalPage(container) {
 
   function connectResume(sessionId) {
     if (!sessionId) return
-    sawHostKeyError = false
+    hostKeyCtrl?.resetHostKeyError()
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
     errorEl.classList.add('hidden')
@@ -687,7 +520,7 @@ export function renderTerminalPage(container) {
       // and is showing its own dialog (or the post-cancel UI). Don't
       // pretend the session is "still running on the backend" in
       // that case — there is no surviving session.
-      if (sawHostKeyError) return
+      if (hostKeyCtrl?.getSawHostKeyError()) return
       if (currentSessionId) {
         shellWrap.classList.add('hidden')
         disconnectedWrap.classList.remove('hidden')
@@ -726,7 +559,7 @@ export function renderTerminalPage(container) {
     }
     errorEl.classList.add('hidden')
     connectBtn.disabled = true
-    sawHostKeyError = false
+    hostKeyCtrl?.resetHostKeyError()
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
 
@@ -784,7 +617,7 @@ export function renderTerminalPage(container) {
       // (post-cancel) the explanatory error banner. Don't fall back
       // to the generic "session continuing on backend" UI or auto-
       // close the tab — the user needs to interact with the dialog.
-      if (sawHostKeyError) return
+      if (hostKeyCtrl?.getSawHostKeyError()) return
       if (!sawFirstMessage && !sawError) {
         sawError = true
         errorEl.textContent = t('terminal.closedNoFirstNew')
@@ -803,7 +636,7 @@ export function renderTerminalPage(container) {
   function connectWithStoredCredentials(sessionName, sessionDescription, password, privateKeyPassphrase) {
     if (!targetId) return
     errorEl.classList.add('hidden')
-    sawHostKeyError = false
+    hostKeyCtrl?.resetHostKeyError()
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
     const name = typeof sessionName === 'string' ? sessionName.trim() : ''
@@ -865,7 +698,7 @@ export function renderTerminalPage(container) {
       if (term) term.write(`\r\n\n${t('terminal.connectionClosed')}\r\n`)
       // See connectWithCredentials for why the host-key path
       // bypasses these recovery branches.
-      if (sawHostKeyError) return
+      if (hostKeyCtrl?.getSawHostKeyError()) return
       if (!sawFirstMessage && !sawError) {
         sawError = true
         errorEl.textContent = t('terminal.closedNoFirstStored')
@@ -1255,7 +1088,7 @@ export function renderTerminalPage(container) {
       myPendingWriteRequest = true
       renderSharingBanner()
     } catch (err) {
-      alert(t('sharing.requestWriteFailed', { error: err?.message || '' }))
+      await uiAlert(t('sharing.requestWriteFailed', { error: err?.message || '' }))
       if (btn) btn.disabled = false
     }
   }
@@ -1265,7 +1098,7 @@ export function renderTerminalPage(container) {
     if (!sid) return
     // Release is only meaningful if this tab currently holds the token.
     if (!holdsWriteToken()) return
-    if (!confirm(t('sharing.releaseTokenConfirm'))) return
+    if (!(await uiConfirm(t('sharing.releaseTokenConfirm'), { danger: true }))) return
     const btn = container.querySelector('#sharing-release-write')
     if (btn) btn.disabled = true
     try {
@@ -1273,7 +1106,7 @@ export function renderTerminalPage(container) {
       // Best-effort: sync UI immediately instead of waiting for SSE/poll.
       void refreshParticipants(sid)
     } catch {
-      alert(t('sharing.releaseFailed'))
+      await uiAlert(t('sharing.releaseFailed'))
     } finally {
       if (btn) btn.disabled = false
     }
@@ -1477,7 +1310,7 @@ export function renderTerminalPage(container) {
     })
     wrap.querySelector('[data-grant="1"]').addEventListener('click', async () => {
       if (!reqId) return close()
-      try { await API.grantSessionWriteRequest(payload.session_id, reqId) } catch { alert(t('sharing.grantFailed')) }
+      try { await API.grantSessionWriteRequest(payload.session_id, reqId) } catch { await uiAlert(t('sharing.grantFailed')) }
       close()
     })
     wrap.addEventListener('click', (e) => {

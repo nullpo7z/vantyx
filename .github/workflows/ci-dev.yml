@@ -11,34 +11,68 @@ env:
 
 jobs:
   lint-go:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     steps:
+      - name: Verify runner OS tools
+        run: |
+          set -euo pipefail
+          for cmd in git tar gzip curl; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              echo "Missing required command: $cmd (see docs/self-hosted-runner.md)"
+              exit 1
+            fi
+          done
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.3"
-          cache: true
+          cache: false
+      - name: Verify Go toolchain
+        run: |
+          go version
+          command -v gofmt >/dev/null
       - name: Go fmt check
         run: |
           if [ -n "$(gofmt -l .)" ]; then
             echo "Go files are not formatted. Run gofmt."
             exit 1
           fi
+      - name: Install golangci-lint
+        # Self-hosted: golangci-lint-action goinstall often fails mid-download.
+        # Install once on the runner (or rely on GOMODCACHE) and retry on flake.
+        env:
+          GOPROXY: https://proxy.golang.org,direct
+        run: |
+          set -euo pipefail
+          GOBIN="$(go env GOPATH)/bin"
+          mkdir -p "$GOBIN"
+          export PATH="$GOBIN:$PATH"
+          if ! command -v golangci-lint >/dev/null 2>&1; then
+            for attempt in 1 2 3; do
+              if go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2; then
+                break
+              fi
+              echo "golangci-lint install attempt ${attempt} failed, retrying..."
+              sleep 15
+            done
+          fi
+          golangci-lint version
+          echo "$GOBIN" >> "$GITHUB_PATH"
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          # Pin to a known-good v2 release; "latest" can break CI when
-          # upstream cuts a new major (e.g. v1 -> v2 broke the schema).
-          version: v2.12.2
-          # Build the linter with the runner's Go toolchain so it
-          # matches the language version targeted by go.mod (the
-          # prebuilt binary lags upstream Go releases).
-          install-mode: goinstall
-          args: --config=./configs/golangci.yml --issues-exit-code=1
+        run: golangci-lint run --config=./configs/golangci.yml --issues-exit-code=1
 
   lint-fe:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     steps:
+      - name: Verify runner OS tools
+        run: |
+          set -euo pipefail
+          for cmd in git tar gzip curl; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              echo "Missing required command: $cmd (see docs/self-hosted-runner.md)"
+              exit 1
+            fi
+          done
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
@@ -67,16 +101,27 @@ jobs:
           npx tsc --noEmit
 
   test-go:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     steps:
+      - name: Verify runner OS tools
+        run: |
+          set -euo pipefail
+          for cmd in git tar gzip curl; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              echo "Missing required command: $cmd (see docs/self-hosted-runner.md)"
+              exit 1
+            fi
+          done
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.3"
-          cache: true
+          cache: false
+      - name: Verify Go toolchain
+        run: go version
       - name: Run tests
         run: |
-          go test ./...
+          go test ./... -timeout 10m
       - name: Compute coverage (informational)
         run: |
           go test ./internal/access ./internal/auth ./internal/httpapi ./internal/netutil ./internal/session ./internal/sshproxy -covermode=atomic -coverprofile=coverage.out

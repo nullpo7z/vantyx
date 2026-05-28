@@ -318,6 +318,8 @@ func (a *App) NewRouter() http.Handler {
 	// Access groups.
 	r.Get("/api/groups", a.handleGroups)
 	r.Post("/api/groups", a.handleCreateGroup)
+	r.Put("/api/groups/{group_id}", a.handleUpdateGroup)
+	r.Delete("/api/groups/{group_id}", a.handleDeleteGroup)
 	r.Get("/api/groups/{group_id}/members", a.handleGroupMembers)
 	r.Post("/api/groups/{group_id}/members", a.handleAddGroupMember)
 	r.Delete("/api/groups/{group_id}/members/{user_id}", a.handleRemoveGroupMember)

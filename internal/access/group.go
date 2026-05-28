@@ -44,6 +44,8 @@ type AccessGroup struct {
 type AccessGroupStore interface {
 	Create(ctx context.Context, id GroupID, name string) (*AccessGroup, error)
 	Get(ctx context.Context, id GroupID) (*AccessGroup, error)
+	// Update updates mutable fields of an access group.
+	Update(ctx context.Context, id GroupID, name string) (*AccessGroup, error)
 	// Delete removes an access group. Implementations should define whether this is
 	// a physical delete or a soft delete, and document the behavior.
 	Delete(ctx context.Context, id GroupID) error

@@ -5,7 +5,6 @@
 
 import API from './api.js'
 import { captureNextQueryParam, consumePostLoginRedirect } from './auth_redirect.js'
-import { renderApp } from './app.js'
 import { applyServerLocale, t } from './i18n.js'
 
 /**
@@ -69,6 +68,7 @@ export function renderChangePassword(container) {
     try {
       await API.changePassword(current, newPw)
       if (consumePostLoginRedirect()) return
+      const { renderApp } = await import('./app.js')
       renderApp(container)
     } catch (err) {
       errorEl.textContent = err.message || t('login.changeFailed')
@@ -139,6 +139,7 @@ export function renderLogin(container) {
       } else if (consumePostLoginRedirect()) {
         /* navigating to invitation / deep link */
       } else {
+        const { renderApp } = await import('./app.js')
         renderApp(container)
       }
     } catch (err) {

@@ -174,6 +174,31 @@ const API = {
     return res.json()
   },
 
+  async updateGroup(groupId, { name }) {
+    const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ name }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to update group')
+    }
+    return res.json()
+  },
+
+  async deleteGroup(groupId) {
+    const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete group')
+    }
+  },
+
   async createTarget({ name, host, port, protocol, group_id, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, sftp_enabled, ftp_enabled, tftp_enabled, ssh_host_key_fingerprint }) {
     const payload = {
       name,
@@ -698,10 +723,11 @@ const API = {
     }
   },
 
-  /** SFTP: ディレクトリ一覧 */
-  async filesList(targetId, path = '/') {
+  /** リモートファイル: ディレクトリ一覧（transfer: 'ftp' | 'sftp' で SSH ターゲットの転送方式を指定） */
+  async filesList(targetId, path = '/', { transfer } = {}) {
     const q = new URLSearchParams()
     if (path && path !== '') q.set('path', path)
+    if (transfer) q.set('transfer', transfer)
     const res = await fetch(`/api/targets/${encodeURIComponent(targetId)}/files?${q}`, { credentials: 'include' })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
@@ -710,9 +736,10 @@ const API = {
     return res.json()
   },
 
-  /** SFTP: ファイルダウンロード（Blob を返す） */
-  async filesDownload(targetId, path) {
+  /** リモートファイル: ダウンロード（Blob を返す） */
+  async filesDownload(targetId, path, { transfer } = {}) {
     const q = new URLSearchParams({ path })
+    if (transfer) q.set('transfer', transfer)
     const res = await fetch(`/api/targets/${encodeURIComponent(targetId)}/files/download?${q}`, { credentials: 'include' })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
@@ -721,12 +748,15 @@ const API = {
     return res.blob()
   },
 
-  /** SFTP: ファイルアップロード */
-  async filesUpload(targetId, path, file) {
+  /** リモートファイル: アップロード */
+  async filesUpload(targetId, path, file, { transfer } = {}) {
     const form = new FormData()
     form.append('path', path)
     form.append('file', file)
-    const res = await fetch(`/api/targets/${encodeURIComponent(targetId)}/files/upload`, {
+    const uploadUrl = transfer
+      ? `/api/targets/${encodeURIComponent(targetId)}/files/upload?transfer=${encodeURIComponent(transfer)}`
+      : `/api/targets/${encodeURIComponent(targetId)}/files/upload`
+    const res = await fetch(uploadUrl, {
       method: 'POST',
       credentials: 'include',
       body: form,
@@ -797,12 +827,14 @@ const API = {
     return res.blob()
   },
 
-  async fileTransferStartDownload({ backend, target_id, path }) {
+  async fileTransferStartDownload({ backend, target_id, path, transfer }) {
+    const body = { backend, target_id, path }
+    if (transfer) body.transfer = transfer
     const res = await fetch('/api/file-transfers/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ backend, target_id, path }),
+      body: JSON.stringify(body),
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
@@ -811,9 +843,10 @@ const API = {
     return res.json()
   },
 
-  /** SFTP: ファイル・ディレクトリ削除 */
-  async filesDelete(targetId, path) {
+  /** リモートファイル: ファイル・ディレクトリ削除 */
+  async filesDelete(targetId, path, { transfer } = {}) {
     const q = new URLSearchParams({ path })
+    if (transfer) q.set('transfer', transfer)
     const res = await fetch(`/api/targets/${encodeURIComponent(targetId)}/files?${q}`, {
       method: 'DELETE',
       credentials: 'include',

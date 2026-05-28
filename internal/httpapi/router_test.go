@@ -27,6 +27,13 @@ import (
 func newTestApp(t *testing.T) *App {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "httpapi.db")
+	// Copy the pre-migrated template DB so NewApp's migration fast-path triggers.
+	// This keeps the suite under typical CI timeouts.
+	if len(httpapiTestDBTemplate) > 0 {
+		if err := os.WriteFile(dbPath, httpapiTestDBTemplate, 0o600); err != nil {
+			t.Fatalf("write template db: %v", err)
+		}
+	}
 	if err := os.Setenv("VANTYX_SQLITE_PATH", dbPath); err != nil {
 		t.Fatalf("set env: %v", err)
 	}
@@ -3878,8 +3885,12 @@ func TestConvertCastToVideo_NoAggInPath(t *testing.T) {
 	defer func() {
 		_ = os.Setenv("PATH", oldPath)
 	}()
-	if _, _, _, err := convertCastToVideo("/tmp/nonexistent.cast", "gif"); err == nil {
+	_, _, _, err := convertCastToVideo("/tmp/nonexistent.cast", "gif", "User: admin")
+	if err == nil {
 		t.Fatal("expected error when agg is not found in PATH")
+	}
+	if !errors.Is(err, errRecordingVideoTools) {
+		t.Fatalf("expected errRecordingVideoTools, got %v", err)
 	}
 }
 

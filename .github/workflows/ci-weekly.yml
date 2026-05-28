@@ -44,7 +44,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.3"
-          cache: true
+          cache: false
       - name: Install gosec
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@latest

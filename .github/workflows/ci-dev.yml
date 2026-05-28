@@ -26,7 +26,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.3"
-          cache: true
+          cache: false
       - name: Verify Go toolchain
         run: |
           go version
@@ -116,7 +116,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.3"
-          cache: true
+          cache: false
       - name: Verify Go toolchain
         run: go version
       - name: Run tests

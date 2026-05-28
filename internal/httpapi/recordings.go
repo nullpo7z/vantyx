@@ -520,7 +520,7 @@ func convertCastToVideo(castPath, format, watermarkText string) (string, string,
 		outGif.Close()
 		// Better GIF quality: palettegen/paletteuse after watermark.
 		filter := "[0:v]split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"
-		args := []string{"-y", "-i", gifPath, "-loop", "0", outGifPath}
+		var args []string
 		if wmTextFileEsc != "" {
 			vw, vh := 1920, 1080
 			if w, h, perr := probeVideoSize(gifPath); perr == nil {

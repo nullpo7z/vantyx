@@ -13,11 +13,24 @@ jobs:
   lint-go:
     runs-on: [self-hosted, linux, x64]
     steps:
+      - name: Verify runner OS tools
+        run: |
+          set -euo pipefail
+          for cmd in git tar gzip curl; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              echo "Missing required command: $cmd (see docs/self-hosted-runner.md)"
+              exit 1
+            fi
+          done
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.3"
           cache: true
+      - name: Verify Go toolchain
+        run: |
+          go version
+          command -v gofmt >/dev/null
       - name: Go fmt check
         run: |
           if [ -n "$(gofmt -l .)" ]; then
@@ -51,6 +64,15 @@ jobs:
   lint-fe:
     runs-on: [self-hosted, linux, x64]
     steps:
+      - name: Verify runner OS tools
+        run: |
+          set -euo pipefail
+          for cmd in git tar gzip curl; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              echo "Missing required command: $cmd (see docs/self-hosted-runner.md)"
+              exit 1
+            fi
+          done
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
@@ -81,11 +103,22 @@ jobs:
   test-go:
     runs-on: [self-hosted, linux, x64]
     steps:
+      - name: Verify runner OS tools
+        run: |
+          set -euo pipefail
+          for cmd in git tar gzip curl; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              echo "Missing required command: $cmd (see docs/self-hosted-runner.md)"
+              exit 1
+            fi
+          done
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.3"
           cache: true
+      - name: Verify Go toolchain
+        run: go version
       - name: Run tests
         run: |
           go test ./... -timeout 10m

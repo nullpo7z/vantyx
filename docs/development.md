@@ -6,6 +6,7 @@ project's coding conventions.
 
 ## Prerequisites
 
+- Self-hosted CI runners: see [`self-hosted-runner.md`](self-hosted-runner.md).
 - Go pinned by [`go.mod`](../go.mod) (`go.mod` reports the minimum
   toolchain version).
 - Node.js 20 LTS or newer for the frontend.

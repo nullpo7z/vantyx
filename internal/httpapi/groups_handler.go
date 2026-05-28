@@ -24,6 +24,10 @@ type createGroupRequest struct {
 	Path string `json:"path"`
 }
 
+type updateGroupRequest struct {
+	Name string `json:"name"`
+}
+
 type addGroupMemberRequest struct {
 	UserID string `json:"user_id"`
 }
@@ -174,6 +178,70 @@ func (a *App) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(groupResponse{ID: id, Name: req.Name, Targets: []targetResponse{}})
+}
+
+// handleUpdateGroup updates an access group's name. Admin-only.
+func (a *App) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	groupID := strings.TrimSpace(chi.URLParam(r, "group_id"))
+	if groupID == "" {
+		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
+		return
+	}
+	var req updateGroupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		writeJSONErrorKey(w, r, "groups.nameRequired", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+	updated, err := a.AccessGroupStore.Update(ctx, access.GroupID(groupID), req.Name)
+	if err != nil {
+		if writeAccessValidationError(w, r, err) {
+			return
+		}
+		if errors.Is(err, access.ErrGroupNotFound) {
+			writeJSONErrorKey(w, r, "common.notFound", http.StatusNotFound)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(groupResponse{ID: string(updated.ID), Name: updated.Name, Targets: []targetResponse{}})
+}
+
+// handleDeleteGroup deletes an access group. Admin-only.
+func (a *App) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	groupID := strings.TrimSpace(chi.URLParam(r, "group_id"))
+	if groupID == "" {
+		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+	err := a.AccessGroupStore.Delete(ctx, access.GroupID(groupID))
+	if err != nil {
+		if errors.Is(err, access.ErrGroupNotFound) {
+			writeJSONErrorKey(w, r, "common.notFound", http.StatusNotFound)
+			return
+		}
+		if writeAccessValidationError(w, r, err) {
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleGroupMembers returns users belonging to the group. Admin only.

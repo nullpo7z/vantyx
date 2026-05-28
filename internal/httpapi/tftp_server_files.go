@@ -185,7 +185,7 @@ func (a *App) handleTFTPServerUploadFile(w http.ResponseWriter, r *http.Request)
 	const memoryThresholdMB = 8 // overflow spills to disk; bounds memory pressure under parallel uploads (CWE-770).
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadMB<<20)
 	if err := r.ParseMultipartForm(memoryThresholdMB << 20); err != nil { // #nosec G120 -- bounded by MaxBytesReader above
-		writeJSONErrorKey(w, r, "files.invalidMultipart", http.StatusBadRequest, "error", err)
+		writeJSONErrorKeyAudited(w, r, "files.invalidMultipart", http.StatusBadRequest, err)
 		return
 	}
 	pathParam := strings.TrimSpace(r.FormValue("path"))
@@ -204,7 +204,7 @@ func (a *App) handleTFTPServerUploadFile(w http.ResponseWriter, r *http.Request)
 	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
-		writeJSONErrorKey(w, r, "files.fileRequired", http.StatusBadRequest, "error", err)
+		writeJSONErrorKeyAudited(w, r, "files.fileRequired", http.StatusBadRequest, err)
 		return
 	}
 	defer file.Close()

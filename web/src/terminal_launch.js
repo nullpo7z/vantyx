@@ -4,6 +4,7 @@
  */
 
 import { t } from './i18n.js'
+import { uiAlert } from './ui_dialog.js'
 
 export function randomToken() {
   const b = new Uint8Array(16)
@@ -145,7 +146,7 @@ export async function openTerminalForTarget(API, opts) {
     const items = Array.isArray(res?.items) ? res.items : []
     target = items.find((t) => t.id === targetId) || null
   } catch (err) {
-    alert(err.message || t('terminalLaunch.targetFetchFailed'))
+    await uiAlert(err.message || t('terminalLaunch.targetFetchFailed'))
     return
   }
 

@@ -45,8 +45,74 @@ func (a *App) getTargetAndFileClient(w http.ResponseWriter, r *http.Request) (*a
 	return target, client
 }
 
+const defaultFTPPort uint16 = 21
+
+// fileTransferMode reads ?transfer=sftp|ftp from file API requests.
+func fileTransferMode(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(r.URL.Query().Get("transfer")))
+}
+
+// effectiveFileTransferMode picks SFTP vs FTP for SSH/Telnet targets. When
+// transfer is omitted, FTP is used when only ftp_enabled is set.
+func effectiveFileTransferMode(r *http.Request, target *access.Target) string {
+	mode := fileTransferMode(r)
+	if mode != "" {
+		return mode
+	}
+	if (target.Protocol == access.ProtocolSSH || target.Protocol == access.ProtocolTelnet) &&
+		target.FTPEnabled && !target.SFTPEnabled {
+		return "ftp"
+	}
+	return "sftp"
+}
+
+// fileTransferAllowedForTarget reports whether remote file APIs may use this target.
+func fileTransferAllowedForTarget(target *access.Target) bool {
+	if protocols.SupportsFileTransfer(target.Protocol) {
+		return true
+	}
+	return (target.Protocol == access.ProtocolSSH || target.Protocol == access.ProtocolTelnet) && target.FTPEnabled
+}
+
+func ftpPortForTarget(target *access.Target) uint16 {
+	if target.Protocol == access.ProtocolFTP && target.Port > 0 {
+		return target.Port
+	}
+	return defaultFTPPort
+}
+
+func (a *App) openFTPFileClient(w http.ResponseWriter, r *http.Request, userID, targetID string, target *access.Target) (FileTransferClient, bool) {
+	if target.Protocol != access.ProtocolFTP && !target.FTPEnabled {
+		writeJSONErrorKey(w, r, "files.ftpDisabled", http.StatusForbidden)
+		return nil, false
+	}
+	if target.SSHUsername == "" || target.SSHPassword == "" {
+		writeJSONErrorKey(w, r, "files.ftpCredentialsRequired", http.StatusBadRequest)
+		return nil, false
+	}
+	port := ftpPortForTarget(target)
+	client, err := ftp.NewClient(r.Context(), target.Host, port, target.SSHUsername, target.SSHPassword)
+	if err != nil {
+		audit("files_ftp_connect_failed", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+			"error":     err.Error(),
+		})
+		writeJSONErrorKey(w, r, "files.connectFailed", http.StatusBadGateway)
+		return nil, false
+	}
+	return &ftpClientAdapter{Client: client}, true
+}
+
 // openFileTransferClient connects a file transfer client for an already-authorized target.
 func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, userID, targetID string, target *access.Target) (FileTransferClient, bool) {
+	mode := effectiveFileTransferMode(r, target)
+	if (target.Protocol == access.ProtocolSSH || target.Protocol == access.ProtocolTelnet) && mode == "ftp" {
+		return a.openFTPFileClient(w, r, userID, targetID, target)
+	}
 	if !protocols.SupportsFileTransfer(target.Protocol) {
 		writeJSONErrorKey(w, r, "files.transferOnlySSHFTPTFTP", http.StatusBadRequest)
 		return nil, false
@@ -61,7 +127,7 @@ func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, use
 				"target_id": targetID,
 				"error":     err.Error(),
 			})
-			writeJSONErrorKey(w, r, "files.connectFailed", http.StatusBadGateway, "error", err)
+			writeJSONErrorKey(w, r, "files.connectFailed", http.StatusBadGateway)
 			return nil, false
 		}
 		return &tftpClientAdapter{Client: tftpClient}, true
@@ -103,21 +169,7 @@ func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, use
 		}
 		return &sftpClientAdapter{Client: client}, true
 	case access.ProtocolFTP:
-		if target.SSHUsername == "" || target.SSHPassword == "" {
-			writeJSONErrorKey(w, r, "files.ftpCredentialsRequired", http.StatusBadRequest)
-			return nil, false
-		}
-		client, err := ftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword)
-		if err != nil {
-			audit("files_ftp_connect_failed", auditFields{
-				"user_id":   userID,
-				"target_id": targetID,
-				"error":     err.Error(),
-			})
-			writeJSONErrorKey(w, r, "files.connectFailed", http.StatusBadGateway, "error", err)
-			return nil, false
-		}
-		return &ftpClientAdapter{Client: client}, true
+		return a.openFTPFileClient(w, r, userID, targetID, target)
 	default:
 		writeJSONErrorKey(w, r, "files.transferOnlySSHFTPTFTP", http.StatusBadRequest)
 		return nil, false
@@ -197,7 +249,7 @@ func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {
 			"path":      dirPath,
 			"error":     err.Error(),
 		})
-		writeJSONErrorKey(w, r, "files.listFailed", http.StatusBadGateway, "error", err)
+		writeJSONErrorKey(w, r, "files.listFailed", http.StatusBadGateway)
 		return
 	}
 	out := make([]fileEntry, 0, len(entries))
@@ -241,13 +293,13 @@ func (a *App) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 			"path":      filePath,
 			"error":     err.Error(),
 		})
-		writeJSONErrorKey(w, r, "files.openFailed", http.StatusBadGateway, "error", err)
+		writeJSONErrorKey(w, r, "files.openFailed", http.StatusBadGateway)
 		return
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		writeJSONErrorKey(w, r, "files.statFailed", http.StatusBadGateway, "error", err)
+		writeJSONErrorKey(w, r, "files.statFailed", http.StatusBadGateway)
 		return
 	}
 	if info.IsDir() {
@@ -283,7 +335,7 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	const memoryThresholdMB = 8 // overflow spills to disk; bounds memory pressure under parallel uploads (CWE-770).
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadMB<<20)
 	if err := r.ParseMultipartForm(memoryThresholdMB << 20); err != nil { // #nosec G120 -- bounded by MaxBytesReader above
-		writeJSONErrorKey(w, r, "files.invalidMultipart", http.StatusBadRequest, "error", err)
+		writeJSONErrorKey(w, r, "files.invalidMultipart", http.StatusBadRequest)
 		return
 	}
 	pathParam := strings.TrimSpace(r.FormValue("path"))
@@ -300,7 +352,7 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
-		writeJSONErrorKey(w, r, "files.fileRequired", http.StatusBadRequest, "error", err)
+		writeJSONErrorKey(w, r, "files.fileRequired", http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
@@ -312,7 +364,7 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 			"path":      pathParam,
 			"error":     err.Error(),
 		})
-		writeJSONErrorKey(w, r, "files.createFailed", http.StatusBadGateway, "error", err)
+		writeJSONErrorKey(w, r, "files.createFailed", http.StatusBadGateway)
 		return
 	}
 	defer remoteFile.Close()
@@ -322,7 +374,7 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 			"path":      pathParam,
 			"error":     err.Error(),
 		})
-		writeJSONErrorKey(w, r, "files.uploadFailed", http.StatusBadGateway, "error", err)
+		writeJSONErrorKey(w, r, "files.uploadFailed", http.StatusBadGateway)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -357,7 +409,7 @@ func (a *App) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 			"path":      filePath,
 			"error":     err.Error(),
 		})
-		writeJSONErrorKey(w, r, "files.removeFailed", http.StatusBadGateway, "error", err)
+		writeJSONErrorKey(w, r, "files.removeFailed", http.StatusBadGateway)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

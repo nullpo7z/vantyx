@@ -1,6 +1,7 @@
 import API from './api.js'
 import { safeUrl } from './dom_helpers.js'
 import { t as tr } from './i18n.js'
+import { uiAlert, uiConfirm } from './ui_dialog.js'
 
 /** Relative last-activity label for display. */
 export function formatLastSeen(value) {
@@ -329,7 +330,7 @@ export function showSessionEndConfirmModal(
       await onConfirm()
       close()
     } catch (err) {
-      alert(err.message || tr('sessions.endFailed'))
+      await uiAlert(err.message || tr('sessions.endFailed'))
       if (confirmBtn) confirmBtn.disabled = false
     }
   })
@@ -349,7 +350,7 @@ export function bindSessionListActions(container, { openTerminalTab, getRdpResol
       if (mode === 'tftp' && targetId) {
         const tftpTargetId = btn.getAttribute('data-tftp-target-id') || ''
         if (!tftpTargetId) {
-          alert(tr('sessions.tftpParseFailed'))
+          void uiAlert(tr('sessions.tftpParseFailed'))
           return
         }
         const name = `${targetId} (TFTP)`
@@ -414,10 +415,14 @@ export function bindSessionListActions(container, { openTerminalTab, getRdpResol
         }, doEnd)
         return
       }
-      if (!window.confirm(tr('sessions.confirmEnd'))) return
-      doEnd().catch((err) => {
-        alert(err.message || tr('sessions.endFailed'))
-      })
+      void (async () => {
+        if (!(await uiConfirm(tr('sessions.confirmEnd'), { danger: true }))) return
+        try {
+          await doEnd()
+        } catch (err) {
+          await uiAlert(err.message || tr('sessions.endFailed'))
+        }
+      })()
     })
   })
 }

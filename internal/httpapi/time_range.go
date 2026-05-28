@@ -132,7 +132,10 @@ func writeTimeRangeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONErrorKey(w, r, "time.rangeTooLarge", http.StatusBadRequest,
 			"days", maxSearchRangeDays)
 	default:
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		if err != nil {
+			audit("time_range_error", auditFields{"error": err.Error()})
+		}
+		writeJSONErrorKey(w, r, "time.invalidRange", http.StatusBadRequest)
 	}
 }
 

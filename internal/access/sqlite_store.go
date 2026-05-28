@@ -195,6 +195,28 @@ func (s *SQLiteAccessGroupStore) Get(ctx context.Context, id GroupID) (*AccessGr
 	return &g, nil
 }
 
+// Update updates an access group's name.
+func (s *SQLiteAccessGroupStore) Update(ctx context.Context, id GroupID, name string) (*AccessGroup, error) {
+	if err := validateGroupID(id); err != nil {
+		return nil, err
+	}
+	if err := validateName(name); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	res, err := s.db.ExecContext(ctx, `UPDATE access_groups SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, name, string(id))
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, ErrGroupNotFound
+	}
+	return &AccessGroup{ID: id, Name: name}, nil
+}
+
 // Delete removes an access group. Related rows (e.g. user_groups, group_tags, group_targets)
 // are expected to be removed by foreign key cascades if configured.
 func (s *SQLiteAccessGroupStore) Delete(ctx context.Context, id GroupID) error {

@@ -76,7 +76,7 @@ jobs:
           cache: true
       - name: Run tests
         run: |
-          go test ./...
+          go test ./... -timeout 10m
       - name: Compute coverage (informational)
         run: |
           go test ./internal/access ./internal/auth ./internal/httpapi ./internal/netutil ./internal/session ./internal/sshproxy -covermode=atomic -coverprofile=coverage.out

@@ -1,6 +1,7 @@
 import API from './api.js'
 import { t } from './i18n.js'
 import { escapeHtml } from './dom_helpers.js'
+import { uiAlert } from './ui_dialog.js'
 
 function renderInvitationCard(inv) {
   const owner = escapeHtml(inv.owner_username || inv.owner_user_id || '')
@@ -54,7 +55,7 @@ export async function refreshIncomingInvitationsBanner(container, { onJoin } = {
           }
           await refreshIncomingInvitationsBanner(container, { onJoin })
         } catch (err) {
-          alert(err?.message || t('app.incomingInviteJoinFailed'))
+          await uiAlert(err?.message || t('app.incomingInviteJoinFailed'))
         } finally {
           btn.disabled = false
         }

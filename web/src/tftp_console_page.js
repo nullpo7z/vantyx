@@ -9,6 +9,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { t } from './i18n.js'
+import { createHostKeyDialogController } from './host_key_dialog.js'
+import { uiConfirm } from './ui_dialog.js'
 import { classifyTerminalWsFrameSync } from './terminal_ws_protocol.js'
 
 function escapeHtml(s) {
@@ -320,7 +322,7 @@ export function renderTFTPConsolePage(container) {
         const path = delBtn.dataset.path || ''
         const name = delBtn.dataset.name || ''
         if (!path || !tftpTargetId) return
-        if (!confirm(t('tftpConsole.confirmDelete', { name }))) return
+        if (!(await uiConfirm(t('tftpConsole.confirmDelete', { name }), { danger: true }))) return
         setError('')
         try {
           await API.tftpServerDelete(tftpTargetId, path)
@@ -381,6 +383,34 @@ export function renderTFTPConsolePage(container) {
       }
 
       if (xtermEl) {
+        let lastAuthPayload = null
+        const hostKeyCtrl = createHostKeyDialogController({
+          targetId: sshTargetId,
+          onReconnect: () => {
+            if (!lastAuthPayload) {
+              credsWrap?.classList.remove('hidden')
+              xtermEl?.classList.add('hidden')
+              return
+            }
+            showCredError('')
+            hideCredsShowTerm()
+            connectSSH(lastAuthPayload)
+          },
+          onBeforeDialog: () => {
+            xtermEl?.classList.add('hidden')
+            credsWrap?.classList.add('hidden')
+          },
+          onCancelled: (mode) => {
+            const title = t('hostKey.cancelledTitle')
+            const body = mode === 'mismatch'
+              ? t('hostKey.cancelledMismatch')
+              : t('hostKey.cancelledUnknown')
+            showCredError(`${title} — ${body}`)
+            credsWrap?.classList.remove('hidden')
+            xtermEl?.classList.add('hidden')
+          },
+        })
+
         // 初期化
         term = new Terminal({
           fontFamily: '"SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
@@ -433,6 +463,8 @@ export function renderTFTPConsolePage(container) {
         })
 
         function connectSSH(authPayload) {
+          if (authPayload) lastAuthPayload = authPayload
+          hostKeyCtrl.resetHostKeyError()
           const ws = new WebSocket(currentSessionId ? getWsUrlResume(currentSessionId) : getWsUrlNew())
           ws.binaryType = 'arraybuffer'
           sshWs = ws
@@ -454,6 +486,7 @@ export function renderTFTPConsolePage(container) {
             }
             if (frame.kind === 'meta' && frame.object) {
               const obj = frame.object
+              if (hostKeyCtrl.handleHostKeyMeta(ws, obj)) return
               if (!currentSessionId && typeof obj.session_id === 'string' && obj.session_id) {
                 currentSessionId = obj.session_id
                 hideCredsShowTerm()
@@ -477,6 +510,7 @@ export function renderTFTPConsolePage(container) {
             }
           }
           ws.onclose = () => {
+            if (hostKeyCtrl.getSawHostKeyError()) return
             term.write(`\r\n${t('tftpConsole.connectionClosed')}\r\n`)
           }
           ws.onerror = () => {

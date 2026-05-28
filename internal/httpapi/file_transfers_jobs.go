@@ -57,7 +57,7 @@ func (a *App) stageUploadFile(job *filetransfer.Job, src io.Reader, total int64)
 // runDownloadJob is the background goroutine that fetches a remote
 // file into the staging directory and marks the job completed when the
 // SPA can collect it via /api/file-transfers/{id}/content.
-func (a *App) runDownloadJob(ctx context.Context, job *filetransfer.Job, target *access.Target, backend filetransfer.Backend, remotePath string) {
+func (a *App) runDownloadJob(ctx context.Context, job *filetransfer.Job, target *access.Target, backend filetransfer.Backend, remotePath, transfer string) {
 	tempPath, err := os.CreateTemp(a.FileTransferManager.TempDir(), "download-*")
 	if err != nil {
 		a.failTransferJob(job, err.Error())
@@ -81,7 +81,7 @@ func (a *App) runDownloadJob(ctx context.Context, job *filetransfer.Job, target 
 
 	switch backend {
 	case filetransfer.BackendRemote:
-		a.runRemoteDownload(ctx, job, target, remotePath, tempName)
+		a.runRemoteDownload(ctx, job, target, remotePath, tempName, transfer)
 	case filetransfer.BackendTFTPServer:
 		a.runTFTPServerDownload(ctx, job, target, remotePath, tempName)
 	default:
@@ -90,8 +90,8 @@ func (a *App) runDownloadJob(ctx context.Context, job *filetransfer.Job, target 
 }
 
 // runRemoteDownload pulls a file from an SFTP / FTP target.
-func (a *App) runRemoteDownload(ctx context.Context, job *filetransfer.Job, target *access.Target, remotePath, tempName string) {
-	client, err := a.openFileTransferClientNoHTTP(ctx, job.UserID, string(target.ID), target)
+func (a *App) runRemoteDownload(ctx context.Context, job *filetransfer.Job, target *access.Target, remotePath, tempName, transfer string) {
+	client, err := a.openFileTransferClientNoHTTP(ctx, job.UserID, string(target.ID), target, transfer)
 	if err != nil {
 		a.failTransferJob(job, err.Error())
 		return
@@ -189,7 +189,7 @@ func (a *App) runTFTPServerDownload(ctx context.Context, job *filetransfer.Job, 
 
 // runUploadJob is the background goroutine that pushes a previously
 // staged file to the chosen backend.
-func (a *App) runUploadJob(ctx context.Context, job *filetransfer.Job, target *access.Target, backend filetransfer.Backend, remotePath, tempPath string) {
+func (a *App) runUploadJob(ctx context.Context, job *filetransfer.Job, target *access.Target, backend filetransfer.Backend, remotePath, tempPath, transfer string) {
 	defer a.cleanupTransferTemp(tempPath)
 	select {
 	case <-ctx.Done():
@@ -199,7 +199,7 @@ func (a *App) runUploadJob(ctx context.Context, job *filetransfer.Job, target *a
 	}
 	switch backend {
 	case filetransfer.BackendRemote:
-		a.runRemoteUpload(ctx, job, target, remotePath, tempPath)
+		a.runRemoteUpload(ctx, job, target, remotePath, tempPath, transfer)
 	case filetransfer.BackendTFTPServer:
 		a.runTFTPServerUpload(ctx, job, target, remotePath, tempPath)
 	default:
@@ -208,8 +208,8 @@ func (a *App) runUploadJob(ctx context.Context, job *filetransfer.Job, target *a
 }
 
 // runRemoteUpload pushes a staged file to an SFTP / FTP target.
-func (a *App) runRemoteUpload(ctx context.Context, job *filetransfer.Job, target *access.Target, remotePath, tempPath string) {
-	client, err := a.openFileTransferClientNoHTTP(ctx, job.UserID, string(target.ID), target)
+func (a *App) runRemoteUpload(ctx context.Context, job *filetransfer.Job, target *access.Target, remotePath, tempPath, transfer string) {
+	client, err := a.openFileTransferClientNoHTTP(ctx, job.UserID, string(target.ID), target, transfer)
 	if err != nil {
 		a.failTransferJob(job, err.Error())
 		return
@@ -322,9 +322,14 @@ func (a *App) cleanupTransferTemp(temp string) {
 // returns errors instead of HTTP responses. It reuses the HTTP-facing
 // [App.openFileTransferClient] by capturing its response in a recorder
 // and extracting the JSON message.
-func (a *App) openFileTransferClientNoHTTP(ctx context.Context, userID, targetID string, target *access.Target) (FileTransferClient, error) {
+func (a *App) openFileTransferClientNoHTTP(ctx context.Context, userID, targetID string, target *access.Target, transfer string) (FileTransferClient, error) {
 	rec := &responseRecorder{header: make(http.Header)}
 	req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+	if transfer != "" {
+		q := req.URL.Query()
+		q.Set("transfer", transfer)
+		req.URL.RawQuery = q.Encode()
+	}
 	client, ok := a.openFileTransferClient(rec, req, userID, targetID, target)
 	if !ok || client == nil {
 		var er struct {

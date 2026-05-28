@@ -5,6 +5,7 @@
 
 import API from './api.js'
 import { t } from './i18n.js'
+import { uiAlert, uiConfirm } from './ui_dialog.js'
 import { createRealtimeWatcher, POLL_MS, shouldRefreshInviteList } from './sharing_events.js'
 
 let openDialogEl = null
@@ -575,7 +576,7 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
             const { url } = await fetchJoinUrl(id, { forceRegenerate: false })
             revealJoinUrl(url, { regenerated: false })
           } catch (err) {
-            alert(err?.message || t('sharing.inviteFailed', { error: '' }))
+            await uiAlert(err?.message || t('sharing.inviteFailed', { error: '' }))
           } finally {
             btn.disabled = false
           }
@@ -585,13 +586,13 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
         btn.addEventListener('click', async () => {
           const id = btn.getAttribute('data-regenerate-link-id') || ''
           if (!id) return
-          if (!confirm(t('sharing.inviteRegenerateConfirm'))) return
+          if (!(await uiConfirm(t('sharing.inviteRegenerateConfirm'), { danger: true }))) return
           btn.disabled = true
           try {
             const { url } = await fetchJoinUrl(id, { forceRegenerate: true })
             revealJoinUrl(url, { regenerated: true })
           } catch (err) {
-            alert(err?.message || t('sharing.inviteFailed', { error: '' }))
+            await uiAlert(err?.message || t('sharing.inviteFailed', { error: '' }))
           } finally {
             btn.disabled = false
           }
@@ -601,13 +602,13 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
         btn.addEventListener('click', async () => {
           const id = btn.getAttribute('data-delete-id') || ''
           if (!id) return
-          if (!confirm(t('sharing.inviteDeleteConfirm'))) return
+          if (!(await uiConfirm(t('sharing.inviteDeleteConfirm'), { danger: true }))) return
           try {
             await API.revokeSessionInvitation(sessionId, id)
             removeInviteUrlCache(sessionId, id)
             await refreshList()
           } catch (err) {
-            alert(err?.message || t('sharing.inviteFailed', { error: '' }))
+            await uiAlert(err?.message || t('sharing.inviteFailed', { error: '' }))
           }
         })
       })

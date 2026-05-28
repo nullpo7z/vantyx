@@ -30,6 +30,7 @@ import {
 } from './window_helpers.js'
 import { buildAppShellHTML } from './header_template.js'
 import { refreshIncomingInvitationsBanner } from './incoming_invitations.js'
+import { uiAlert, uiChoose, uiConfirm } from './ui_dialog.js'
 import {
   createRealtimeWatcher,
   POLL_MS,
@@ -224,6 +225,7 @@ export function renderApp(container) {
 
   async function showRecordingsPage() {
     disconnectAppSessionEvents()
+    delete mainContent.dataset.treeMode
     mainContent.className = TREE_MAIN_CLASS
     setActiveNav('recordings')
     await renderRecordingsPage({
@@ -467,13 +469,13 @@ export function renderApp(container) {
         : `<p class="text-slate-500 text-sm">${t('app.sshKeyEmpty')}</p>`
       modal.querySelectorAll('.user-ssh-key-del-btn').forEach((btn) => {
         btn.addEventListener('click', async () => {
-          if (!confirm(t('app.sshKeyConfirmDelete'))) return
+          if (!(await uiConfirm(t('app.sshKeyConfirmDelete'), { danger: true }))) return
           try {
             await API.deleteUserSSHKey(userId, btn.dataset.keyId)
             const keys = await API.userSSHKeys(userId)
             renderList(keys)
           } catch (e) {
-            alert(e.message || t('app.sshKeyDeleteFailed'))
+            await uiAlert(e.message || t('app.sshKeyDeleteFailed'))
           }
         })
       })
@@ -782,6 +784,67 @@ export function renderApp(container) {
         await showTreeView('manage')
       } catch (err) {
         errorEl.textContent = err.message || t('app.addUserFailed')
+        errorEl.classList.remove('hidden')
+      } finally {
+        submitBtn.disabled = false
+      }
+    })
+  }
+
+  function showEditGroupModal(group) {
+    const modal = document.getElementById('add-target-modal')
+    modal.classList.remove('hidden')
+    const gid = (group?.id || '').trim()
+    const currentName = (group?.name || '').trim()
+    modal.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-xl mx-4 overflow-hidden border border-slate-200/50">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+            <h3 class="font-semibold text-slate-800">${t('app.editGroupTitle')}</h3>
+            <button id="edit-group-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <form id="edit-group-form">
+            <div class="px-6 py-5 space-y-5">
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldParentGroup')}</label>
+                <div class="text-sm text-slate-800 px-3 py-2 rounded border border-slate-200 bg-slate-50 font-mono">${escapeHtml(gid || '')}</div>
+                <p class="text-xs text-slate-500 mt-1.5">${t('app.editGroupHint')}</p>
+              </div>
+              <div>
+                <label for="edit-group-name" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldName')}</label>
+                <input type="text" id="edit-group-name" required value="${escapeHtml(currentName)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" />
+              </div>
+              <p id="edit-group-error" class="text-sm text-red-600 hidden"></p>
+            </div>
+            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
+              <button type="button" id="edit-group-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
+              <button type="submit" id="edit-group-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('common.save')}</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `
+    const close = () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    modal.querySelector('#edit-group-close')?.addEventListener('click', close)
+    modal.querySelector('#edit-group-cancel')?.addEventListener('click', close)
+    modal.querySelector('#edit-group-form')?.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const errorEl = modal.querySelector('#edit-group-error')
+      const submitBtn = modal.querySelector('#edit-group-submit')
+      errorEl.classList.add('hidden')
+      const name = modal.querySelector('#edit-group-name').value.trim()
+      if (!gid || !name) return
+      submitBtn.disabled = true
+      try {
+        await API.updateGroup(gid, { name })
+        groupsCache = null
+        close()
+        await showTreeView('manage', true)
+      } catch (err) {
+        errorEl.textContent = err.message || t('app.updateFailed')
         errorEl.classList.remove('hidden')
       } finally {
         submitBtn.disabled = false
@@ -1194,6 +1257,8 @@ export function renderApp(container) {
         groupsCache = await API.groups()
       }
       const groups = groupsCache
+      // Ensure renderGroupTree sees the current mode (used for showing group actions).
+      mainContent.dataset.treeMode = mode
       const treeRoot = buildGroupTree(groups || [])
       const treeHtml = renderGroupTree(treeRoot, 0)
       const selectedGroup = (groups || []).find((g) => g.id === selectedGroupId)
@@ -1210,7 +1275,6 @@ export function renderApp(container) {
       const isAdmin = meData?.role === 'admin'
       const showMembersSection = isManageMode && isAdmin && selectedGroupId
 
-      mainContent.dataset.treeMode = mode
       mainContent.innerHTML = `
         <div class="w-full h-full flex flex-col gap-4">
           ${!isManageMode ? '<section id="incoming-invitations-banner" class="hidden w-full bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-4 space-y-3"></section>' : ''}
@@ -1318,13 +1382,14 @@ export function renderApp(container) {
               membersContainer.querySelectorAll('.remove-member-btn').forEach((btn) => {
                 btn.addEventListener('click', async () => {
                   const uid = btn.dataset.userId || ''
-                  if (!uid || !confirm(t('app.confirmRemoveMember', { user: escapeHtml(uid) }))) return
+                  if (!uid) return
+                  if (!(await uiConfirm(t('app.confirmRemoveMember', { user: escapeHtml(uid) }), { danger: true }))) return
                   try {
                     await API.removeGroupMember(selectedGroupId, uid)
                     groupsCache = null
                     await showTreeView('manage', true)
                   } catch (err) {
-                    alert(err.message || t('app.deleteFailed'))
+                    await uiAlert(err.message || t('app.deleteFailed'))
                   }
                 })
               })
@@ -1363,8 +1428,6 @@ export function renderApp(container) {
               group_id: btn.dataset.targetGroupId || '',
               has_tftp_for_host: btn.dataset.targetHasTftpForHost === '1',
               tftp_target_id: btn.dataset.targetTftpId || '',
-              has_ftp_for_host: btn.dataset.targetHasFtpForHost === '1',
-              ftp_target_id: btn.dataset.targetFtpId || '',
               sftp_enabled: btn.dataset.targetSftpEnabled === '1',
               ftp_enabled: btn.dataset.targetFtpEnabled === '1',
               tftp_enabled: btn.dataset.targetTftpEnabled === '1',
@@ -1378,13 +1441,13 @@ export function renderApp(container) {
             const targetId = btn.dataset.targetId || ''
             const targetName = btn.dataset.targetName || ''
             if (!targetId) return
-            if (!confirm(t('app.confirmDeleteTarget', { name: escapeHtml(targetName) || targetId }))) return
+            if (!(await uiConfirm(t('app.confirmDeleteTarget', { name: escapeHtml(targetName) || targetId }), { danger: true }))) return
             try {
               await API.deleteTarget(targetId)
               groupsCache = null
               await showTreeView('manage')
             } catch (err) {
-              alert(err.message || t('app.deleteFailed'))
+              await uiAlert(err.message || t('app.deleteFailed'))
             }
           })
         })
@@ -1511,14 +1574,14 @@ export function renderApp(container) {
                     })
                     if (hasTftpSession) {
                       // アクティブな TFTP セッションがある場合は OFF にできない。
-                      window.alert(t('app.tftpHasActiveAlert'))
+                      await uiAlert(t('app.tftpHasActiveAlert'))
                       chk.checked = true
                       return
                     }
                   } catch (e) {
                     console.error('Failed to check TFTP sessions', e)
                     // セッション状態が確認できない場合は、安全のため OFF を拒否する。
-                    window.alert(t('app.tftpCheckFailed'))
+                    await uiAlert(t('app.tftpCheckFailed'))
                     chk.checked = true
                     return
                   }
@@ -1585,7 +1648,7 @@ export function renderApp(container) {
         // 未対応プロトコル (tftp/ftp 等) はアラート表示。
         mainContent.querySelectorAll('.connect-btn-in-group:not(.terminal-open-btn):not(.vnc-open-btn):not([data-popup-protocol]):not(a)').forEach((btn) => {
           btn.addEventListener('click', () => {
-            alert(t('app.unsupportedProtoAlert'))
+            void uiAlert(t('app.unsupportedProtoAlert'))
           })
         })
       }
@@ -1604,8 +1667,8 @@ export function renderApp(container) {
           if (!targetId) return
           const actions = []
           const sftpEnabled = btn.dataset.filesSftpEnabled === '1'
-          if (proto === 'ssh') {
-            if (sftpEnabled) {
+          if (proto === 'ssh' || proto === 'telnet') {
+            if (proto === 'ssh' && sftpEnabled) {
               actions.push({
                 label: 'SFTP (SSH)',
                 onSelect: () => {
@@ -1614,49 +1677,62 @@ export function renderApp(container) {
                 },
               })
             }
+            const ftpEnabled = btn.dataset.filesFtpEnabled === '1'
+            if (ftpEnabled) {
+              actions.push({
+                label: 'FTP',
+                onSelect: () => {
+                  const url = `/files?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=ftp`
+                  window.location.href = url
+                },
+              })
+            }
             if (hostForTftp) {
-              const ftpTarget = targets.find((t) => t.protocol === 'ftp' && t.host === hostForTftp)
-              if (ftpTarget) {
-                actions.push({
-                  label: 'FTP',
-                  onSelect: () => {
-                    const url = `/files?target_id=${encodeURIComponent(ftpTarget.id)}&target_name=${encodeURIComponent(ftpTarget.name || targetName || '')}&protocol=ftp`
-                    window.location.href = url
-                  },
-                })
-              }
               const tftpTarget = targets.find((t) => t.protocol === 'tftp' && t.host === hostForTftp)
-              const sshTarget = targets.find((t) => t.id === targetId)
-              if (tftpTarget && sshTarget) {
-                actions.push({
-                  label: t('app.tftpProtoLabel'),
-                  onSelect: () => {
-                    const name = tftpTarget.name || hostForTftp
-                    const urlOpts = {
-                      channelTargetId: sshTarget.id,
-                      toUrl: (p) => {
-                        p.delete('target_id')
-                        p.delete('protocol')
-                        p.set('ssh_target_id', sshTarget.id)
-                        p.set('tftp_target_id', tftpTarget.id)
-                        p.set('target_name', name)
-                        return `/tftp-console?${p.toString()}`
+              if (tftpTarget) {
+                if (proto === 'ssh') {
+                  const sshTarget = targets.find((t) => t.id === targetId)
+                  if (sshTarget) {
+                    actions.push({
+                      label: t('app.tftpProtoLabel'),
+                      onSelect: () => {
+                        const name = tftpTarget.name || hostForTftp
+                        const urlOpts = {
+                          channelTargetId: sshTarget.id,
+                          toUrl: (p) => {
+                            p.delete('target_id')
+                            p.delete('protocol')
+                            p.set('ssh_target_id', sshTarget.id)
+                            p.set('tftp_target_id', tftpTarget.id)
+                            p.set('target_name', name)
+                            return `/tftp-console?${p.toString()}`
+                          },
+                        }
+                        if (sshTarget.has_stored_credentials) {
+                          showStoredCredentialModal(
+                            sshTarget.id,
+                            sshTarget.name || targetName,
+                            sshTarget.needs_password,
+                            sshTarget.needs_passphrase,
+                            'ssh',
+                            urlOpts,
+                          )
+                        } else {
+                          showSSHCredentialModal(sshTarget.id, sshTarget.name || targetName, 'ssh', urlOpts)
+                        }
                       },
-                    }
-                    if (sshTarget.has_stored_credentials) {
-                      showStoredCredentialModal(
-                        sshTarget.id,
-                        sshTarget.name || targetName,
-                        sshTarget.needs_password,
-                        sshTarget.needs_passphrase,
-                        'ssh',
-                        urlOpts,
-                      )
-                    } else {
-                      showSSHCredentialModal(sshTarget.id, sshTarget.name || targetName, 'ssh', urlOpts)
-                    }
-                  },
-                })
+                    })
+                  }
+                } else {
+                  // Telnet ホストはコンソール連携しない（TFTP ファイル操作のみ）。
+                  actions.push({
+                    label: 'TFTP',
+                    onSelect: () => {
+                      const url = `/files?target_id=${encodeURIComponent(tftpTarget.id)}&target_name=${encodeURIComponent(tftpTarget.name || hostForTftp || '')}&protocol=tftp`
+                      window.location.href = url
+                    },
+                  })
+                }
               }
             }
           }
@@ -1703,6 +1779,39 @@ export function renderApp(container) {
           showTreeView(mode, true)
         })
       })
+      // Group edit/delete actions (manage mode only).
+      if (isManageMode) {
+        mainContent.querySelectorAll('[data-group-edit="1"]').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            const gid = btn.getAttribute('data-group-id') || ''
+            if (!gid) return
+            const groups = Array.isArray(groupsCache) ? groupsCache : (groupsCache?.items || [])
+            const g = (groups || []).find((x) => x.id === gid) || null
+            if (!g) return
+            showEditGroupModal(g)
+          })
+        })
+        mainContent.querySelectorAll('[data-group-delete="1"]').forEach((btn) => {
+          btn.addEventListener('click', async (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            const gid = btn.getAttribute('data-group-id') || ''
+            const gname = btn.getAttribute('data-group-name') || gid
+            if (!gid) return
+            if (!(await uiConfirm(t('app.confirmDeleteGroup', { name: escapeHtml(gname) || gid }), { danger: true }))) return
+            try {
+              await API.deleteGroup(gid)
+              groupsCache = null
+              if (selectedGroupId === gid) selectedGroupId = ''
+              await showTreeView('manage', true)
+            } catch (err) {
+              await uiAlert(err.message || t('app.deleteFailed'))
+            }
+          })
+        })
+      }
 
     } catch (e) {
       mainContent.dataset.treeMode = mode
@@ -1943,6 +2052,10 @@ export function renderApp(container) {
     modal.querySelectorAll('input[name="add-target-auth-type"]').forEach((radio) => {
       radio.addEventListener('change', syncAddAuthType)
     })
+    // Initial render: apply protocol-dependent visibility immediately.
+    // Without this, the dialog can show only a subset of fields until the
+    // user toggles the protocol dropdown once.
+    syncAddProtocol()
     // Re-probe whenever host or port changes so we never silently
     // commit a fingerprint captured from a different host:port pair.
     const addHostInputForReset = modal.querySelector('#add-target-host')
@@ -2051,21 +2164,31 @@ export function renderApp(container) {
           const accept = t('hostKey.confirmAccept')
           const skip = t('hostKey.confirmSkip')
           const cancel = t('hostKey.confirmCancel')
-          // 3-way confirm: native confirm() can only return yes/no, so
-          // do it as accept (yes) -> skip (custom prompt for no).
-          const ok = window.confirm(`${t('hostKey.confirmTitle')}\n\n${body}\n\n[${accept}] / ${cancel} / ${skip}`)
-          if (ok) {
+          const choice = await uiChoose(
+            `${t('hostKey.confirmTitle')}\n\n${body}`,
+            [
+              { label: accept, value: 'accept', variant: 'primary' },
+              { label: skip, value: 'skip', variant: 'secondary' },
+            ],
+            { cancelLabel: cancel, title: t('hostKey.confirmTitle') },
+          )
+          if (choice === 'accept') {
             payload.ssh_host_key_fingerprint = fp
-          } else {
-            const skipOk = window.confirm(`${t('hostKey.registerWithoutFingerprint')}?\n\n${cancel}`)
+          } else if (choice === 'skip') {
+            const skipOk = await uiConfirm(`${t('hostKey.registerWithoutFingerprint')}?`, { title: t('hostKey.confirmTitle') })
             if (!skipOk) {
               return
             }
+          } else {
+            return
           }
         } else {
           // Probe failed: the operator can still register without a
           // fingerprint if they understand the risk. Otherwise abort.
-          const skipOk = window.confirm(`${addHostKeyStatusEl.textContent || ''}\n\n${t('hostKey.registerWithoutFingerprint')}?`)
+          const skipOk = await uiConfirm(
+            `${addHostKeyStatusEl.textContent || ''}\n\n${t('hostKey.registerWithoutFingerprint')}?`,
+            { title: t('hostKey.confirmTitle') },
+          )
           if (!skipOk) {
             return
           }
@@ -2077,26 +2200,7 @@ export function renderApp(container) {
         if (protocol === 'rdp' && created && created.id) {
           setRdpResolutionForTarget(created.id, rdpW, rdpH)
         }
-        // FTP は引き続き自動で補助ターゲットを作成するが、
-        // TFTP はここではターゲットを自動作成しない（ホーム画面の TFTP トグルのみで起動する）。
-        if (created && created.id && (protocol === 'ssh' || protocol === 'telnet')) {
-          if (enableFtp) {
-            try {
-              await API.createTarget({
-                name: `${name} (FTP)`,
-                host,
-                port: 21,
-                protocol: 'ftp',
-                group_id,
-                path: group_id || '',
-                ssh_username: ssh_username || '',
-                ...(payload.ssh_password !== undefined && { ssh_password: payload.ssh_password }),
-              })
-            } catch (ftpErr) {
-              console.error('Failed to create FTP target', ftpErr)
-            }
-          }
-        }
+        // TFTP / FTP はフラグのみ（ftp_enabled / tftp_enabled）。TFTP サーバー用ターゲットはホームの TFTP トグルのみ。
         modal.classList.add('hidden')
         modal.innerHTML = ''
         groupsCache = null
@@ -2480,7 +2584,6 @@ export function renderApp(container) {
       const enableSftpEdit = !!(editSftpCheckbox && editFileProtocolsWrap && !editFileProtocolsWrap.classList.contains('hidden') && editSftpCheckbox.checked)
       const enableFtpEdit = !!(editFtpCheckbox && editFileProtocolsWrap && !editFileProtocolsWrap.classList.contains('hidden') && editFtpCheckbox.checked)
       const enableTftpEdit = !!(editTftpCheckbox && editFileProtocolsWrap && !editFileProtocolsWrap.classList.contains('hidden') && editTftpCheckbox.checked)
-      const prevFtpEnabled = !!target.has_ftp_for_host
       const prevTftpEnabled = !!target.has_tftp_for_host
       if (!name || !host) {
         errorEl.textContent = t('app.nameHostRequired')
@@ -2518,27 +2621,8 @@ export function renderApp(container) {
           }
         }
         await API.setTargetTags(targetId, tags)
-        // ファイル転送: FTP の補助ターゲットは引き続き自動作成/削除するが、
         // TFTP はここではターゲットを自動作成しない（ホーム画面の TFTP トグルのみで起動する）。
         if (protocol === 'ssh' || protocol === 'telnet') {
-          if (enableFtpEdit && !prevFtpEnabled) {
-            try {
-              await API.createTarget({
-                name: `${name} (FTP)`,
-                host,
-                port: 21,
-                protocol: 'ftp',
-                group_id: selectedGroupId || '',
-                path: target.path || selectedGroupId || '',
-                ssh_username: updatePayload.ssh_username || '',
-                ...(updatePayload.ssh_password !== undefined && { ssh_password: updatePayload.ssh_password }),
-              })
-            } catch (e) { console.error('Failed to create FTP target', e) }
-          } else if (!enableFtpEdit && prevFtpEnabled && target.ftp_target_id) {
-            try {
-              await API.deleteTarget(target.ftp_target_id)
-            } catch (e) { console.error('Failed to delete FTP target', e) }
-          }
           if (!enableTftpEdit && prevTftpEnabled && target.tftp_target_id) {
             try {
               await API.deleteTarget(target.tftp_target_id)
@@ -2612,6 +2696,8 @@ export function renderApp(container) {
       .sort((a, b) => a.localeCompare(b))
       .forEach((key) => {
         const child = children[key]
+        const gid = child.id || ''
+        const groupName = child.group?.name || child.name || ''
         const count = (child.group && child.group.targets ? child.group.targets.length : 0) || 0
         const isSelected = child.id === selectedId
         const rowClass = isSelected ? 'bg-sky-100 text-sky-800 font-medium' : ''
@@ -2621,6 +2707,15 @@ export function renderApp(container) {
         const caretHtml = hasChildren
           ? `<div class="w-[40px] flex items-center justify-center text-[10px] text-slate-700 hover:text-slate-900 leading-none cursor-pointer shrink-0 self-stretch" data-group-toggle="1" data-group-id="${escapeHtml(child.id)}">${caret}</div>`
           : `<div class="w-[40px] shrink-0 self-stretch" data-group-toggle="0"></div>`
+        const actionHtml = (mainContent?.dataset?.treeMode === 'manage' && gid)
+          ? `
+              <div class="flex items-center gap-1 shrink-0">
+                <button type="button" class="rounded border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-50" data-group-edit="1" data-group-id="${escapeHtml(gid)}">${t('common.edit')}</button>
+                <button type="button" class="rounded border border-red-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-50" data-group-delete="1" data-group-id="${escapeHtml(gid)}" data-group-name="${escapeHtml(groupName)}">${t('common.delete')}</button>
+              </div>
+            `
+          : ''
+
         html += `
           <li>
             <div class="flex items-start py-1.5 pr-2 rounded hover:bg-slate-50 cursor-pointer ${rowClass}" data-group-select="1" data-group-id="${escapeHtml(child.id)}">
@@ -2630,6 +2725,7 @@ export function renderApp(container) {
                 <div class="text-xs font-medium text-slate-800 break-words">${escapeHtml(child.name)}</div>
                 <div class="text-[10px] text-slate-500 leading-snug break-words">${escapeHtml(child.id)}${count ? ` · ${t('app.treeTargetCount', { n: count })}` : ''}</div>
               </div>
+              ${actionHtml}
             </div>
             ${hasChildren && isExpanded ? renderGroupTree(child, depth + 1) : ''}
           </li>

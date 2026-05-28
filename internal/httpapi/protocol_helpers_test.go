@@ -8,8 +8,6 @@ import (
 )
 
 func TestParseProtocolField_Success(t *testing.T) {
-	t.Parallel()
-
 	tests := []struct {
 		name     string
 		input    string
@@ -28,7 +26,6 @@ func TestParseProtocolField_Success(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			got, err := parseProtocolField(tt.input)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -41,13 +38,10 @@ func TestParseProtocolField_Success(t *testing.T) {
 }
 
 func TestParseProtocolField_Invalid(t *testing.T) {
-	t.Parallel()
-
 	invalids := []string{"ssh2", "http", "https", "mysql"}
 	for _, in := range invalids {
 		in := in
 		t.Run(in, func(t *testing.T) {
-			t.Parallel()
 			_, err := parseProtocolField(in)
 			if err == nil {
 				t.Fatalf("expected error for %q, got nil", in)

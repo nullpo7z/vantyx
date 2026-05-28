@@ -259,11 +259,7 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	protocol, err := parseProtocolField(req.Protocol)
 	if err != nil {
-		if errors.Is(err, ErrInvalidProtocol) {
-			writeJSONErrorKey(w, r, "targets.protocolInvalid", http.StatusBadRequest)
-			return
-		}
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "targets.protocolInvalid", http.StatusBadRequest)
 		return
 	}
 
@@ -366,11 +362,7 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	protocol, err := parseProtocolField(req.Protocol)
 	if err != nil {
-		if errors.Is(err, ErrInvalidProtocol) {
-			writeJSONErrorKey(w, r, "targets.protocolInvalid", http.StatusBadRequest)
-			return
-		}
-		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		writeJSONErrorKey(w, r, "targets.protocolInvalid", http.StatusBadRequest)
 		return
 	}
 	var sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string

@@ -2810,7 +2810,7 @@ export function renderApp(container) {
               </div>
               ${actionHtml}
             </div>
-            ${hasChildren && isExpanded ? renderGroupTree(child, depth + 1) : ''}
+            ${hasChildren && isExpanded ? renderGroupTree(child, depth + 1, selectedId) : ''}
           </li>
         `
       })

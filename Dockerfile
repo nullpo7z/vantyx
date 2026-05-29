@@ -31,7 +31,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /out/vant
 # reproducible and CVE auditing is meaningful. The `community-edge`
 # overlay is only used to pull a FreeRDP 3.x build.
 # -----------------------------------------------------------------------------
-FROM alpine:3.22
+FROM alpine:3.23
 
 # asciinema-agg (GIF 用), ffmpeg (WebM 用), フォント (agg の描画用)
 # freerdp (3.x) + Xvfb + x11vnc: browser-based RDP via FreeRDP→Xvfb→x11vnc→noVNC

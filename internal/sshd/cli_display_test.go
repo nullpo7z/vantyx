@@ -32,11 +32,11 @@ func TestFormatCLIEntry_marker(t *testing.T) {
 func TestWriteCLIScreen_rootHostsHint(t *testing.T) {
 	var buf bytes.Buffer
 	st := cliScreenState{
-		Entries: []cliGroupEntry{
+		AllGroups: []cliGroupEntry{
 			{Group: &access.AccessGroup{ID: access.GroupID("g1"), Name: "Home"}, Targets: nil},
 		},
-		CurrentGroupIndex: 0,
-		Cols:              120,
+		Location: cliNavLocation{},
+		Cols:     120,
 	}
 	if err := writeCLIScreen(&buf, st, nil); err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestWriteCLIScreen_rootHostsHint(t *testing.T) {
 func TestWriteCLIScreen_inGroupShowsHosts(t *testing.T) {
 	var buf bytes.Buffer
 	st := cliScreenState{
-		Entries: []cliGroupEntry{
+		AllGroups: []cliGroupEntry{
 			{
 				Group: &access.AccessGroup{ID: access.GroupID("g1"), Name: "Home"},
 				Targets: []*access.Target{
@@ -68,18 +68,18 @@ func TestWriteCLIScreen_inGroupShowsHosts(t *testing.T) {
 				},
 			},
 		},
-		CurrentGroupIndex: 1,
-		Cols:              120,
+		Location: cliNavLocation{GroupPath: "g1"},
+		Cols:     120,
 	}
 	if err := writeCLIScreen(&buf, st, nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "PWD: /Home") {
+	if !strings.Contains(out, "PWD: /g1") {
 		t.Fatalf("PWD: %q", out)
 	}
-	if !strings.Contains(out, "1: Home *") {
-		t.Fatalf("marker: %q", out)
+	if !strings.Contains(out, "no subgroups here") {
+		t.Fatalf("expected no subgroups hint: %q", out)
 	}
 	if !strings.Contains(out, "1: sw1 [ssh]") {
 		t.Fatalf("host: %q", out)
@@ -89,11 +89,11 @@ func TestWriteCLIScreen_inGroupShowsHosts(t *testing.T) {
 func TestWriteCLIScreen_emptyGroupStillListed(t *testing.T) {
 	var buf bytes.Buffer
 	st := cliScreenState{
-		Entries: []cliGroupEntry{
+		AllGroups: []cliGroupEntry{
 			{Group: &access.AccessGroup{ID: access.GroupID("g1"), Name: "Lab"}, Targets: nil},
 		},
-		CurrentGroupIndex: 0,
-		Cols:              120,
+		Location: cliNavLocation{},
+		Cols:     120,
 	}
 	if err := writeCLIScreen(&buf, st, nil); err != nil {
 		t.Fatal(err)

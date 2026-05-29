@@ -33,9 +33,9 @@ func cliSeparatorLine(cols int) string {
 
 // cliScreenState drives the IM7200-style header (PWD / Groups / Hosts).
 type cliScreenState struct {
-	Entries           []cliGroupEntry
-	CurrentGroupIndex int // 0 = root; 1-based group index otherwise
-	Cols              int // terminal width in columns
+	AllGroups []cliGroupEntry
+	Location  cliNavLocation
+	Cols      int // terminal width in columns
 }
 
 func cliTermWidth(cols int) int {
@@ -93,11 +93,9 @@ func formatCLITargetLabel(t *access.Target) string {
 	return fmt.Sprintf("%s [%s]", t.Name, t.Protocol)
 }
 
-func cliPWDPath(entries []cliGroupEntry, currentGroupIndex int) string {
-	if currentGroupIndex >= 1 && currentGroupIndex <= len(entries) {
-		return "/" + entries[currentGroupIndex-1].Group.Name
-	}
-	return "/"
+func cliPWDPath(all []cliGroupEntry, loc cliNavLocation) string {
+	_ = all
+	return loc.pwd()
 }
 
 type cliScreenLayout struct {
@@ -125,38 +123,38 @@ func writeCLISessionBar(w io.Writer, bar cliSessionBarState) error {
 func buildCLIScreenLayout(st cliScreenState, extraLines []string) cliScreenLayout {
 	termCols := cliTermWidth(st.Cols)
 	numCols := cliNumColumns(termCols)
+	view := buildCLINavView(st.AllGroups, st.Location)
 	var lines []string
 
-	lines = append(lines, "PWD: "+cliPWDPath(st.Entries, st.CurrentGroupIndex), "")
+	lines = append(lines, "PWD: "+cliPWDPath(st.AllGroups, st.Location), "")
 	lines = append(lines, "Groups")
-	if len(st.Entries) == 0 {
+	if len(st.AllGroups) == 0 {
 		lines = append(lines, "  (no groups assigned)")
+	} else if len(view.Items) == 0 {
+		if st.Location.atRoot() {
+			lines = append(lines, "  (cd <group#> to browse — e.g. cd 1)")
+		} else {
+			lines = append(lines, "  (no subgroups here — cd .. to go up)")
+		}
 	} else {
-		groupEntries := make([]string, len(st.Entries))
-		for i, e := range st.Entries {
-			marker := ""
-			if i+1 == st.CurrentGroupIndex {
-				marker = " *"
-			}
-			groupEntries[i] = formatCLIEntry(i+1, e.Group.Name, marker)
+		groupEntries := make([]string, len(view.Items))
+		for i, item := range view.Items {
+			groupEntries[i] = formatCLIEntry(i+1, item.Label, "")
 		}
 		lines = append(lines, formatCLIColumns(groupEntries, numCols)...)
 	}
 
 	lines = append(lines, "", "Hosts")
-	if st.CurrentGroupIndex < 1 || st.CurrentGroupIndex > len(st.Entries) {
+	if st.Location.atRoot() {
 		lines = append(lines, "  (cd <group#> to list servers — e.g. cd 1)")
+	} else if len(view.Hosts) == 0 {
+		lines = append(lines, "  (no SSH/Telnet servers at this path)")
 	} else {
-		targets := st.Entries[st.CurrentGroupIndex-1].Targets
-		if len(targets) == 0 {
-			lines = append(lines, "  (no SSH/Telnet servers in this group)")
-		} else {
-			hostEntries := make([]string, len(targets))
-			for i, t := range targets {
-				hostEntries[i] = formatCLIEntry(i+1, formatCLITargetLabel(t), "")
-			}
-			lines = append(lines, formatCLIColumns(hostEntries, numCols)...)
+		hostEntries := make([]string, len(view.Hosts))
+		for i, t := range view.Hosts {
+			hostEntries[i] = formatCLIEntry(i+1, formatCLITargetLabel(t), "")
 		}
+		lines = append(lines, formatCLIColumns(hostEntries, numCols)...)
 	}
 
 	lines = append(lines, "", cliSeparatorLine(st.Cols))

@@ -12,6 +12,7 @@ import { t } from './i18n.js'
 import { createHostKeyDialogController } from './host_key_dialog.js'
 import { uiConfirm } from './ui_dialog.js'
 import { classifyTerminalWsFrameSync } from './terminal_ws_protocol.js'
+import { setupTerminalKeyboard } from './xterm_input.js'
 
 function escapeHtml(s) {
   if (s == null) return ''
@@ -427,6 +428,7 @@ export function renderTFTPConsolePage(container) {
         term.loadAddon(fitAddon)
         term.loadAddon(webLinksAddon)
         term.open(xtermEl)
+        setupTerminalKeyboard(term, xtermEl)
         try { fitAddon.fit() } catch { /* ignore */ }
 
         function getWsUrlNew() {

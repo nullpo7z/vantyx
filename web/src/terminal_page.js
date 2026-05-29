@@ -12,6 +12,7 @@ import {
 import { classifyTerminalWsFrameSync } from './terminal_ws_protocol.js'
 import { createHostKeyDialogController } from './host_key_dialog.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
+import { setupTerminalKeyboard } from './xterm_input.js'
 
 function escapeHtml(s) {
   const div = document.createElement('div')
@@ -913,6 +914,7 @@ export function renderTerminalPage(container) {
     term.loadAddon(fitAddon)
     term.loadAddon(new WebLinksAddon())
     term.open(xtermEl)
+    setupTerminalKeyboard(term, xtermEl)
     fitAddon.fit()
   }
 

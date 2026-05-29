@@ -29,8 +29,10 @@ export async function decodeWsText(data) {
  */
 export function classifyTerminalWsTextFrame(text) {
   const s = typeof text === 'string' ? text : ''
+  if (s.length === 0) return { kind: 'empty' }
+  if (s === TERMINAL_WS_READY) return { kind: 'ready' }
+
   const trimmed = s.trim()
-  if (!trimmed) return { kind: 'empty' }
   if (trimmed === TERMINAL_WS_READY) return { kind: 'ready' }
 
   if (trimmed.startsWith(TERMINAL_WS_META_PREFIX)) {
@@ -66,7 +68,10 @@ export function classifyTerminalWsTextFrame(text) {
 export function classifyTerminalWsFrameSync(data) {
   if (typeof data === 'string') return classifyTerminalWsTextFrame(data)
   if (data instanceof ArrayBuffer) {
-    return classifyTerminalWsTextFrame(new TextDecoder().decode(data))
+    // PTY output arrives as binary WebSocket frames. Do not decode/trim here:
+    // a lone space (0x20) or other whitespace would be dropped as "empty".
+    if (data.byteLength === 0) return { kind: 'empty' }
+    return { kind: 'binary' }
   }
   return { kind: 'binary' }
 }

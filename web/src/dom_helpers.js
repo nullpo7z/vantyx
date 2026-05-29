@@ -20,6 +20,20 @@ export function escapeHtml(s) {
   return div.innerHTML
 }
 
+/** Human-readable label for credential identity auth_method values. */
+export function authMethodLabel(method) {
+  switch (method) {
+    case 'password':
+      return t('app.credentialIdentityAuthPassword')
+    case 'key':
+      return t('app.credentialIdentityAuthKey')
+    case 'password_and_key':
+      return t('app.credentialIdentityAuthPasswordAndKeyShort')
+    default:
+      return method || t('common.em')
+  }
+}
+
 /**
  * Sanitise a URL before interpolating it into an `href` / `src`
  * attribute. Rejects javascript:, data:, vbscript:, and file: URIs to

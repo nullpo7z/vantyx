@@ -1,13 +1,16 @@
 # Roadmap
 
-What is *not* yet in Vantyx and would be welcome contributions. The list
-of shipped features lives in [README.md](../README.md#highlights) — this
-file only enumerates open items so it does not double-track them.
+What is *not* yet in Vantyx and would be welcome contributions. Shipped
+features are summarized in [README.md](../README.md#highlights) and the
+topic guides under `docs/` (for example
+[collaborative-sessions.md](collaborative-sessions.md),
+[credentials.md](credentials.md)). This file only lists **open** work.
 
 ## Remote desktop
 
-- **RDP bridge.** Currently only VNC is supported; an RDP-to-VNC bridge
-  (or FreeRDP wrapper) is planned.
+- **Collaborative RDP (Phase C).** Browser RDP via FreeRDP → Xvfb → x11vnc
+  is implemented for single-user sessions; multi-viewer attach (like SSH Phase A)
+  is still open — see Collaborative sessions below.
 
 ## Collaborative sessions
 
@@ -55,8 +58,6 @@ fans output out to every viewer. The remaining phases are open:
 
 ## File transfer
 
-- **DB-persisted transfer jobs** — currently jobs live in memory and are
-  lost on restart.
 - **Remote TFTP list / delete** — TFTP itself does not support
   enumeration, but a small inventory layer on top could help.
 

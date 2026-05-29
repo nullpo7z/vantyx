@@ -73,6 +73,7 @@ var Messages = map[string]string{
 
 	// Targets.
 	"targets.nameHostRequired":          "name and host are required",
+	"targets.credentialSourceExclusive": "specify either credential_identity_id or ssh_key_id, not both",
 	"targets.groupIDRequired":           "group_id is required",
 	"targets.groupNotFound":             "group not found",
 	"targets.assignFailed":              "failed to assign target to group",
@@ -130,6 +131,22 @@ var Messages = map[string]string{
 	"recordings.convertReadFailed":  "failed to read converted file",
 	"recordings.videoExportFailed":  "Video export failed.",
 	"recordings.videoToolsRequired": "Video export is unavailable. The server needs agg and ffmpeg installed.",
+
+	// Credential profiles (admin management).
+	"credentials.encryptionKeyRequired": "encryption key not configured (VANTYX_SSH_PASSWORD_ENCRYPTION_KEY)",
+	"credentials.notReady":              "credential library is not ready. The server may require a database migration after update.",
+
+	// SSH keys / identities (admin management).
+	"sshKeys.idRequired":                    "key_id required",
+	"sshKeys.notFound":                      "ssh key not found",
+	"sshKeys.exists":                        "ssh key already exists",
+	"sshKeys.inUse":                         "ssh key is referenced by an identity",
+	"sshKeys.privateKeyRequired":            "private key required",
+	"credentialIdentities.idRequired":       "identity_id required",
+	"credentialIdentities.notFound":         "identity not found",
+	"credentialIdentities.exists":           "identity already exists",
+	"credentialIdentities.usernameRequired": "username required",
+	"credentialIdentities.authRequired":     "password and/or ssh key required",
 
 	// RDP / VNC / TFTP capability checks.
 	"rdp.notRDP":         "target is not an RDP server",

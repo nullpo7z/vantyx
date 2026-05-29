@@ -25,7 +25,7 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 | `VANTYX_EXTERNAL_HOST` | — | Host (with optional port) the HTTP redirector points at. **Required** unless `VANTYX_ALLOWED_HOSTS` is set. |
 | `VANTYX_ALLOWED_HOSTS` | — | Comma-separated host allowlist for the HTTP redirector. Either this or `VANTYX_EXTERNAL_HOST` must be set. |
 | `VANTYX_CORS_ALLOWED_ORIGINS` | — | Comma-separated origins to mirror in CORS headers. When empty, no CORS headers are emitted. |
-| `VANTYX_DISABLE_ORIGIN_CHECK` | `0` | Set to `1` to skip the same-origin Origin/Referer check on cookie-authenticated mutations. Only do this for non-browser automation. |
+| `VANTYX_DISABLE_ORIGIN_CHECK` | `0` | Set to `1` to skip the same-origin Origin/Referer check on cookie-authenticated mutations. **Never enable on production.** Automation / tests only. |
 | `VANTYX_TRUST_X_FORWARDED_FOR` | `0` | Set to `1` to honour `X-Forwarded-For` for the login rate limiter. |
 | `VANTYX_WS_ALLOWED_ORIGINS` | — | Comma-separated origins allowed to open WebSockets. Defaults to the request's own origin. |
 | `VANTYX_ALLOW_WS_NO_ORIGIN` | `0` | Set to `1` to permit WebSocket upgrades without an `Origin` header. Useful for local CLI tooling. |
@@ -36,6 +36,7 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 |----------|---------|-------------|
 | `VANTYX_LOGIN_RATE_LIMIT_N` | `5` | Maximum failed logins per IP within a 15-minute window before `429` is returned. |
 | `VANTYX_TERMINAL_SESSION_IDLE_WARN_AFTER` | `30m` | Duration (Go duration syntax) before an idle terminal session is flagged. `0` disables idle warnings. |
+| `VANTYX_INVITATION_MAX_TTL_SECONDS` | `14400` | Maximum validity (`ttl_seconds`) for collaborative session invitations. Default TTL when omitted is 15 minutes. See [collaborative-sessions.md](collaborative-sessions.md). |
 
 ## Storage
 
@@ -57,7 +58,9 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VANTYX_SSH_PASSWORD_ENCRYPTION_KEY` | — | Base64-encoded 32-byte key used for AES-256-GCM encryption of stored SSH passwords. **Required** when operators may save SSH passwords on target records. Returns `503 Service Unavailable` if unset and a password write is attempted. |
+| `VANTYX_SSH_PASSWORD_ENCRYPTION_KEY` | — | Base64-encoded 32-byte key used for AES-256-GCM encryption of sensitive SSH material at rest: target passwords/keys, **Keys** (`ssh_keys`), and **Identities** (`credential_identities`). **Required** when any of these may be stored. Returns `503 Service Unavailable` if unset and a write that needs encryption is attempted. See [credentials.md](credentials.md). |
+| `VANTYX_INITIAL_ADMIN_PASSWORD` | — | Password for the bootstrap `admin` user on first start. When unset, a random password is printed once to stdout/logs. |
+| `VANTYX_ALLOW_PLAINTEXT_SECRETS` | `0` | Set to `1` to allow starting without `VANTYX_SSH_PASSWORD_ENCRYPTION_KEY` (secrets stored unencrypted). **Never enable on production.** |
 
 ## CLI gateway (`internal/sshd`)
 
@@ -83,6 +86,13 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 
 ## Environment files
 
-For local development, `.env` is loaded by `docker compose`. Production
-deployments should source these variables from your platform's secret
-manager (Kubernetes Secret, AWS Secrets Manager, Doppler, etc.).
+For Docker Compose, copy [`.env.example`](../.env.example) to `.env` before
+starting the stack:
+
+- **Operations:** [docker-compose.yml](../docker-compose.yml) — minimal pull-only
+  stack; required `VANTYX_*` variables live in `.env` (see [`.env.example`](../.env.example)).
+- **Development:** [docker-compose.dev.yml](../docker-compose.dev.yml) — builds
+  from the repository Dockerfile.
+
+Production deployments should source these variables from your platform's
+secret manager (Kubernetes Secret, AWS Secrets Manager, Doppler, etc.).

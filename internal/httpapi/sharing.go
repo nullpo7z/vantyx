@@ -55,7 +55,7 @@ type sharingResponseInvitation struct {
 	OwnerUserID     string `json:"owner_user_id"`
 	InviteeUserID   string `json:"invitee_user_id,omitempty"`
 	InviteeUsername string `json:"invitee_username,omitempty"`
-	InviteGroupID   string `json:"invite_group_id,omitempty"` // legacy
+	InviteGroupID   string `json:"invite_group_id,omitempty"` // named group invitation target
 	InviteTag       string `json:"invite_tag,omitempty"`
 	IsLink          bool   `json:"is_link"`
 	LinkUnlimited   bool   `json:"link_unlimited,omitempty"`

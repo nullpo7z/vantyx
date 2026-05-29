@@ -19,8 +19,6 @@ func TestEncryptDecrypt(t *testing.T) {
 	if enc == "" || enc == plain {
 		t.Fatalf("expected encrypted value different from plaintext")
 	}
-	// Encrypt now always emits the v2 (AAD-bound) format; v1 stays
-	// supported on read only.
 	if enc[:len(CiphertextVersionPrefixV2)] != CiphertextVersionPrefixV2 {
 		t.Fatalf("expected v2 prefix, got %q", enc[:min(3, len(enc))])
 	}
@@ -80,14 +78,30 @@ func TestEncryptDecrypt_Empty(t *testing.T) {
 	}
 }
 
-func TestDecrypt_LegacyPlaintext(t *testing.T) {
+func TestDecrypt_RejectsPlaintext(t *testing.T) {
 	key := make([]byte, KeySize)
-	dec, err := Decrypt(key, "legacy-plaintext")
-	if err != nil {
-		t.Fatalf("Decrypt legacy: %v", err)
+	_, err := Decrypt(key, "not-encrypted")
+	if err != ErrInvalidInput {
+		t.Fatalf("Decrypt plaintext: got %v", err)
 	}
-	if dec != "legacy-plaintext" {
-		t.Fatalf("expected legacy as-is, got %q", dec)
+}
+
+func TestDecrypt_RejectsV1(t *testing.T) {
+	key := make([]byte, KeySize)
+	_, err := Decrypt(key, "v1:YWJj")
+	if err != ErrInvalidInput {
+		t.Fatalf("Decrypt v1: got %v", err)
+	}
+}
+
+func TestIsEncrypted(t *testing.T) {
+	key := make([]byte, KeySize)
+	enc, _ := Encrypt(key, "x")
+	if !IsEncrypted(enc) {
+		t.Fatal("expected IsEncrypted true for v2")
+	}
+	if IsEncrypted("plain") || IsEncrypted("v1:foo") {
+		t.Fatal("expected IsEncrypted false for non-v2")
 	}
 }
 
@@ -132,7 +146,7 @@ func TestDecrypt_InvalidKey(t *testing.T) {
 
 func TestDecrypt_InvalidBase64(t *testing.T) {
 	key := make([]byte, KeySize)
-	_, err := Decrypt(key, "v1:!!!")
+	_, err := Decrypt(key, CiphertextVersionPrefixV2+"!!!")
 	if err != ErrInvalidInput {
 		t.Fatalf("Decrypt bad base64: got %v", err)
 	}
@@ -140,9 +154,8 @@ func TestDecrypt_InvalidBase64(t *testing.T) {
 
 func TestDecrypt_TooShortPayload(t *testing.T) {
 	key := make([]byte, KeySize)
-	// base64 of less than NonceSize bytes
 	short := base64.RawStdEncoding.EncodeToString([]byte("short"))
-	_, err := Decrypt(key, CiphertextVersionPrefix+short)
+	_, err := Decrypt(key, CiphertextVersionPrefixV2+short)
 	if err != ErrInvalidInput {
 		t.Fatalf("Decrypt too short: got %v", err)
 	}
@@ -153,7 +166,6 @@ func TestDecrypt_TamperedCiphertext(t *testing.T) {
 	enc, _ := Encrypt(key, "secret")
 	body := enc[len(CiphertextVersionPrefixV2):]
 	raw, _ := base64.RawStdEncoding.DecodeString(body)
-	// Tamper ciphertext part (after keyID+nonce) so GCM auth fails.
 	tamperAt := keyIDSize + NonceSize
 	if len(raw) > tamperAt {
 		raw[tamperAt] ^= 0xff

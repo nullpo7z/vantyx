@@ -13,41 +13,60 @@ FTP / TFTP サーバーをつなぐセルフホスト型のアクセスゲート
 
 ## 特長
 
-- **ブラウザターミナル**（SSH / Telnet 対応、xterm.js + WebSocket）：
-  セッションの再開、NAWS、永続シェル。
-- **ブラウザリモートデスクトップ**（noVNC 経由の VNC）：RDP ブリッジは
-  [ロードマップ](docs/roadmap.md)に掲載（英語のみ）。
-- **ファイル転送 UI**：SFTP / FTP / リモート TFTP / ネットワーク機器向け
-  組み込み TFTP サーバー。
-- **CLI ゲートウェイ**：`ssh user@vantyx` で Vantyx にログインし、許可
-  されたターゲットへプロキシ接続。
-- **セッション録画**：対話シェルを asciinema 形式で記録し、UI で再生。
-- **監査パイプライン**：全ての API 呼び出し・セッションイベントを取得し、
-  外部 syslog / SIEM 転送に対応。
+- **ブラウザターミナル**（SSH / Telnet、xterm.js + WebSocket）：セッション再開、NAWS、永続シェル、SSH ホスト鍵の TOFU（信頼オンファースト利用）とフィンガープリント登録。
+- **共同ターミナルセッション**（SSH / Telnet）：同一セッションに複数ユーザーを招待。1 人だけ書き込み（write token）、他は閲覧専用。指名招待・リンク招待、操作権のリクエスト/付与、SSE による UI 同期。詳細は [docs/collaborative-sessions.md](docs/collaborative-sessions.md)。
+- **ブラウザリモートデスクトップ**：VNC（noVNC）。RDP ターゲットは xfreerdp + Xvfb + x11vnc 経由（ブラウザから接続）。VNC への共同参加は [ロードマップ](docs/roadmap.md)参照。
+- **ファイル転送**：SFTP / FTP / リモート TFTP、および組み込み TFTP サーバー（機器プロビジョニング向け）。バックグラウンド転送ジョブと進捗 SSE。
+- **資格情報ライブラリ**（管理者）：**Keys**（SSH 秘密鍵のみ）と **Identities**（ユーザー名 + 認証方式）を分離管理。サーバー登録時に Identity / Key / 手入力から選択。 [docs/credentials.md](docs/credentials.md)。
+- **タグベースのアクセス制御**：グループ・ターゲット・ユーザーへのタグ付与で、誰がどのサーバーに接続できるかを制御。
+- **CLI ゲートウェイ**：`ssh user@vantyx` で Vantyx にログインし、許可されたターゲットへプロキシ接続。
+- **セッション録画**：対話シェルを asciinema 形式で記録し、UI で再生（ブラウザ・CLI 両方）。
+- **監査パイプライン**：API 呼び出し・セッションイベントを記録し、外部 syslog / SIEM へ転送可能。
 - **OWASP ASVS Level 2** の精神に倣う機密データ保存・通信のベースライン（正式監査ではなくベストエフォート）。
 
 ## クイックスタート（Docker）
 
+公開イメージ: [`nullpo7z/vantyx:latest`](https://hub.docker.com/r/nullpo7z/vantyx)
+
 ```bash
-docker compose up --build
+git clone https://github.com/nullpo7z/vantyx.git
+cd vantyx
+cp .env.example .env
+# .env を編集: VANTYX_EXTERNAL_HOST（ブラウザで開くホスト名/IP）と
+# VANTYX_SSH_PASSWORD_ENCRYPTION_KEY（openssl rand -base64 32 で生成）
+# docker-compose.yml の /path/to/vantyx を実際のパスに変更（例: /opt/vantyx）
+mkdir -p /path/to/vantyx/{certs,data,recordings}
+
+docker compose pull    # nullpo7z/vantyx:latest を取得（ローカルビルドは不要）
+docker compose up -d   # docker-compose.yml（実運用向け）
+```
+
+ブラウザで `https://<VANTYX_EXTERNAL_HOST>/` を開きます（自己署名 TLS のため警告が出る場合があります）。
+
+ソースから開発用イメージをビルドする場合のみ [docker-compose.dev.yml](docker-compose.dev.yml) を使います:
+
+```bash
+docker compose -f docker-compose.dev.yml up --build -d
 ```
 
 | ポート   | 用途                                                                                              |
 |----------|---------------------------------------------------------------------------------------------------|
 | `80`     | 常に HTTPS へ 301 リダイレクト（無効化不可）                                                       |
 | `443`    | アプリ本体（REST API + SPA）。コンテナ内では `8080` / `8443` で待ち受け。                          |
+| `2222`   | CLI SSH ゲートウェイ（`ssh -p 2222 admin@<host>`）                                                |
 | `69/udp` | コンテナ内 `6969/udp` の組み込み TFTP サーバーへ転送。                                             |
 
-- **TLS**: 初回起動時、`/app/certs/tls.crt` と `tls.key` がなければ自己署名
-  証明書を生成し `vantyx_certs` ボリュームに永続化します。証明書を差し替える
-  には `VANTYX_TLS_CERT_FILE` / `VANTYX_TLS_KEY_FILE` でパスを指定してください。
-- **初期管理者**: `admin` / `Admin123!` — 初回ログイン直後に変更してください。
-- **データ永続化**: SQLite は既定で `data/vantyx.db`。`VANTYX_SQLITE_PATH`
-  で変更し、コンテナでは当該ディレクトリをマウントしてください。
+- **TLS**: 初回起動時に自己署名証明書を `/path/to/vantyx/certs` へ生成。本番では
+  `VANTYX_TLS_CERT_FILE` / `VANTYX_TLS_KEY_FILE` でマウントするか、
+  `VANTYX_TLS_SANS` を設定してから `certs` を削除して再生成してください。
+- **初期管理者**: ユーザー名は `admin`。`VANTYX_INITIAL_ADMIN_PASSWORD` 未設定時は初回起動でランダムパスワードがコンテナログに一度だけ出力されます。初回ログイン後に必ず変更してください。事前に決める場合は `.env` に `VANTYX_INITIAL_ADMIN_PASSWORD` を設定してください。
+- **データ永続化**: ホストの `/path/to/vantyx/data`（SQLite）と
+  `/path/to/vantyx/recordings`（録画）。`docker-compose.yml` のパスを起動前に作成・編集してください。
 
-サーバー IP を証明書に含めるには `VANTYX_TLS_SANS`（カンマ区切りで DNS 名や IP）
-を指定します。値を変更した場合は `vantyx_certs` ボリュームを削除して再生成
-してください。
+| Compose ファイル | 用途 |
+|------------------|------|
+| [docker-compose.yml](docker-compose.yml) | **実運用** — `nullpo7z/vantyx:latest` を pull して起動（`build` なし） |
+| [docker-compose.dev.yml](docker-compose.dev.yml) | **開発** — リポジトリから `docker compose … up --build` |
 
 ## アーキテクチャ
 
@@ -111,7 +130,6 @@ lint・テスト・カバレッジ：
 make fmt    # gofmt + goimports + eslint --fix
 make lint   # golangci-lint + eslint
 make test   # go test ./... + go vet ./...
-make e2e    # Playwright E2E（Docker 必須）
 ```
 
 ## セキュリティ

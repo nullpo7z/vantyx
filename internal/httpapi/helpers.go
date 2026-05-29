@@ -140,6 +140,20 @@ func writeInternalError(w http.ResponseWriter, err error) {
 	writeJSONError(w, "internal error", http.StatusInternalServerError)
 }
 
+// writeCredentialSchemaError maps SQLite schema drift (missing table/column)
+// to a localized 503 for credential library endpoints.
+func writeCredentialSchemaError(w http.ResponseWriter, r *http.Request, err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "no such table") || strings.Contains(msg, "no such column") {
+		writeJSONErrorKeyAudited(w, r, "credentials.notReady", http.StatusServiceUnavailable, err)
+		return true
+	}
+	return false
+}
+
 // writeServiceUnavailableError audits err and returns a generic 503
 // response so the client never sees raw error text. See
 // [writeInternalError] for the rationale behind keeping the English
@@ -209,6 +223,14 @@ func writeAccessValidationError(w http.ResponseWriter, r *http.Request, err erro
 		writeJSONErrorKey(w, r, "tags.charsInvalid", http.StatusBadRequest)
 	case errors.Is(err, access.ErrHostKeyFingerprintInvalid):
 		writeJSONErrorKey(w, r, "targets.hostKeyFingerprintInvalid", http.StatusBadRequest)
+	case errors.Is(err, access.ErrSSHKeyLabelReq), errors.Is(err, access.ErrCredentialIdentityLabelReq):
+		writeJSONErrorKey(w, r, "validation.nameEmpty", http.StatusBadRequest)
+	case errors.Is(err, access.ErrSSHKeyPrivateReq):
+		writeJSONErrorKey(w, r, "sshKeys.privateKeyRequired", http.StatusBadRequest)
+	case errors.Is(err, access.ErrCredentialIdentityUserReq):
+		writeJSONErrorKey(w, r, "credentialIdentities.usernameRequired", http.StatusBadRequest)
+	case errors.Is(err, access.ErrCredentialIdentityAuthReq):
+		writeJSONErrorKey(w, r, "credentialIdentities.authRequired", http.StatusBadRequest)
 	default:
 		return false
 	}
@@ -229,7 +251,7 @@ func localizedBridgeMessage(ctx context.Context, err error) string {
 
 // isLoopbackHost reports whether host is 127.0.0.1, localhost, or [::1]
 // (with an optional port). Used to decide whether to set the cookie
-// Secure flag on local / E2E runs.
+// Secure flag on local development runs.
 func isLoopbackHost(host string) bool {
 	hostname, _, err := net.SplitHostPort(host)
 	if err != nil {

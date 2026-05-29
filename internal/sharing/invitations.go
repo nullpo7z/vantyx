@@ -43,7 +43,7 @@ type Invitation struct {
 	TargetID      string
 	OwnerUserID   string
 	InviteeUserID string // empty -> link invitation
-	InviteGroupID string // deprecated; legacy rows only
+	InviteGroupID string // optional group scope for named invitations
 	InviteTag     string // set when issued to all users with a tag (audit)
 	Mode          Mode
 	MaxUses       *int // link only: nil = unlimited, 1 = single-use, N = capped

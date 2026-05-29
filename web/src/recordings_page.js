@@ -77,6 +77,19 @@ async function downloadRecordingWithProgress(url, filename, formatLabel) {
 /** Overlay opacity for recording playback watermark (0–1). */
 const RECORDING_WATERMARK_OPACITY = 0.32
 
+/** Target protocol label for tables (SSH, Telnet, …). */
+function formatTargetProtocol(protocol) {
+  const p = String(protocol || 'ssh').toLowerCase()
+  if (p === 'ssh') return 'SSH'
+  if (p === 'telnet') return 'Telnet'
+  if (p === 'vnc') return 'VNC'
+  if (p === 'rdp') return 'RDP'
+  if (p === 'tftp') return 'TFTP'
+  if (p === 'ftp') return 'FTP'
+  if (protocol) return String(protocol).toUpperCase()
+  return '—'
+}
+
 function defaultDateRange() {
   const to = new Date()
   const from = new Date(to)
@@ -227,6 +240,8 @@ export async function renderRecordingsPage({
     let sectionHeader = ''
 
     if (selectedRecordingsTargetId) {
+      const selectedTarget = targets.find((tg) => tg.id === selectedRecordingsTargetId)
+      const selectedTargetProtocol = formatTargetProtocol(selectedTarget?.protocol)
       let adminUsers = []
       if (isAdmin) {
         try {
@@ -291,6 +306,7 @@ export async function renderRecordingsPage({
           <div class="flex items-center gap-3 flex-wrap">
             <button type="button" id="recordings-back-to-servers" class="text-xs text-sky-600 hover:text-sky-800 hover:underline">${t('recordings.backToServers')}</button>
             <h2 class="text-sm font-semibold text-slate-800">${escapeHtml(t('recordings.targetRecordingsTitle', { name: selectedRecordingsTargetName || selectedRecordingsTargetId }))}</h2>
+            <span class="text-xs font-medium text-slate-600">${escapeHtml(selectedTargetProtocol)}</span>
             <span class="text-xs text-slate-500">${t('recordings.targetCount', { n: items.length })}</span>
           </div>
         `
@@ -348,6 +364,7 @@ export async function renderRecordingsPage({
           <tr class="border-b border-slate-200 hover:bg-slate-50">
             <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(tg.name || tg.id || '')}</td>
             <td class="px-4 py-2 text-sm text-slate-600 font-mono">${escapeHtml(tg.host || '')}</td>
+            <td class="px-4 py-2 text-sm text-slate-500">${escapeHtml(formatTargetProtocol(tg.protocol))}</td>
             <td class="px-4 py-2">
               <button type="button" class="recordings-view-target-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700" data-target-id="${escapeHtml(
                 tg.id,
@@ -368,6 +385,7 @@ export async function renderRecordingsPage({
                 <tr>
                   <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerServer')}</th>
                   <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerHost')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerProtocol')}</th>
                   <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerActions')}</th>
                 </tr>
               </thead>

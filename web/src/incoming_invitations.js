@@ -69,6 +69,3 @@ export async function refreshIncomingInvitationsBanner(container, { onJoin } = {
     container.innerHTML = ''
   }
 }
-
-/** @deprecated Import from sharing_events.js */
-export { isIncomingInvitationSSE, shouldRefreshIncomingInvitationsBanner } from './sharing_events.js'

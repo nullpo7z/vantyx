@@ -3,14 +3,9 @@
 //
 // Ciphertext layout
 //
-//	v1:<base64(nonce || ciphertext)>                            -- legacy, no AAD
-//	v2:<base64(keyID(8 bytes) || nonce || ciphertext)>          -- AAD-bound, key
-//	                                                               fingerprint in header
+//	v2:<base64(keyID(8 bytes) || nonce || ciphertext)>  -- AAD-bound
 //
-// Reads support both formats. Writes always emit v2 so an attacker
-// who can flip a ciphertext between rows (CWE-345) can no longer have
-// the same key decrypt it without detection: the AAD passed by the
-// caller is part of the GCM tag.
+// Writes and reads use v2 only. Plaintext and older v1 values are rejected.
 package secret
 
 import (
@@ -31,9 +26,6 @@ const (
 	NonceSize = 12
 	// KeySize is the AES-256 key size in bytes.
 	KeySize = 32
-	// CiphertextVersionPrefix is the legacy (v1) prefix kept for
-	// backwards compatibility on reads.
-	CiphertextVersionPrefix = "v1:"
 	// CiphertextVersionPrefixV2 marks the AAD-bound format.
 	CiphertextVersionPrefixV2 = "v2:"
 	// keyIDSize is the truncated SHA-256 prefix used as a stable
@@ -51,6 +43,11 @@ var (
 	ErrKeyMismatch = errors.New("secret: ciphertext was encrypted with a different key")
 )
 
+// IsEncrypted reports whether stored looks like a v2 ciphertext blob.
+func IsEncrypted(stored string) bool {
+	return strings.HasPrefix(stored, CiphertextVersionPrefixV2)
+}
+
 // KeyID returns a stable 8-byte fingerprint of key (truncated SHA-256).
 // It does not leak the key but lets callers route to the right key when
 // multiple keys are configured (rotation).
@@ -62,11 +59,8 @@ func KeyID(key []byte) []byte {
 }
 
 // Encrypt encrypts plaintext with AES-256-GCM and no associated data.
-// Equivalent to EncryptWithAAD(key, plaintext, nil). Kept so existing
-// callers compile unchanged; new callers SHOULD use [EncryptWithAAD]
-// so the ciphertext is bound to the column / row it lives in (which
-// stops an attacker who can modify the DB from swapping ciphertexts
-// between rows — CWE-345).
+// Equivalent to EncryptWithAAD(key, plaintext, nil). Prefer [EncryptWithAAD]
+// so the ciphertext is bound to the column / row it lives in (CWE-345).
 func Encrypt(key []byte, plaintext string) (string, error) {
 	return EncryptWithAAD(key, plaintext, nil)
 }
@@ -108,61 +102,20 @@ func EncryptWithAAD(key []byte, plaintext string, aad []byte) (string, error) {
 	return CiphertextVersionPrefixV2 + base64.RawStdEncoding.EncodeToString(combined), nil
 }
 
-// Decrypt decrypts a value produced by Encrypt with empty AAD. If
-// ciphertext does not have the version prefix, it is returned as-is
-// (legacy plaintext).
+// Decrypt decrypts a value produced by Encrypt with empty AAD.
 func Decrypt(key []byte, ciphertext string) (string, error) {
 	return DecryptWithAAD(key, ciphertext, nil)
 }
 
-// DecryptWithAAD decrypts a value produced by EncryptWithAAD with the
-// same aad. It also accepts legacy v1 ciphertexts (in which case aad
-// is ignored — those were not AAD-bound).
+// DecryptWithAAD decrypts a v2 value produced by EncryptWithAAD with the same aad.
 func DecryptWithAAD(key []byte, ciphertext string, aad []byte) (string, error) {
 	if ciphertext == "" {
 		return "", nil
 	}
-	switch {
-	case strings.HasPrefix(ciphertext, CiphertextVersionPrefixV2):
-		return decryptV2(key, ciphertext[len(CiphertextVersionPrefixV2):], aad)
-	case strings.HasPrefix(ciphertext, CiphertextVersionPrefix):
-		return decryptV1(key, ciphertext[len(CiphertextVersionPrefix):])
-	default:
-		// Legacy plaintext (no prefix).
-		return ciphertext, nil
-	}
-}
-
-func decryptV1(key []byte, body string) (string, error) {
-	if len(key) != KeySize {
-		return "", ErrInvalidKey
-	}
-	raw, err := base64.RawStdEncoding.DecodeString(body)
-	if err != nil {
+	if !strings.HasPrefix(ciphertext, CiphertextVersionPrefixV2) {
 		return "", ErrInvalidInput
 	}
-	if len(raw) < NonceSize {
-		return "", ErrInvalidInput
-	}
-	nonce := raw[:NonceSize]
-	enc := raw[NonceSize:]
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-	plain, err := gcm.Open(nil, nonce, enc, nil)
-	if err != nil {
-		return "", ErrDecrypt
-	}
-	s := string(plain)
-	for i := range plain {
-		plain[i] = 0
-	}
-	return s, nil
+	return decryptV2(key, ciphertext[len(CiphertextVersionPrefixV2):], aad)
 }
 
 func decryptV2(key []byte, body string, aad []byte) (string, error) {
@@ -203,11 +156,6 @@ func decryptV2(key []byte, body string, aad []byte) (string, error) {
 
 // LoadKeyFromEnv reads a 32-byte key from the environment variable (base64 encoded).
 // Returns nil if the variable is empty or invalid (caller may then refuse to store secrets).
-// ASVS 7.14: secrets are replaceable and placed at installation.
-//
-// Callers that handle sensitive data at rest must use [LoadKeyFromEnvStrict]
-// instead so a misconfigured deployment fails to start rather than
-// silently downgrading to "plaintext mode".
 func LoadKeyFromEnv(envVar string) []byte {
 	b64 := os.Getenv(envVar)
 	if b64 == "" {
@@ -223,10 +171,8 @@ func LoadKeyFromEnv(envVar string) []byte {
 // LoadKeyFromEnvStrict returns the 32-byte key referenced by envVar
 // or an error explaining why it could not be loaded.
 //
-// Use this in production startup code so the server refuses to run
-// without a usable encryption key. Set VANTYX_ALLOW_PLAINTEXT_SECRETS=1
-// to opt in to the legacy "no encryption" behaviour (development /
-// migration only; never in production, ASVS V6.4 / CWE-326).
+// Set VANTYX_ALLOW_PLAINTEXT_SECRETS=1 only for tests / local automation
+// (never in production, ASVS V6.4 / CWE-326).
 func LoadKeyFromEnvStrict(envVar string) ([]byte, error) {
 	b64 := os.Getenv(envVar)
 	if b64 == "" {

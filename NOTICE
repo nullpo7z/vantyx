@@ -18,7 +18,6 @@ This product bundles or depends on the following third-party software:
 - Swagger UI                                      - Apache-2.0 (loaded at runtime from CDN)
 - Tailwind CSS                                    - MIT
 - Vite                                            - MIT
-- Playwright                                      - Apache-2.0
 
 See go.sum / web/package-lock.json for a full list of dependencies and their
 licenses.

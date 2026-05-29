@@ -35,6 +35,7 @@ export function buildAppShellHTML() {
               <a href="#" id="nav-recordings" class="vantyx-nav-link hidden">${t('nav.recordings')}</a>
               <a href="#" id="nav-groups" class="vantyx-nav-link hidden">${t('nav.targets')}</a>
               <a href="#" id="nav-users" class="vantyx-nav-link hidden">${t('nav.users')}</a>
+              <a href="#" id="nav-credentials" class="vantyx-nav-link hidden">${t('nav.credentials')}</a>
               <a href="#" id="nav-audit" class="vantyx-nav-link hidden">${t('nav.audit')}</a>
               <a href="#" id="nav-settings" class="vantyx-nav-link hidden">${t('nav.settings')}</a>
               <a href="/docs" id="nav-api-ref" target="_blank" rel="noopener noreferrer" class="vantyx-nav-link hidden">${t('nav.apiRef')}</a>
@@ -72,6 +73,7 @@ export function buildAppShellHTML() {
       <div id="recording-player-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
       <div id="change-password-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
       <div id="add-ssh-key-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
+      <div id="credential-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
       <div id="session-end-modal" class="hidden fixed inset-0 z-50 overflow-hidden"></div>
     </div>
   `

@@ -4,7 +4,7 @@ This document gives a high-level tour of the Vantyx backend, the SPA, and
 how they cooperate. It is aimed at new contributors who need to find their
 way around the source tree before making a change.
 
-## End-to-end stack
+## Full stack overview
 
 ```mermaid
 graph TD
@@ -80,6 +80,8 @@ graph TD
 ```
 
 ### Collaborative terminal sessions
+
+User-facing guide: [collaborative-sessions.md](collaborative-sessions.md).
 
 Terminal sessions can have multiple attached clients. Exactly one
 client holds the *write token* and may forward keystrokes to the
@@ -225,18 +227,19 @@ not require touching every handler.
   only know about the interface.
 - **Background transfers**: `internal/filetransfer` runs upload /
   download jobs that survive the page leaving the file UI. Phases:
-  `receiving → running → completed | failed`. Jobs are stored in memory
-  and lost on restart. The SPA polls and renders progress via
-  `web/src/file_transfer_manager.js`.
+  `receiving → running → completed | failed`. Jobs persist in SQLite
+  (`file_transfer_jobs`). The SPA uses SSE (`/api/events/file-transfers`)
+  with polling fallback via `web/src/file_transfer_manager.js`.
 
 ## Frontend (SPA)
 
 - Entry point: [`web/src/app.js`](../web/src/app.js) calls `renderApp`,
   which wires the header, nav, and main content container, then
-  delegates each route to a `pages/` module.
-- Pages live in dedicated files under `web/src`: targets, sessions,
-  recordings, audit, settings, users, terminal, RDP, VNC, files,
-  TFTP console, account.
+  delegates each view to a dedicated module under `web/src/`.
+- Pages live in dedicated files under `web/src/`: targets, sessions,
+  recordings, audit, settings, users, **credentials** (Keys / Identities in
+  [`credentials_page.js`](../web/src/credentials_page.js)),
+  terminal, RDP, VNC, files, TFTP console, account.
 - Shared helpers: [`api.js`](../web/src/api.js) (typed wrappers around
   REST endpoints), [`nav.js`](../web/src/nav.js) (active tab state +
   role-based visibility), [`theme.js`](../web/src/theme.js) (dark / light
@@ -259,6 +262,25 @@ Key naming convention (documented in
 [development.md](development.md#logging-keys)) keeps queries grep-friendly:
 `user_id`, `target_id`, `session_id`, `protocol`, `error`, `duration_ms`,
 `remote`, `method`, `path`, `status`, `event`.
+
+## Stored SSH credentials (Keys / Identities)
+
+Administrators maintain a split Keys / Identities credential library separate from
+per-target copies:
+
+| Store | Package / table | HTTP API |
+|-------|-----------------|----------|
+| Keys (private PEM) | `internal/access` → `ssh_keys` | `GET/POST/PUT/DELETE /api/ssh-keys` |
+| Identities (username + auth) | `credential_identities` | `GET/POST/PUT/DELETE /api/credential-identities` |
+
+`httpapi.applyStoredCredentials` copies library secrets into target create/update
+payloads when `credential_identity_id` or `ssh_key_id` is set. Secrets are
+encrypted with the same `VANTYX_SSH_PASSWORD_ENCRYPTION_KEY` used for target rows.
+
+Full workflow and UI modes are documented in [credentials.md](credentials.md).
+
+**Do not confuse** `/api/ssh-keys` (stored **private** keys for targets) with
+`/api/me/ssh-keys` (user **public** keys for the CLI gateway).
 
 ## Auth and access flow
 

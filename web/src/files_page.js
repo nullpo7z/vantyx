@@ -29,7 +29,7 @@ function formatSize(bytes) {
   return i === 0 ? `${n} ${units[i]}` : `${n.toFixed(1)} ${units[i]}`
 }
 
-// Termius-style icons (inline SVG)
+// Inline SVG icons for file types
 const iconFolder = `<svg class="w-6 h-6 text-amber-500 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>`
 const iconFile = `<svg class="w-6 h-6 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>`
 const iconUpload = `<svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>`

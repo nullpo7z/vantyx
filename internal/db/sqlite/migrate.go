@@ -227,6 +227,36 @@ func Migrate(db *sql.DB) error {
 			updated_at TIMESTAMP NOT NULL,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		);`,
+		// User SSH public keys for SSH server (vantyx) public key authentication.
+		`CREATE TABLE IF NOT EXISTS user_ssh_keys (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL,
+			key_line TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		// Credential library: Keys (private key material) and Identities (login profiles).
+		`CREATE TABLE IF NOT EXISTS ssh_keys (
+			id TEXT PRIMARY KEY,
+			label TEXT NOT NULL,
+			key_type TEXT NOT NULL DEFAULT '',
+			ssh_private_key TEXT NOT NULL DEFAULT '',
+			ssh_private_key_passphrase TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_ssh_keys_label ON ssh_keys(label)`,
+		`CREATE TABLE IF NOT EXISTS credential_identities (
+			id TEXT PRIMARY KEY,
+			label TEXT NOT NULL,
+			ssh_username TEXT NOT NULL DEFAULT '',
+			ssh_password TEXT NOT NULL DEFAULT '',
+			ssh_key_id TEXT,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (ssh_key_id) REFERENCES ssh_keys(id) ON DELETE SET NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_credential_identities_label ON credential_identities(label)`,
 	}
 
 	for _, stmt := range stmts {
@@ -234,28 +264,17 @@ func Migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	// Idempotent column patches must run even when schemaMarkCurrent is set;
+	// otherwise DBs that received the mark before a column was introduced
+	// skip ALTER TABLE and handlers fail (e.g. ssh_keys.key_type).
+	if err := applyAdditiveColumnPatches(ctx, db); err != nil {
+		return err
+	}
 	// Fast-path: the schema is already at the current version.
 	// This avoids re-running dozens of pragma_table_info probes on every startup,
 	// which is especially expensive in test suites that create many temp DBs.
 	if hasMigrationMark(ctx, db, schemaMarkCurrent) {
 		return nil
-	}
-	// Optional columns for targets (SSH credentials).
-	for _, alter := range []struct {
-		col, ddl string
-	}{
-		{"ssh_username", `ALTER TABLE targets ADD COLUMN ssh_username TEXT NOT NULL DEFAULT ''`},
-		{"ssh_password", `ALTER TABLE targets ADD COLUMN ssh_password TEXT NOT NULL DEFAULT ''`},
-		{"ssh_private_key", `ALTER TABLE targets ADD COLUMN ssh_private_key TEXT NOT NULL DEFAULT ''`},
-		{"ssh_private_key_passphrase", `ALTER TABLE targets ADD COLUMN ssh_private_key_passphrase TEXT NOT NULL DEFAULT ''`},
-	} {
-		if err := addColumnIfMissing(ctx, db, "targets", alter.col, alter.ddl); err != nil {
-			return err
-		}
-	}
-	// User role: admin | user. Default user; existing id='admin' -> admin.
-	if err := addColumnIfMissing(ctx, db, "users", "role", `ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`); err != nil {
-		return err
 	}
 	// One-shot promotion of the bundled admin user. Guarded so we only
 	// run it during the initial role-column rollout; subsequent
@@ -267,57 +286,6 @@ func Migrate(db *sql.DB) error {
 			if _, err := db.ExecContext(ctx, `UPDATE users SET role = 'admin' WHERE id = 'admin'`); err != nil {
 				return err
 			}
-		}
-	}
-	// force_password_change forces a rotation on the next login, used
-	// for the bootstrap admin password (ASVS V2.10.4 / CWE-1188).
-	if err := addColumnIfMissing(ctx, db, "users", "force_password_change",
-		`ALTER TABLE users ADD COLUMN force_password_change INTEGER NOT NULL DEFAULT 0`); err != nil {
-		return err
-	}
-	// Per-user UI locale (BCP 47 short code, currently '' | 'en' | 'ja').
-	// Empty means "no preference" so the frontend falls back to its default.
-	if err := addColumnIfMissing(ctx, db, "users", "locale",
-		`ALTER TABLE users ADD COLUMN locale TEXT NOT NULL DEFAULT ''`); err != nil {
-		return err
-	}
-	// Recordings: optional session name/description (from terminal session StartOptions).
-	for _, alter := range []struct {
-		col, ddl string
-	}{
-		{"session_name", `ALTER TABLE recordings ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`},
-		{"session_description", `ALTER TABLE recordings ADD COLUMN session_description TEXT NOT NULL DEFAULT ''`},
-	} {
-		if err := addColumnIfMissing(ctx, db, "recordings", alter.col, alter.ddl); err != nil {
-			return err
-		}
-	}
-	// User SSH public keys for SSH server (vantyx) public key authentication.
-	_, _ = db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS user_ssh_keys (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		user_id TEXT NOT NULL,
-		key_line TEXT NOT NULL,
-		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-	)`)
-	// File transfer protocol toggles (SFTP/FTP/TFTP). Stored in DB instead of tags.
-	for _, alter := range []struct {
-		col, ddl string
-	}{
-		{"sftp_enabled", `ALTER TABLE targets ADD COLUMN sftp_enabled INTEGER NOT NULL DEFAULT 1`},
-		{"ftp_enabled", `ALTER TABLE targets ADD COLUMN ftp_enabled INTEGER NOT NULL DEFAULT 0`},
-		{"tftp_enabled", `ALTER TABLE targets ADD COLUMN tftp_enabled INTEGER NOT NULL DEFAULT 0`},
-		// SHA-256 fingerprint of the upstream SSH host key.
-		// Required by sshproxy / sftp to prevent MITM (ASVS V2.6, CWE-295).
-		{"ssh_host_key_fingerprint", `ALTER TABLE targets ADD COLUMN ssh_host_key_fingerprint TEXT NOT NULL DEFAULT ''`},
-		// Per-target opt-out of host-key verification. Off by default;
-		// the access store reads / writes the column already, but
-		// historically the migration was missing so brand-new DBs
-		// failed at the first SetSSHHostKeyInsecureSkipVerify call.
-		{"ssh_host_key_insecure_skip_verify", `ALTER TABLE targets ADD COLUMN ssh_host_key_insecure_skip_verify INTEGER NOT NULL DEFAULT 0`},
-	} {
-		if err := addColumnIfMissing(ctx, db, "targets", alter.col, alter.ddl); err != nil {
-			return err
 		}
 	}
 	// Migrate from tags to columns: no-sftp -> sftp_enabled=0, tftp_enabled tag -> tftp_enabled=1
@@ -341,13 +309,42 @@ func Migrate(db *sql.DB) error {
 		`ALTER TABLE session_invitations ADD COLUMN invite_group_id TEXT`); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(ctx, db, "session_invitations", "invite_tag",
-		`ALTER TABLE session_invitations ADD COLUMN invite_tag TEXT`); err != nil {
-		return err
-	}
 	// Legacy link rows without max_uses behave as single-use.
 	_, _ = db.ExecContext(ctx, `UPDATE session_invitations SET max_uses = 1
 		WHERE invitee_user_id IS NULL AND max_uses IS NULL`)
 	setMigrationMark(ctx, db, schemaMarkCurrent)
+	return nil
+}
+
+// applyAdditiveColumnPatches adds columns introduced after older schema
+// marks were written. Safe on every startup.
+func applyAdditiveColumnPatches(ctx context.Context, db *sql.DB) error {
+	for _, alter := range []struct {
+		table, col, ddl string
+	}{
+		{"targets", "ssh_username", `ALTER TABLE targets ADD COLUMN ssh_username TEXT NOT NULL DEFAULT ''`},
+		{"targets", "ssh_password", `ALTER TABLE targets ADD COLUMN ssh_password TEXT NOT NULL DEFAULT ''`},
+		{"targets", "ssh_private_key", `ALTER TABLE targets ADD COLUMN ssh_private_key TEXT NOT NULL DEFAULT ''`},
+		{"targets", "ssh_private_key_passphrase", `ALTER TABLE targets ADD COLUMN ssh_private_key_passphrase TEXT NOT NULL DEFAULT ''`},
+		{"users", "role", `ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`},
+		{"users", "force_password_change", `ALTER TABLE users ADD COLUMN force_password_change INTEGER NOT NULL DEFAULT 0`},
+		{"users", "locale", `ALTER TABLE users ADD COLUMN locale TEXT NOT NULL DEFAULT ''`},
+		{"recordings", "session_name", `ALTER TABLE recordings ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`},
+		{"recordings", "session_description", `ALTER TABLE recordings ADD COLUMN session_description TEXT NOT NULL DEFAULT ''`},
+		{"targets", "sftp_enabled", `ALTER TABLE targets ADD COLUMN sftp_enabled INTEGER NOT NULL DEFAULT 1`},
+		{"targets", "ftp_enabled", `ALTER TABLE targets ADD COLUMN ftp_enabled INTEGER NOT NULL DEFAULT 0`},
+		{"targets", "tftp_enabled", `ALTER TABLE targets ADD COLUMN tftp_enabled INTEGER NOT NULL DEFAULT 0`},
+		{"targets", "ssh_host_key_fingerprint", `ALTER TABLE targets ADD COLUMN ssh_host_key_fingerprint TEXT NOT NULL DEFAULT ''`},
+		{"targets", "ssh_host_key_insecure_skip_verify", `ALTER TABLE targets ADD COLUMN ssh_host_key_insecure_skip_verify INTEGER NOT NULL DEFAULT 0`},
+		{"session_invitations", "max_uses", `ALTER TABLE session_invitations ADD COLUMN max_uses INTEGER`},
+		{"session_invitations", "use_count", `ALTER TABLE session_invitations ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0`},
+		{"session_invitations", "invite_group_id", `ALTER TABLE session_invitations ADD COLUMN invite_group_id TEXT`},
+		{"session_invitations", "invite_tag", `ALTER TABLE session_invitations ADD COLUMN invite_tag TEXT`},
+		{"ssh_keys", "key_type", `ALTER TABLE ssh_keys ADD COLUMN key_type TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := addColumnIfMissing(ctx, db, alter.table, alter.col, alter.ddl); err != nil {
+			return err
+		}
+	}
 	return nil
 }

@@ -950,14 +950,14 @@ func TestCredentialsDecrypted_OK(t *testing.T) {
 }
 
 func TestCredentialsDecrypted_PrivateKeyIsCiphertext(t *testing.T) {
-	creds := sshproxy.Credentials{PrivateKey: "v1:abc123def"}
+	creds := sshproxy.Credentials{PrivateKey: "v2:YWJjMTIzZGVm"}
 	if err := credentialsDecrypted(creds); !errors.Is(err, errCredentialsNotDecrypted) {
 		t.Fatalf("expected errCredentialsNotDecrypted, got %v", err)
 	}
 }
 
 func TestCredentialsDecrypted_PassphraseIsCiphertext(t *testing.T) {
-	creds := sshproxy.Credentials{PrivateKeyPassphrase: "v1:xyz789"}
+	creds := sshproxy.Credentials{PrivateKeyPassphrase: "v2:eHl6Nzg5"}
 	if err := credentialsDecrypted(creds); !errors.Is(err, errCredentialsNotDecrypted) {
 		t.Fatalf("expected errCredentialsNotDecrypted, got %v", err)
 	}

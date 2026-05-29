@@ -1,0 +1,39 @@
+# Development — build from the repository Dockerfile (do not use for production).
+#
+#   cp .env.example .env
+#   docker compose -f docker-compose.dev.yml up --build -d
+#
+# Published image deployments: use docker-compose.yml (pull nullpo7z/vantyx:latest).
+
+services:
+  vantyx:
+    build: .
+    image: nullpo7z/vantyx:dev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    ports:
+      - "80:8080"
+      - "443:8443"
+      - "2222:2222"
+      - "69:6969/udp"
+    environment:
+      - VANTYX_EXTERNAL_HOST=${VANTYX_EXTERNAL_HOST}
+      - VANTYX_TLS_SANS=${VANTYX_TLS_SANS:-${VANTYX_EXTERNAL_HOST}}
+      - VANTYX_SSH_LISTEN=:2222
+      - VANTYX_RECORDINGS_DIR=/app/recordings
+      - VANTYX_SSH_PASSWORD_ENCRYPTION_KEY=${VANTYX_SSH_PASSWORD_ENCRYPTION_KEY}
+      - VANTYX_SQLITE_PATH=/app/data/vantyx.db
+      - VANTYX_TFTP_LISTEN=0.0.0.0:6969
+    env_file:
+      - .env
+    volumes:
+      - /path/to/vantyx/certs:/app/certs # Make sure this directory exists
+      - /path/to/vantyx/data:/app/data
+      - /path/to/vantyx/recordings:/app/recordings

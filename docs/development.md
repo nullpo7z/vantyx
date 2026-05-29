@@ -6,11 +6,10 @@ project's coding conventions.
 
 ## Prerequisites
 
-- Self-hosted CI runners: see [`self-hosted-runner.md`](self-hosted-runner.md).
 - Go pinned by [`go.mod`](../go.mod) (`go.mod` reports the minimum
   toolchain version).
-- Node.js 20 LTS or newer for the frontend.
-- Docker / docker compose for the integration and end-to-end tests.
+- Node.js **22.13.0 or newer** for the frontend (`web/scripts/check-node.mjs` enforces this; see `web/.nvmrc`).
+- Docker / docker compose for smoke tests and containerized local deployments.
 - `make` for the documented developer commands.
 - `golangci-lint` for running the Go lint suite locally (also invoked
   by `make lint-go`). Install the same v1 line CI uses with:
@@ -43,8 +42,7 @@ project's coding conventions.
 | [`internal/sshd`](../internal/sshd) | CLI SSH gateway (`ssh user@vantyx`). |
 | [`internal/sshproxy`](../internal/sshproxy), [`internal/telnetproxy`](../internal/telnetproxy) | SSH / Telnet proxy bridges. |
 | [`web/src`](../web/src) | SPA built on vanilla ES modules + Tailwind. |
-| [`e2e`](../e2e) | Playwright end-to-end test suite. |
-| [`docs`](.) | Architecture, security, configuration, and roadmap docs. |
+| [`docs`](.) | Architecture, security, configuration, credentials, collaborative sessions, and roadmap. |
 
 ## Running locally
 
@@ -66,22 +64,50 @@ VANTYX_EXTERNAL_HOST=localhost \
 
 ```bash
 cd web
-npm install
+npm install   # requires Node >= 22.13.0 (nvm use)
 npm run dev
 ```
 
 - Serves on `http://localhost:5173`.
 - Vite proxies `/api/*` and `/ws/*` to the backend.
 
-### Single-container Docker
+### Docker (operations — published image)
+
+Operators use [docker-compose.yml](../docker-compose.yml) (pull only, no `build`):
 
 ```bash
-docker compose up --build
+cp .env.example .env   # set VANTYX_EXTERNAL_HOST and encryption key
+# Edit /path/to/vantyx in docker-compose.yml; create host directories
+mkdir -p /path/to/vantyx/{certs,data,recordings}
+docker compose pull
+docker compose up -d
 ```
 
-`docker-compose.yml` maps host ports `80/443/69` to the container, mounts
-a named volume for certs and the SQLite directory, and exports a small
-set of `VANTYX_*` env vars.
+Image: `nullpo7z/vantyx:latest` (pinned in `docker-compose.yml`; change the tag there if needed).
+
+### Docker (development — build from source)
+
+Contributors use [docker-compose.dev.yml](../docker-compose.dev.yml):
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.dev.yml up --build -d
+```
+
+The local image is tagged `nullpo7z/vantyx:dev` so it does not replace the
+published `:latest` tag on your machine.
+
+Both compose files map host ports `80/443/2222/69`, bind-mount
+`/path/to/vantyx/{certs,data,recordings}` (edit before first start), and load
+`VANTYX_*` variables from `.env`.
+
+**Production vs development:** [`docker-compose.yml`](../docker-compose.yml)
+pulls `nullpo7z/vantyx:latest` and sets only the env vars required for a
+minimal deployment. [`docker-compose.dev.yml`](../docker-compose.dev.yml)
+builds the image locally, tags it `:dev`, and adds dev-oriented settings
+(`read_only`, `cap_drop`, `no-new-privileges`, explicit `VANTYX_SQLITE_PATH`,
+TFTP paths, etc.). Use the dev file for hacking on the tree; use the root
+file for production-style runs.
 
 ## Tests
 
@@ -89,15 +115,12 @@ set of `VANTYX_*` env vars.
 |---------|-------|
 | `make test` | `go vet ./...` + `go test ./...`. |
 | `make coverage` | Runs the focused coverage suite for the security-sensitive packages and prints the total. Informational only — pass `MIN=NN` to fail the target when the total drops below NN percent. |
-| `make e2e` | Playwright suite under `e2e/`. Requires Docker. |
 | `make smoke` | Build the Docker image and hit `/healthz`. |
 
 Coverage is not a CI gate: PRs are not blocked on a numeric threshold.
 [`scripts/check_coverage.sh`](../scripts/check_coverage.sh) is still
 available locally for anyone who wants to enforce one
 (`./scripts/check_coverage.sh coverage.out 75`, etc.).
-
-End-to-end tests are documented in [`e2e/README.md`](../e2e/README.md).
 
 ## Coding conventions
 

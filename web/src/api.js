@@ -199,7 +199,126 @@ const API = {
     }
   },
 
-  async createTarget({ name, host, port, protocol, group_id, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, sftp_enabled, ftp_enabled, tftp_enabled, ssh_host_key_fingerprint }) {
+  // --- SSH keys (admin only) ---
+
+  async sshKeys() {
+    const res = await fetch('/api/ssh-keys', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load SSH keys')
+    }
+    return res.json()
+  },
+
+  async createSSHKey({ id, label, ssh_private_key, ssh_private_key_passphrase }) {
+    const res = await fetch('/api/ssh-keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        id: id || '',
+        label: label || '',
+        ssh_private_key: (ssh_private_key && ssh_private_key.trim()) || '',
+        ssh_private_key_passphrase: ssh_private_key_passphrase || '',
+      }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to create SSH key')
+    }
+    return res.json()
+  },
+
+  async updateSSHKey(keyId, { label, ssh_private_key, ssh_private_key_passphrase }) {
+    const body = { label: label || '' }
+    if (ssh_private_key !== undefined && ssh_private_key !== null) body.ssh_private_key = ssh_private_key
+    if (ssh_private_key_passphrase !== undefined && ssh_private_key_passphrase !== null) {
+      body.ssh_private_key_passphrase = ssh_private_key_passphrase
+    }
+    const res = await fetch(`/api/ssh-keys/${encodeURIComponent(keyId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to update SSH key')
+    }
+    return res.json()
+  },
+
+  async deleteSSHKey(keyId) {
+    const res = await fetch(`/api/ssh-keys/${encodeURIComponent(keyId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete SSH key')
+    }
+  },
+
+  // --- Credential identities (admin only) ---
+
+  async credentialIdentities() {
+    const res = await fetch('/api/credential-identities', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load identities')
+    }
+    return res.json()
+  },
+
+  async createCredentialIdentity({ id, label, ssh_username, ssh_password, ssh_key_id }) {
+    const res = await fetch('/api/credential-identities', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        id: id || '',
+        label: label || '',
+        ssh_username: ssh_username || '',
+        ssh_password: ssh_password || '',
+        ssh_key_id: ssh_key_id || '',
+      }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to create identity')
+    }
+    return res.json()
+  },
+
+  async updateCredentialIdentity(identityId, { label, ssh_username, ssh_password, ssh_key_id }) {
+    const body = { label: label || '', ssh_username: ssh_username || '' }
+    if (ssh_password !== undefined && ssh_password !== null) body.ssh_password = ssh_password
+    if (ssh_key_id !== undefined && ssh_key_id !== null) body.ssh_key_id = ssh_key_id
+    const res = await fetch(`/api/credential-identities/${encodeURIComponent(identityId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to update identity')
+    }
+    return res.json()
+  },
+
+  async deleteCredentialIdentity(identityId) {
+    const res = await fetch(`/api/credential-identities/${encodeURIComponent(identityId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete identity')
+    }
+  },
+
+  async createTarget({ name, host, port, protocol, group_id, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, credential_identity_id, ssh_key_id, sftp_enabled, ftp_enabled, tftp_enabled, ssh_host_key_fingerprint }) {
     const payload = {
       name,
       host,
@@ -212,6 +331,8 @@ const API = {
       ssh_private_key: (ssh_private_key && ssh_private_key.trim()) || '',
       ssh_private_key_passphrase: ssh_private_key_passphrase || '',
     }
+    if (credential_identity_id) payload.credential_identity_id = credential_identity_id
+    if (ssh_key_id) payload.ssh_key_id = ssh_key_id
     if (typeof sftp_enabled === 'boolean') payload.sftp_enabled = sftp_enabled
     if (typeof ftp_enabled === 'boolean') payload.ftp_enabled = ftp_enabled
     if (typeof tftp_enabled === 'boolean') payload.tftp_enabled = tftp_enabled
@@ -231,7 +352,7 @@ const API = {
     return res.json()
   },
 
-  async updateTarget(targetId, { name, host, port, protocol, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, sftp_enabled, ftp_enabled, tftp_enabled }) {
+  async updateTarget(targetId, { name, host, port, protocol, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, credential_identity_id, ssh_key_id, sftp_enabled, ftp_enabled, tftp_enabled }) {
     const body = {
       name,
       host,
@@ -240,6 +361,8 @@ const API = {
       path: path || '',
       ssh_username: ssh_username || '',
     }
+    if (credential_identity_id) body.credential_identity_id = credential_identity_id
+    if (ssh_key_id) body.ssh_key_id = ssh_key_id
     if (typeof sftp_enabled === 'boolean') {
       body.sftp_enabled = sftp_enabled
     }

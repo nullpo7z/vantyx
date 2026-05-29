@@ -38,7 +38,7 @@ func helpLines() []string {
 		"             or connect <group#> <server#> from root",
 		"",
 		"Commands:",
-		"  cd <n> | cd ..     Change group (updates header)",
+		"  cd <n> | cd ..     Enter subgroup/folder or go up (cd .. / cd 0)",
 		"  connect <n>        Connect (in group: server index n)",
 		"  connect <g> <n>    Connect from root",
 		"  ls                 Reload and refresh header",
@@ -82,11 +82,10 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 
 	readLine := newCLILineReader(wr, inputCh)
 
-	// lastList caches the groups / targets visible in the menu so
-	// numeric commands (cd N, connect N M) resolve to stable entries.
-	var lastList []cliGroupEntry
-	// currentGroupIndex is 1-based; 0 means "root" (no group selected).
-	var currentGroupIndex int
+	// allGroups caches every access group the user can reach.
+	var allGroups []cliGroupEntry
+	// navLoc is the current position in the group / path tree.
+	var navLoc cliNavLocation
 	// screenCols / screenRows track the latest known terminal size.
 	// Both are updated from window-change events so target sessions
 	// started later use the current size — not a stale pty-req snapshot.
@@ -103,24 +102,15 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 		pendingExtra = append(pendingExtra, lines...)
 	}
 
-	loadLastList := func() error {
+	loadAllGroups := func() error {
 		ctxList, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		entries, err := s.loadGroupsWithTerminalTargets(ctxList, userID)
 		if err != nil {
 			return err
 		}
-		lastList = entries
+		allGroups = entries
 		return nil
-	}
-
-	redrawScreen := func(extraLines []string) {
-		_, _ = wr.Write([]byte(cliClearScreen))
-		_ = writeCLIScreen(wr, cliScreenState{
-			Entries:           lastList,
-			CurrentGroupIndex: currentGroupIndex,
-			Cols:              screenCols,
-		}, extraLines)
 	}
 
 	// activeSessionsForTargetIDs returns user's active sessions whose
@@ -142,22 +132,8 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 	}
 
 	activeSessionsForScope := func() []*session.Session {
-		if currentGroupIndex >= 1 && currentGroupIndex <= len(lastList) {
-			tidSet := make(map[string]bool)
-			for _, t := range lastList[currentGroupIndex-1].Targets {
-				tidSet[string(t.ID)] = true
-			}
-			return activeSessionsForTargetIDs(tidSet)
-		}
-		var out []*session.Session
-		if lister, ok := s.sessionManager.(SessionLister); ok {
-			for _, id := range lister.ActiveIDs() {
-				if sess, ok := s.sessionManager.Get(id); ok && sess.UserID == userID {
-					out = append(out, sess)
-				}
-			}
-		}
-		return out
+		tidSet := targetIDsInNavScope(allGroups, navLoc)
+		return activeSessionsForTargetIDs(tidSet)
 	}
 
 	var cliSessionMgr *session.Manager
@@ -165,14 +141,25 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 		cliSessionMgr = m
 	}
 
-	getPrompt := func() string {
-		if currentGroupIndex >= 1 && currentGroupIndex <= len(lastList) {
-			return "vantyx:/" + lastList[currentGroupIndex-1].Group.Name + "> "
-		}
-		return "vantyx:/> "
+	redrawScreen := func(extraLines []string) {
+		_, _ = wr.Write([]byte(cliClearScreen))
+		sessionLines := formatCLIActiveSessionLines(activeSessionsForScope(), cliSessionMgr)
+		combined := append(sessionLines, extraLines...)
+		_ = writeCLIScreen(wr, cliScreenState{
+			AllGroups: allGroups,
+			Location:  navLoc,
+			Cols:      screenCols,
+		}, combined)
 	}
 
-	if err := loadLastList(); err != nil {
+	getPrompt := func() string {
+		if navLoc.atRoot() {
+			return "vantyx:/> "
+		}
+		return "vantyx:" + navLoc.pwd() + "> "
+	}
+
+	if err := loadAllGroups(); err != nil {
 		setStatus(fmt.Sprintf("Error: %v", err))
 	}
 
@@ -205,7 +192,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 	for {
 		drainResize()
 
-		if err := loadLastList(); err != nil {
+		if err := loadAllGroups(); err != nil {
 			setStatus(fmt.Sprintf("Error: %v", err))
 		}
 		extra := pendingExtra
@@ -245,21 +232,28 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 				continue
 			}
 			if args[0] == ".." || args[0] == "0" {
-				currentGroupIndex = 0
+				navLoc = navLoc.parent()
 				continue
 			}
 			n, _ := strconv.Atoi(args[0])
-			if n < 1 || n > len(lastList) {
-				setStatus(fmt.Sprintf("Invalid group index. Use 1-%d.", len(lastList)))
+			view := buildCLINavView(allGroups, navLoc)
+			if n < 1 || n > len(view.Items) {
+				if len(view.Items) == 0 {
+					setStatus("No subgroups here. Use cd .. to go up.")
+				} else {
+					setStatus(fmt.Sprintf("Invalid index. Use 1-%d.", len(view.Items)))
+				}
 				continue
 			}
-			currentGroupIndex = n
+			if next, ok := navLoc.cdIndex(allGroups, n); ok {
+				navLoc = next
+			}
 			continue
 		case "ls":
 			setStatus("Refreshed.")
 			continue
 		case "list", "sessions":
-			pendingExtra = formatCLIActiveSessionLines(activeSessionsForScope(), cliSessionMgr)
+			setStatus("Refreshed.")
 			continue
 		case "resume":
 			drainResize()
@@ -267,7 +261,7 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			continue
 		case "connect":
 			drainResize()
-			pendingExtra = s.handleConnectCommand(wr, inputCh, args, lastList, currentGroupIndex, cliSessionMgr, readLine, prompt, userID, screenCols, screenRows, resizeChan)
+			pendingExtra = s.handleConnectCommand(wr, inputCh, args, allGroups, navLoc, cliSessionMgr, readLine, prompt, userID, screenCols, screenRows, resizeChan)
 			continue
 		default:
 			setStatus(fmt.Sprintf("Unknown command '%s'. Type 'help' for commands.", cmd))
@@ -455,49 +449,104 @@ func (s *Server) handleResumeCommand(ctx context.Context, wr io.Writer, inputCh 
 // recording size, so a resize before "connect" is honored.
 //
 //nolint:gocyclo // connect orchestrates session start, recording, and IO.
-func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []string, lastList []cliGroupEntry, currentGroupIndex int, cliSessionMgr *session.Manager, readLine func(bool, string) (string, error), prompt func(string, ...interface{}), userID string, screenCols, screenRows int, resizeChan <-chan sshproxy.TerminalSize) []string {
+func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []string, allGroups []cliGroupEntry, navLoc cliNavLocation, cliSessionMgr *session.Manager, readLine func(bool, string) (string, error), prompt func(string, ...interface{}), userID string, screenCols, screenRows int, resizeChan <-chan sshproxy.TerminalSize) []string {
 	_ = cliSessionMgr
 	var status []string
 	add := func(s string) { status = append(status, s) }
 
-	if len(lastList) == 0 {
+	if len(allGroups) == 0 {
 		add("No groups assigned.")
 		return status
 	}
-	var gi, ti int
+
+	resolveTarget := func(loc cliNavLocation, hostIndex int) (*access.Target, bool) {
+		view := buildCLINavView(allGroups, loc)
+		if hostIndex < 1 || hostIndex > len(view.Hosts) {
+			return nil, false
+		}
+		return view.Hosts[hostIndex-1], true
+	}
+
+	var target *access.Target
 	switch {
-	case currentGroupIndex >= 1 && currentGroupIndex <= len(lastList) && len(args) == 1:
-		gi = currentGroupIndex
-		ti, _ = strconv.Atoi(args[0])
+	case !navLoc.atRoot() && len(args) == 1:
+		ti, _ := strconv.Atoi(args[0])
+		var ok bool
+		target, ok = resolveTarget(navLoc, ti)
+		if !ok {
+			view := buildCLINavView(allGroups, navLoc)
+			if len(view.Hosts) == 0 {
+				add("No SSH/Telnet servers at this path.")
+			} else {
+				add(fmt.Sprintf("Invalid server index. Use 1-%d.", len(view.Hosts)))
+			}
+			return status
+		}
 	case len(args) == 1 && strings.Contains(args[0], "."):
 		dot := strings.Index(args[0], ".")
-		gi, _ = strconv.Atoi(strings.TrimSpace(args[0][:dot]))
-		ti, _ = strconv.Atoi(strings.TrimSpace(args[0][dot+1:]))
+		gi, _ := strconv.Atoi(strings.TrimSpace(args[0][:dot]))
+		ti, _ := strconv.Atoi(strings.TrimSpace(args[0][dot+1:]))
+		rootView := buildCLINavView(allGroups, cliNavLocation{})
+		if gi < 1 || gi > len(rootView.Items) {
+			add(fmt.Sprintf("Invalid group index. Use 1-%d.", len(rootView.Items)))
+			return status
+		}
+		nextLoc, ok := cliNavLocation{}.cdIndex(allGroups, gi)
+		if !ok {
+			add("Invalid group index.")
+			return status
+		}
+		var tok bool
+		target, tok = resolveTarget(nextLoc, ti)
+		if !tok {
+			childView := buildCLINavView(allGroups, nextLoc)
+			if len(childView.Hosts) == 0 {
+				add("No SSH/Telnet servers in that group.")
+			} else {
+				add(fmt.Sprintf("Invalid server index. Group has servers 1-%d.", len(childView.Hosts)))
+			}
+			return status
+		}
 	case len(args) >= 2:
-		gi, _ = strconv.Atoi(args[0])
-		ti, _ = strconv.Atoi(args[1])
+		gi, _ := strconv.Atoi(args[0])
+		ti, _ := strconv.Atoi(args[1])
+		baseLoc := navLoc
+		if baseLoc.atRoot() {
+			rootView := buildCLINavView(allGroups, baseLoc)
+			if gi < 1 || gi > len(rootView.Items) {
+				add(fmt.Sprintf("Invalid group index. Use 1-%d.", len(rootView.Items)))
+				return status
+			}
+			nextLoc, ok := baseLoc.cdIndex(allGroups, gi)
+			if !ok {
+				add("Invalid group index.")
+				return status
+			}
+			baseLoc = nextLoc
+		}
+		var ok bool
+		target, ok = resolveTarget(baseLoc, ti)
+		if !ok {
+			view := buildCLINavView(allGroups, baseLoc)
+			if len(view.Hosts) == 0 {
+				add("No SSH/Telnet servers at this path.")
+			} else {
+				add(fmt.Sprintf("Invalid server index. Use 1-%d.", len(view.Hosts)))
+			}
+			return status
+		}
 	default:
-		if currentGroupIndex >= 1 && currentGroupIndex <= len(lastList) {
+		if !navLoc.atRoot() {
 			add("Usage: connect <server index> (e.g. connect 1)")
 		} else {
 			add("Usage: connect <group> <server> or cd <group> then connect <server>")
 		}
 		return status
 	}
-	if gi < 1 || gi > len(lastList) {
-		add(fmt.Sprintf("Invalid group index. Use 1-%d.", len(lastList)))
+	if target == nil {
+		add("No target selected.")
 		return status
 	}
-	e := &lastList[gi-1]
-	if ti < 1 || ti > len(e.Targets) {
-		if len(e.Targets) == 0 {
-			add("No SSH/Telnet servers in this group.")
-		} else {
-			add(fmt.Sprintf("Invalid server index. Group has servers 1-%d.", len(e.Targets)))
-		}
-		return status
-	}
-	target := e.Targets[ti-1]
 
 	prompt("Session name (optional): ")
 	sessionName, _ := readLine(true, "")
@@ -506,7 +555,7 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 	sessionDesc, _ := readLine(true, "")
 	sessionDesc = strings.TrimSpace(sessionDesc)
 
-	if target.Protocol == access.ProtocolSSH && target.SSHPrivateKey != "" && strings.HasPrefix(target.SSHPrivateKey, secret.CiphertextVersionPrefix) {
+	if target.Protocol == access.ProtocolSSH && target.SSHPrivateKey != "" && secret.IsEncrypted(target.SSHPrivateKey) {
 		add("Saved credentials could not be decrypted. Check VANTYX_SSH_PASSWORD_ENCRYPTION_KEY.")
 		return status
 	}

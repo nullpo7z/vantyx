@@ -84,11 +84,6 @@ export function shouldRefreshIncomingInvitationsBanner(payload) {
   return type === SharingEventType.sessionChange || INCOMING_INVITATION_EVENTS.has(type)
 }
 
-/** @deprecated Use {@link shouldRefreshIncomingInvitationsBanner} */
-export function isIncomingInvitationSSE(data) {
-  return INCOMING_INVITATION_EVENTS.has(eventType(data))
-}
-
 /** Issued-invitations table in the invite dialog (session-scoped). */
 export function shouldRefreshInviteList(payload, sessionId) {
   if (!payload || !sessionId) return false

@@ -22,7 +22,6 @@ import (
 	"github.com/nullpo7z/vantyx/internal/recording"
 )
 
-
 const (
 	recordingExportAcquireTimeout = 5 * time.Minute
 	recordingExportConvertTimeout = 15 * time.Minute

@@ -229,6 +229,9 @@ func Start(ctx context.Context, host string, port int, username, password string
 // VNCPort returns the local TCP port where x11vnc listens.
 func (b *Bridge) VNCPort() int { return b.vncPort }
 
+// Display returns the Xvfb display number used by this bridge.
+func (b *Bridge) Display() int { return b.display }
+
 // Size returns the screen size used for Xvfb/xfreerdp.
 func (b *Bridge) Size() (int, int) { return b.width, b.height }
 

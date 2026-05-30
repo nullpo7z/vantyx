@@ -8,6 +8,7 @@ let state = {
   navTargets: null,
   navSessions: null,
   navRecordings: null,
+  navRecordingExports: null,
   navGroups: null,
   navUsers: null,
   navCredentials: null,
@@ -22,6 +23,7 @@ function navLinks() {
     navTargets,
     navSessions,
     navRecordings,
+    navRecordingExports,
     navGroups,
     navUsers,
     navCredentials,
@@ -33,6 +35,7 @@ function navLinks() {
     navTargets,
     navSessions,
     navRecordings,
+    navRecordingExports,
     navGroups,
     navUsers,
     navCredentials,
@@ -69,6 +72,7 @@ function setNavLinkVisible(el, visible) {
  * @param {HTMLElement} opts.navTargets
  * @param {HTMLElement} opts.navSessions
  * @param {HTMLElement} opts.navRecordings
+ * @param {HTMLElement} [opts.navRecordingExports]
  * @param {HTMLElement} opts.navGroups
  * @param {HTMLElement} opts.navUsers
  * @param {HTMLElement} opts.navCredentials
@@ -78,6 +82,7 @@ function setNavLinkVisible(el, visible) {
  * @param {() => void} opts.onHome
  * @param {() => void} opts.onSessions
  * @param {() => void} opts.onRecordings
+ * @param {() => void} [opts.onRecordingExports]
  * @param {() => void} opts.onGroups
  * @param {() => void} opts.onUsers
  * @param {() => void} opts.onCredentials
@@ -88,6 +93,7 @@ export function initNav({
   navTargets,
   navSessions,
   navRecordings,
+  navRecordingExports,
   navGroups,
   navUsers,
   navCredentials,
@@ -97,6 +103,7 @@ export function initNav({
   onHome,
   onSessions,
   onRecordings,
+  onRecordingExports,
   onGroups,
   onUsers,
   onCredentials,
@@ -108,6 +115,7 @@ export function initNav({
     navTargets,
     navSessions,
     navRecordings,
+    navRecordingExports,
     navGroups,
     navUsers,
     navCredentials,
@@ -139,6 +147,15 @@ export function initNav({
     if (!me) return
     if (typeof onRecordings === 'function') onRecordings()
   })
+
+  if (navRecordingExports) {
+    navRecordingExports.addEventListener('click', (e) => {
+      e.preventDefault()
+      const me = state.getMe && state.getMe()
+      if (!me) return
+      if (typeof onRecordingExports === 'function') onRecordingExports()
+    })
+  }
 
   navGroups.addEventListener('click', (e) => {
     e.preventDefault()
@@ -188,7 +205,7 @@ export function initNav({
  * Mark the supplied tab as active and refresh per-link visibility based
  * on the current user's role.
  *
- * @param {'targets'|'sessions'|'recordings'|'groups'|'users'|'credentials'|'audit'|'settings'} tab
+ * @param {'targets'|'sessions'|'recordings'|'recordingExports'|'groups'|'users'|'credentials'|'audit'|'settings'} tab
  */
 export function setActiveNav(tab) {
   const { navTargets, navRecordings, navGroups, getMe } = state
@@ -206,6 +223,7 @@ export function setActiveNav(tab) {
     targets: state.navTargets,
     sessions: state.navSessions,
     recordings: state.navRecordings,
+    recordingExports: state.navRecordingExports,
     groups: state.navGroups,
     users: state.navUsers,
     credentials: state.navCredentials,
@@ -225,9 +243,10 @@ export function setActiveNav(tab) {
  *   shown.
  */
 export function showAuthenticatedNav(isAdmin) {
-  const { navSessions, navRecordings } = state
+  const { navSessions, navRecordings, navRecordingExports } = state
   setNavLinkVisible(navSessions, true)
   setNavLinkVisible(navRecordings, true)
+  setNavLinkVisible(navRecordingExports, true)
   if (isAdmin) {
     for (const el of navLinks()) {
       if (isAdminOnlyNav(el)) {

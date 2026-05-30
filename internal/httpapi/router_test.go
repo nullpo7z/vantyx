@@ -4150,7 +4150,7 @@ func TestConvertCastToVideo_NoAggInPath(t *testing.T) {
 	defer func() {
 		_ = os.Setenv("PATH", oldPath)
 	}()
-	_, _, _, err := convertCastToVideo("/tmp/nonexistent.cast", "gif", "User: admin")
+	_, _, _, err := convertCastToVideo(context.Background(), "/tmp/nonexistent.cast", "gif", "User: admin", 1, nil)
 	if err == nil {
 		t.Fatal("expected error when agg is not found in PATH")
 	}

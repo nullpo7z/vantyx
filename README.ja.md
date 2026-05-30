@@ -4,7 +4,6 @@
 
 [![CI](https://github.com/nullpo7z/vantyx/actions/workflows/ci-dev.yml/badge.svg)](https://github.com/nullpo7z/vantyx/actions/workflows/ci-dev.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Go Reference](https://pkg.go.dev/badge/github.com/nullpo7z/vantyx.svg)](https://pkg.go.dev/github.com/nullpo7z/vantyx)
 
 Vantyx は、ブラウザや CLI クライアントと SSH / Telnet / RDP / VNC / SFTP /
 FTP / TFTP サーバーをつなぐセルフホスト型のアクセスゲートウェイです。

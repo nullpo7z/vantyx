@@ -799,6 +799,55 @@ const API = {
     return res.json()
   },
 
+  /** Background recording export jobs for the current user. */
+  async recordingExports() {
+    const res = await fetch('/api/recordings/exports', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load recording exports')
+    }
+    return res.json()
+  },
+
+  /** Cancel a queued or running recording export job. */
+  async cancelRecordingExport(exportId) {
+    const res = await fetch(`/api/recordings/exports/${encodeURIComponent(exportId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to cancel recording export')
+    }
+  },
+
+  /** Delete a background recording export job. */
+  async deleteRecordingExport(exportId) {
+    const res = await fetch(`/api/recordings/exports/${encodeURIComponent(exportId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete recording export')
+    }
+  },
+
+  /** Queue GIF/WebM generation for a terminal recording. */
+  async startRecordingExport(recordingId, format) {
+    const q = new URLSearchParams()
+    q.set('format', format)
+    const res = await fetch(
+      `/api/recordings/${encodeURIComponent(recordingId)}/export?${q}`,
+      { method: 'POST', credentials: 'include' },
+    )
+    if (!res.ok && res.status !== 202) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to queue recording export')
+    }
+    return res.json()
+  },
+
   /** 登録済みタグ一覧（ユーザー・ターゲット・グループで使用中のタグの重複なし） */
   async tags() {
     const res = await fetch('/api/tags', { credentials: 'include' })

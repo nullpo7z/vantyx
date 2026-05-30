@@ -177,6 +177,7 @@ func (a *App) handleRDPSessionDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 		return
 	}
+	a.finishVideoRecording(sessionID)
 	a.RDPVNCManager.RemoveSession(sessionID)
 	audit("rdp_session_stop", auditFields{
 		"session_id": sessionID,
@@ -265,6 +266,11 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 			}
 			sess := a.RDPVNCManager.RegisterSession(bridgeKey, sid, userID, targetID, target.Name, width, height, bridge)
 			sessionID = sess.ID
+			a.startRDPVideoRecording(r.Context(), sessionID, userID, targetID, bridge.Display(), width, height)
+			go func(id string, done <-chan struct{}) {
+				<-done
+				a.finishVideoRecording(id)
+			}(sessionID, bridge.Done())
 			if a.SessionEventBroker != nil {
 				a.SessionEventBroker.Broadcast()
 			}

@@ -131,6 +131,12 @@ var Messages = map[string]string{
 	"recordings.convertReadFailed":  "failed to read converted file",
 	"recordings.videoExportFailed":  "Video export failed.",
 	"recordings.videoToolsRequired": "Video export is unavailable. The server needs agg and ffmpeg installed.",
+	"recordings.exportNotFound":     "export job not found",
+	"recordings.exportIdRequired":   "export id is required",
+	"recordings.exportUnavailable":  "export service unavailable",
+	"recordings.exportNotReady":     "export is not ready yet",
+	"recordings.exportDirectOnly":   "this format is available for direct download only; use the export queue for GIF/WebM conversion",
+	"recordings.exportBusy":         "export is still running and cannot be deleted yet",
 
 	// Credential profiles (admin management).
 	"credentials.encryptionKeyRequired": "encryption key not configured (VANTYX_SSH_PASSWORD_ENCRYPTION_KEY)",

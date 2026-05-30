@@ -42,7 +42,7 @@ FROM alpine:3.23
 # する方式に切替（CWE-250 / 269: 不要権限の回避）。
 ARG AGG_VERSION=v1.7.0
 RUN apk add --no-cache wget ffmpeg fontconfig font-dejavu \
-	freerdp xvfb x11vnc xdpyinfo xkeyboard-config \
+	freerdp xvfb x11vnc xdpyinfo xkeyboard-config tigervnc-client \
 	&& adduser -D -u 65532 nonroot \
 	&& wget -q "https://github.com/asciinema/agg/releases/download/${AGG_VERSION}/agg-x86_64-unknown-linux-musl" -O /usr/local/bin/agg \
 	&& chmod +x /usr/local/bin/agg \

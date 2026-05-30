@@ -139,6 +139,12 @@ var Messages = map[string]string{
 	"recordings.convertReadFailed":  "変換後ファイルの読み込みに失敗しました",
 	"recordings.videoExportFailed":  "動画の書き出しに失敗しました。",
 	"recordings.videoToolsRequired": "動画の書き出しを利用できません。サーバーに agg と ffmpeg が必要です。",
+	"recordings.exportNotFound":     "書き出しジョブが見つかりません",
+	"recordings.exportIdRequired":   "書き出し ID が必要です",
+	"recordings.exportUnavailable":  "書き出しサービスを利用できません",
+	"recordings.exportNotReady":     "書き出しはまだ完了していません",
+	"recordings.exportDirectOnly":   "この形式は直接ダウンロードのみです。GIF/WebM 変換は書き出しキューを利用してください",
+	"recordings.exportBusy":         "変換中のため削除できません",
 
 	// RDP / VNC / TFTP capability checks.
 	"rdp.notRDP":         "RDP サーバーではありません",

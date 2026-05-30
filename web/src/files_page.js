@@ -409,6 +409,7 @@ export function renderFilesPage(container) {
       loadList()
     } else if (download) {
       e.preventDefault()
+      e.stopPropagation()
       const path = download.dataset.path
       if (!path) return
       const name = path.split('/').filter(Boolean).pop() || 'download'

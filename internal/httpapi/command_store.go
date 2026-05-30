@@ -74,8 +74,9 @@ type commandLogRecorder struct {
 	userID    string
 	targetID  string
 
-	buf  []byte
-	echo commandLineTracker
+	buf          []byte
+	echo         commandLineTracker
+	lastEchoLine string // preserved across PTY \\r prompt redraws
 }
 
 type commandLogStdoutWriter struct {
@@ -107,6 +108,9 @@ func (r *commandLogRecorder) recordStdout(p []byte) {
 		return
 	}
 	r.echo.feed(p)
+	if line := r.echo.currentLine(); line != "" {
+		r.lastEchoLine = line
+	}
 }
 
 // RecordInput is called from sshproxy bridge when stdin bytes are sent to target.
@@ -133,10 +137,14 @@ func (r *commandLogRecorder) RecordInput(p []byte) {
 func (r *commandLogRecorder) flushLine() {
 	stdinLine := strings.TrimSpace(string(r.buf))
 	echoLine := r.echo.currentLine()
+	if echoLine == "" {
+		echoLine = r.lastEchoLine
+	}
 	line := mergeCommandLine(stdinLine, echoLine)
 	r.buf = r.buf[:0]
 	r.echo.reset()
-	if line == "" {
+	r.lastEchoLine = ""
+	if line == "" || isNoiseCommandLogLine(line) {
 		return
 	}
 	r.store.appendLine(context.Background(), r.sessionID, r.userID, r.targetID, line)

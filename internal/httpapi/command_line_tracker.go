@@ -1,6 +1,12 @@
 package httpapi
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
+
+// promptNoisePattern matches shell/window-title redraws that are not commands.
+var promptNoisePattern = regexp.MustCompile(`^(?:\d+;)?[^\s]*@[^\s:]*:[^\s$#%]*[$#%>]\s*$`)
 
 // commandLineTracker approximates the current input line on a PTY from remote stdout,
 // so tab completion and line redraws are reflected when logging commands.
@@ -53,6 +59,16 @@ func (t *commandLineTracker) consumeEscape(seq []byte) (int, bool) {
 		return 0, false
 	}
 	switch seq[1] {
+	case ']': // OSC — window title etc.; never part of the input line
+		for j := 2; j < len(seq); j++ {
+			if seq[j] == 0x07 {
+				return j + 1, true
+			}
+			if seq[j] == 0x1b && j+1 < len(seq) && seq[j+1] == '\\' {
+				return j + 2, true
+			}
+		}
+		return 0, false
 	case '[':
 		for j := 2; j < len(seq); j++ {
 			if isCSIFinal(seq[j]) {
@@ -183,25 +199,71 @@ func (t *commandLineTracker) insertByte(b byte) {
 }
 
 // mergeCommandLine prefers the PTY echo line when it extends stdin (e.g. tab completion).
+// When stdin has bytes but the PTY did not echo them (password prompts), the line is
+// dropped so secrets are not persisted (CWE-532).
 func mergeCommandLine(stdinLine, echoLine string) string {
 	stdinLine = strings.TrimSpace(stdinLine)
 	echoLine = strings.TrimSpace(echoLine)
+	if stdinLine != "" && echoLine == "" {
+		return ""
+	}
 	if echoLine == "" {
 		return stdinLine
 	}
 	if stdinLine == "" {
-		return stripShellPrompt(echoLine)
+		candidate := stripShellPrompt(echoLine)
+		if isNoiseCommandLogLine(candidate) {
+			return ""
+		}
+		return candidate
 	}
 	if idx := strings.LastIndex(echoLine, stdinLine); idx >= 0 {
-		return strings.TrimSpace(echoLine[idx:])
+		candidate := strings.TrimSpace(echoLine[idx:])
+		if isNoiseCommandLogLine(candidate) {
+			return ""
+		}
+		return candidate
 	}
 	if len(echoLine) >= len(stdinLine) {
-		if stripped := stripShellPrompt(echoLine); stripped != "" {
+		if stripped := stripShellPrompt(echoLine); stripped != "" && !isNoiseCommandLogLine(stripped) {
 			return stripped
 		}
-		return echoLine
+		if !isNoiseCommandLogLine(echoLine) {
+			return echoLine
+		}
+		return ""
+	}
+	if isNoiseCommandLogLine(stdinLine) {
+		return ""
 	}
 	return stdinLine
+}
+
+func isNoiseCommandLogLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return true
+	}
+	if strings.Contains(line, "\x1b") {
+		return true
+	}
+	if promptNoisePattern.MatchString(line) {
+		return true
+	}
+	// Device-style bare prompts (e.g. Z9100-ON#) with no command token.
+	if !strings.Contains(line, " ") && strings.HasSuffix(line, "#") {
+		return true
+	}
+	stripped := stripShellPrompt(line)
+	if stripped == "" || stripped == line {
+		if strings.Contains(line, "@") && strings.ContainsAny(line, "$#%>") {
+			return true
+		}
+		if strings.HasPrefix(line, "0;") {
+			return true
+		}
+	}
+	return false
 }
 
 func stripShellPrompt(s string) string {

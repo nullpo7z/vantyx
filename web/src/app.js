@@ -123,6 +123,7 @@ export function renderApp(container) {
   let groupsCache = null
   let selectedGroupId = ''
   const expandedGroups = new Set()
+  const recordingsExpandedGroups = new Set()
   /** 録画ページ用: 選択中のグループID・ターゲットID（サーバー）・表示名 */
   let selectedRecordingsGroupId = ''
   let selectedRecordingsTargetId = ''
@@ -242,11 +243,12 @@ export function renderApp(container) {
       escapeHtml,
       buildGroupTree,
       renderGroupTree,
+      ensureGroupPathExpanded,
       getGroupsCache: () => groupsCache,
       setGroupsCache: (v) => {
         groupsCache = v
       },
-      expandedGroups,
+      expandedGroups: recordingsExpandedGroups,
       getState: () => ({
         groupId: selectedRecordingsGroupId,
         targetId: selectedRecordingsTargetId,
@@ -1022,7 +1024,7 @@ export function renderApp(container) {
       // Ensure renderGroupTree sees the current mode (used for showing group actions).
       mainContent.dataset.treeMode = mode
       const treeRoot = buildGroupTree(groups || [])
-      const treeHtml = renderGroupTree(treeRoot, 0)
+      const treeHtml = renderGroupTree(treeRoot, selectedGroupId, 0, expandedGroups)
       const selectedGroup = (groups || []).find((g) => g.id === selectedGroupId)
       const targets = selectedGroup ? (selectedGroup.targets || []) : []
       const label = selectedGroupId || 'root'
@@ -2748,9 +2750,18 @@ export function renderApp(container) {
     return root
   }
 
-  /** selectedIdForHighlight: 省略時は selectedGroupId を使用（ホーム/サーバー管理）。録画ページでは selectedRecordingsGroupId を渡す */
-  function renderGroupTree(node, depth, selectedIdForHighlight) {
-    const selectedId = selectedIdForHighlight !== undefined ? selectedIdForHighlight : selectedGroupId
+  function ensureGroupPathExpanded(groupId, expandedSet) {
+    if (!groupId) return
+    const parts = groupId.split('/').filter(Boolean)
+    let acc = ''
+    for (let i = 0; i < parts.length - 1; i++) {
+      acc = acc ? `${acc}/${parts[i]}` : parts[i]
+      expandedSet.add(acc)
+    }
+  }
+
+  /** selectedId: highlight this group row. expandedSet: which nodes are expanded in the tree. */
+  function renderGroupTree(node, selectedId, depth = 0, expandedSet = expandedGroups) {
     const children = node.children || {}
     const keys = Object.keys(children)
     if (keys.length === 0) {
@@ -2785,7 +2796,7 @@ export function renderApp(container) {
         const isSelected = child.id === selectedId
         const rowClass = isSelected ? 'bg-sky-100 text-sky-800 font-medium' : ''
         const hasChildren = child.children && Object.keys(child.children).length > 0
-        const isExpanded = expandedGroups.has(child.id)
+        const isExpanded = expandedSet.has(child.id)
         const caret = hasChildren ? (isExpanded ? '▼' : '▶') : ''
         const caretHtml = hasChildren
           ? `<div class="w-[40px] flex items-center justify-center text-[10px] text-slate-700 hover:text-slate-900 leading-none cursor-pointer shrink-0 self-stretch" data-group-toggle="1" data-group-id="${escapeHtml(child.id)}">${caret}</div>`
@@ -2810,7 +2821,7 @@ export function renderApp(container) {
               </div>
               ${actionHtml}
             </div>
-            ${hasChildren && isExpanded ? renderGroupTree(child, depth + 1, selectedId) : ''}
+            ${hasChildren && isExpanded ? renderGroupTree(child, selectedId, depth + 1, expandedSet) : ''}
           </li>
         `
       })

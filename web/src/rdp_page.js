@@ -92,7 +92,39 @@ export function renderRdpPage(container) {
 
   let rfb = null
   let resizeRaf = 0
+  let activeSessionId = sessionId || ''
   // no explicit scaling here; rely on noVNC's scaleViewport so input coordinates stay correct.
+
+  async function resolveActiveSessionId() {
+    if (activeSessionId) return activeSessionId
+    if (!targetId || typeof API?.rdpSessions !== 'function') return ''
+    try {
+      const res = await API.rdpSessions()
+      const hit = (res.items || []).find((s) => s.target_id === targetId)
+      if (hit?.session_id) {
+        activeSessionId = hit.session_id
+        const u = new URL(window.location.href)
+        if (u.searchParams.get('session_id') !== activeSessionId) {
+          u.searchParams.set('session_id', activeSessionId)
+          window.history.replaceState({}, '', u.toString())
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return activeSessionId
+  }
+
+  async function endRdpSession() {
+    await resolveActiveSessionId()
+    if (!activeSessionId || typeof API?.rdpSessionDelete !== 'function') return
+    try {
+      await API.rdpSessionDelete(activeSessionId)
+    } catch {
+      /* UI still closes locally */
+    }
+    activeSessionId = ''
+  }
 
   function showConnecting() {
     connectingEl.classList.remove('hidden')
@@ -164,6 +196,7 @@ export function renderRdpPage(container) {
 
       rfb.addEventListener('connect', () => {
         showScreen()
+        void resolveActiveSessionId()
         // 初回だけ軽くリサイズイベントを投げて noVNC に再計算させる
         setTimeout(() => {
           try { window.dispatchEvent(new window.Event('resize')) } catch { /* ignore */ }
@@ -202,13 +235,7 @@ export function renderRdpPage(container) {
   })
 
   disconnectBtn.addEventListener('click', async () => {
-    try {
-      if (sessionId && typeof API?.rdpSessionDelete === 'function') {
-        await API.rdpSessionDelete(sessionId)
-      }
-    } catch {
-      // エラー時もローカル側は切断しておく（UI 優先）。
-    }
+    await endRdpSession()
     disconnect()
     window.removeEventListener('resize', onResize)
     closeWindow()

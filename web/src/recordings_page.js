@@ -106,6 +106,7 @@ export async function renderRecordingsPage({
   escapeHtml,
   buildGroupTree,
   renderGroupTree,
+  ensureGroupPathExpanded,
   getGroupsCache,
   setGroupsCache,
   expandedGroups,
@@ -232,7 +233,8 @@ export async function renderRecordingsPage({
     }
     const groups = groupsCache
     const treeRoot = buildGroupTree(groups || [])
-    const treeHtml = renderGroupTree(treeRoot, 0, selectedRecordingsGroupId)
+    ensureGroupPathExpanded(selectedRecordingsGroupId, expandedGroups)
+    const treeHtml = renderGroupTree(treeRoot, selectedRecordingsGroupId, 0, expandedGroups)
     const selectedGroup = (groups || []).find((g) => g.id === selectedRecordingsGroupId)
     const targets = selectedGroup ? (selectedGroup.targets || []) : []
 
@@ -496,6 +498,7 @@ export async function renderRecordingsPage({
     mainContent.querySelectorAll('[data-group-select="1"]').forEach((el) => {
       el.addEventListener('click', () => {
         const gid = el.getAttribute('data-group-id') || ''
+        ensureGroupPathExpanded(gid, expandedGroups)
         setState({
           groupId: gid,
           targetId: '',

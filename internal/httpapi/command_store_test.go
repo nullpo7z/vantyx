@@ -42,8 +42,10 @@ func TestCommandLogRecorder_RecordInputLines(t *testing.T) {
 	}
 
 	rec.RecordInput([]byte("ls -la"))
+	rec.recordStdout([]byte("ls -la"))
 	rec.RecordInput([]byte("\n"))
 	rec.RecordInput([]byte("echo hi\r\n"))
+	rec.recordStdout([]byte("echo hi"))
 	rec.RecordInput([]byte("\n"))
 	rec.RecordInput(nil)
 	rec.RecordInput([]byte("   \n"))
@@ -95,6 +97,46 @@ func TestCommandLogStdoutWriter_Write(t *testing.T) {
 	).Scan(&line)
 	if line != "echo test" {
 		t.Fatalf("got %q", line)
+	}
+}
+
+func TestCommandLogRecorder_SkipsPasswordWithoutEcho(t *testing.T) {
+	app := newTestApp(t)
+	store := newCommandLogStore(app.DB)
+	rec := newCommandLogRecorder(store, "sess-pw", "admin", "t1")
+
+	rec.RecordInput([]byte("S3cret!"))
+	rec.RecordInput([]byte("\n"))
+
+	var count int
+	err := app.DB.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM command_logs WHERE session_id = ?`, "sess-pw",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected password input to be skipped, got %d rows", count)
+	}
+}
+
+func TestCommandLogRecorder_SkipsPromptRedraw(t *testing.T) {
+	app := newTestApp(t)
+	store := newCommandLogStore(app.DB)
+	rec := newCommandLogRecorder(store, "sess-prompt", "admin", "t1")
+
+	rec.recordStdout([]byte("\x1b]0;nullpo7z@claude: ~\x07nullpo7z@claude:~$ "))
+	rec.RecordInput([]byte("\n"))
+
+	var count int
+	err := app.DB.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM command_logs WHERE session_id = ?`, "sess-prompt",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected prompt redraw to be skipped, got %d rows", count)
 	}
 }
 

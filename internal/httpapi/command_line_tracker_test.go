@@ -22,8 +22,34 @@ func TestMergeCommandLine_WithPrompt(t *testing.T) {
 
 func TestMergeCommandLine_StdinOnly(t *testing.T) {
 	got := mergeCommandLine("echo hi", "")
-	if got != "echo hi" {
-		t.Fatalf("got %q", got)
+	if got != "" {
+		t.Fatalf("stdin without PTY echo must not be logged, got %q", got)
+	}
+}
+
+func TestMergeCommandLine_PasswordEchoMissing(t *testing.T) {
+	got := mergeCommandLine("S3cret!", "")
+	if got != "" {
+		t.Fatalf("expected password line to be dropped, got %q", got)
+	}
+}
+
+func TestMergeCommandLine_PromptNoiseDropped(t *testing.T) {
+	got := mergeCommandLine("", "0;nullpo7z@claude: ~nullpo7z@claude:~$")
+	if got != "" {
+		t.Fatalf("expected prompt redraw to be dropped, got %q", got)
+	}
+}
+
+func TestCommandLineTracker_OSCWindowTitle(t *testing.T) {
+	var tr commandLineTracker
+	tr.feed([]byte("\x1b]0;nullpo7z@claude: ~\x07"))
+	if tr.currentLine() != "" {
+		t.Fatalf("OSC must not append to input line, got %q", tr.currentLine())
+	}
+	tr.feed([]byte("nullpo7z@claude:~$ ls"))
+	if tr.currentLine() != "nullpo7z@claude:~$ ls" {
+		t.Fatalf("got %q", tr.currentLine())
 	}
 }
 

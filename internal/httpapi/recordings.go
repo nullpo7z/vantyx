@@ -417,7 +417,7 @@ func probeVideoSize(ctx context.Context, path string) (width, height int, err er
 		ctx = context.Background()
 	}
 	cmd := exec.CommandContext(ctx, ffprobe, "-nostdin", "-v", "error", "-select_streams", "v:0",
-		"-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path) // #nosec G204
+		"-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path) // #nosec G204 G702 -- ffprobe path from LookPath; media path from validated recording dir.
 	out, err := cmd.Output()
 	if err != nil {
 		return 0, 0, err
@@ -496,7 +496,7 @@ func runFFmpeg(ctx context.Context, ffmpegPath string, ffmpegThreads int, args .
 		ctx = context.Background()
 	}
 	allArgs := append(ffmpegGlobalArgs(ffmpegThreads), args...)
-	cmd := exec.CommandContext(ctx, ffmpegPath, allArgs...) // #nosec G204
+	cmd := exec.CommandContext(ctx, ffmpegPath, allArgs...) // #nosec G204 G702 -- ffmpeg from LookPath; args built from validated recording paths.
 	return cmd.CombinedOutput()
 }
 
@@ -552,7 +552,7 @@ func convertCastToVideo(ctx context.Context, castPath, format, watermarkText str
 	// `--` forces every subsequent argument to be treated as a
 	// positional file path, so a basename that happens to start with
 	// "-" cannot be re-interpreted as an agg flag (CWE-88).
-	cmd := exec.CommandContext(ctx, aggPath, "--", castPath, gifPath) // #nosec G204 -- paths from validated castPath and temp file; `--` blocks option injection.
+	cmd := exec.CommandContext(ctx, aggPath, "--", castPath, gifPath) // #nosec G204 G702 -- paths from validated castPath and temp file; `--` blocks option injection.
 	if out, runErr := cmd.CombinedOutput(); runErr != nil {
 		_ = os.Remove(gifPath)
 		auditRecordingExportFailure("agg", out, runErr)

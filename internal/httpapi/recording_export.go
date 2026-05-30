@@ -22,7 +22,6 @@ import (
 	"github.com/nullpo7z/vantyx/internal/recording"
 )
 
-const recordingExportPollInterval = 500 * time.Millisecond
 
 const (
 	recordingExportAcquireTimeout = 5 * time.Minute

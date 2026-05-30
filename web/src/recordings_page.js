@@ -142,7 +142,7 @@ export async function renderRecordingsPage({
     ensureWatermarkPlacement()
     const close = () => {
       const video = modal.querySelector('#recording-video-player')
-      if (video instanceof HTMLVideoElement) {
+      if (video && video.tagName === 'VIDEO') {
         try {
           video.pause()
           video.removeAttribute('src')

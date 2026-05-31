@@ -102,12 +102,6 @@ func (r *recordingExportRegistry) get(id string) (*recordingExportJob, bool) {
 	return j, ok
 }
 
-func (r *recordingExportRegistry) set(j *recordingExportJob) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.jobs[j.ID] = j
-}
-
 func (r *recordingExportRegistry) remove(id string) (*recordingExportJob, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

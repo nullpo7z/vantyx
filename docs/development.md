@@ -109,6 +109,22 @@ builds the image locally, tags it `:dev`, and adds dev-oriented settings
 TFTP paths, etc.). Use the dev file for hacking on the tree; use the root
 file for production-style runs.
 
+## Git branches and releases
+
+| Branch | Purpose |
+|--------|---------|
+| **`dev`** | Daily integration. Commit and push feature work here. CI runs on every push. |
+| **`main`** | Production. Tracks Docker Hub `nullpo7z/vantyx:latest`. **Never push directly.** |
+| **`feat/*`, `fix/*`** | Optional short-lived branches for large or isolated work; open a PR into **`dev`**. |
+
+**Typical flow**
+
+1. Develop on `dev` (or branch off `dev`, then merge back via PR).
+2. When ready to release, open a PR **`dev` → `main`**, wait for CI, merge.
+3. After `main` is updated, build and push the Docker image from `main` (`:latest` and the short commit SHA tag).
+
+Do not merge feature branches directly into `main`; land on `dev` first so integration history stays linear.
+
 ## Tests
 
 | Command | Scope |

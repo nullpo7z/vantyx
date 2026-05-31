@@ -29,7 +29,9 @@ exposes a unified REST + WebSocket API for the bundled single-page UI.
   username, or inline entry. See [docs/credentials.md](docs/credentials.md).
 - **Tag-based access control** on groups, targets, and users.
 - **CLI gateway**: `ssh user@vantyx` and proxy to allowed targets.
-- **Session recording** in asciinema format (browser and CLI sessions).
+- **Session recording**: terminal/CLI sessions as asciinema `.cast`; RDP/VNC
+  screen capture as H.264 `.mp4`. Playback in the UI; GIF/MP4 export via a
+  background conversion queue.
 - **Audit pipeline** with optional syslog / SIEM forwarding.
 - Follows the spirit of **OWASP ASVS Level 2** (best-effort, not a formal audit)
   for sensitive-data storage and transport.

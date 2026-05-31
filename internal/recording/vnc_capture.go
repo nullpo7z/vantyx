@@ -83,6 +83,7 @@ func StartVNCCapture(ctx context.Context, host string, port int, password string
 	c.viewer.Env = append(os.Environ(), "DISPLAY="+displayStr)
 	if err := c.viewer.Start(); err != nil {
 		cancel()
+		_ = os.Remove(c.passwdFile)
 		killCmd(c.xvfb)
 		return nil, fmt.Errorf("start vncviewer: %w", err)
 	}
@@ -99,6 +100,7 @@ func StartVNCCapture(ctx context.Context, host string, port int, password string
 	video, err := StartX11Grab(captureCtx, display, width, height, fps, DefaultGovernor().FFmpegThreads(), outputPath)
 	if err != nil {
 		cancel()
+		_ = os.Remove(c.passwdFile)
 		killCmd(c.viewer)
 		killCmd(c.xvfb)
 		return nil, err
@@ -107,7 +109,7 @@ func StartVNCCapture(ctx context.Context, host string, port int, password string
 	return c, nil
 }
 
-// Path returns the WebM output path.
+// Path returns the MP4 output path.
 func (c *VNCCapture) Path() string {
 	if c == nil {
 		return ""
@@ -115,7 +117,7 @@ func (c *VNCCapture) Path() string {
 	return c.path
 }
 
-// Stop terminates capture processes and finalizes the WebM file.
+// Stop terminates capture processes and finalizes the MP4 file.
 func (c *VNCCapture) Stop() error {
 	if c == nil {
 		return nil

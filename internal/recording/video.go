@@ -18,7 +18,7 @@ func nextVNCDisplay() int {
 	return int(atomic.AddInt64(&vncDisplayCounter, 1))
 }
 
-// VideoRecorder captures an X11 display to WebM via ffmpeg x11grab.
+// VideoRecorder captures an X11 display to MP4 (H.264) via ffmpeg x11grab.
 type VideoRecorder struct {
 	cmd  *exec.Cmd
 	path string
@@ -46,11 +46,13 @@ func StartX11Grab(ctx context.Context, display, width, height, fps, ffmpegThread
 		"-video_size", fmt.Sprintf("%dx%d", width, height),
 		"-framerate", strconv.Itoa(fps),
 		"-i", fmt.Sprintf("%s.0", displayStr),
-		"-c:v", "libvpx-vp9",
+		"-c:v", "libx264",
+		"-preset", "ultrafast",
+		"-tune", "zerolatency",
+		"-crf", "28",
 		"-pix_fmt", "yuv420p",
 		"-an",
-		"-b:v", "0",
-		"-crf", "32",
+		"-movflags", "+frag_keyframe+empty_moov",
 		outputPath,
 	}
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...) // #nosec G204 -- fixed tool, validated paths.
@@ -69,7 +71,7 @@ func (r *VideoRecorder) Path() string {
 	return r.path
 }
 
-// Stop signals ffmpeg to finalize the WebM file and waits for exit.
+// Stop signals ffmpeg to finalize the MP4 file and waits for exit.
 func (r *VideoRecorder) Stop() error {
 	if r == nil || r.cmd == nil || r.cmd.Process == nil {
 		return nil

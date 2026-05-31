@@ -1,6 +1,7 @@
 package sharing
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -136,6 +137,19 @@ func TestRoom_KickReclaimsWriteToken(t *testing.T) {
 	}
 	if room.WriterID() != "alice" {
 		t.Fatalf("write token must be returned to the owner after kick, got %s", room.WriterID())
+	}
+}
+
+func TestRoom_KickedUserCannotRejoin(t *testing.T) {
+	reg := NewRegistry()
+	room := reg.EnsureRoom("s1", "t1", "alice", "Alice")
+	now := time.Now().UTC()
+	_ = room.AddViewer("bob", "Bob", now)
+	if err := room.RemoveParticipant("bob"); err != nil {
+		t.Fatalf("RemoveParticipant: %v", err)
+	}
+	if err := room.AddViewer("bob", "Bob", now); !errors.Is(err, ErrUserKicked) {
+		t.Fatalf("expected ErrUserKicked, got %v", err)
 	}
 }
 

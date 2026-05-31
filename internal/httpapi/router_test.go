@@ -4140,7 +4140,7 @@ func TestIsLoopbackHost(t *testing.T) {
 	}
 }
 
-// --- convertCastToVideo ---
+// --- convertCastToGIF ---
 
 func TestConvertCastToVideo_NoAggInPath(t *testing.T) {
 	oldPath := os.Getenv("PATH")
@@ -4150,7 +4150,7 @@ func TestConvertCastToVideo_NoAggInPath(t *testing.T) {
 	defer func() {
 		_ = os.Setenv("PATH", oldPath)
 	}()
-	_, _, _, err := convertCastToVideo(context.Background(), "/tmp/nonexistent.cast", "gif", "User: admin", 1, nil)
+	_, _, _, err := convertCastToGIF(context.Background(), "/tmp/nonexistent.cast", t.TempDir(), nil, nil)
 	if err == nil {
 		t.Fatal("expected error when agg is not found in PATH")
 	}
@@ -4337,7 +4337,7 @@ func TestApp_ErrorMessage_LocalizedHandlers(t *testing.T) {
 		{
 			name:     "recordings: bad format",
 			method:   http.MethodGet,
-			path:     "/api/recordings/abc/file?format=mp4",
+			path:     "/api/recordings/abc/file?format=webm",
 			body:     "",
 			wantCode: http.StatusBadRequest,
 			wantSub:  "cast",

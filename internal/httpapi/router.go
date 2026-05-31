@@ -97,7 +97,7 @@ type App struct {
 	// videoRecordings tracks active RDP/VNC ffmpeg screen captures.
 	videoRecordings *videoRecordingRegistry
 
-	// RecordingExports tracks background GIF/WebM export jobs.
+	// RecordingExports tracks background GIF/MP4 export jobs.
 	RecordingExports *recordingExportRegistry
 }
 
@@ -248,6 +248,9 @@ func NewApp() *App {
 	if err := os.MkdirAll(exportDir, 0o700); err != nil {
 		panic(err)
 	}
+	recordingsDir := os.Getenv("VANTYX_RECORDINGS_DIR")
+	cleanupOrphanExportTemps(exportDir)
+	cleanupLegacyRecordingDirExportTemps(recordingsDir)
 	_ = recording.DefaultGovernor()
 	return &App{
 		UserStore:               userStore,

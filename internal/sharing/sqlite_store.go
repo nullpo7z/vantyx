@@ -150,6 +150,15 @@ func (s *SQLiteStore) RecordUse(ctx context.Context, id, consumerUserID string, 
 		 WHERE id = ?`,
 		nullableUser(consumerUserID), usedAt, usedAt, id,
 	)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(consumerUserID) != "" {
+		_, err = s.db.ExecContext(ctx,
+			`INSERT OR IGNORE INTO session_invitation_consumers (invitation_id, user_id, consumed_at) VALUES (?, ?, ?)`,
+			id, consumerUserID, when.Unix(),
+		)
+	}
 	return err
 }
 

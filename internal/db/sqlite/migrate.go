@@ -208,6 +208,14 @@ func Migrate(db *sql.DB) error {
 			revoked_at INTEGER,
 			created_at INTEGER NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS session_invitation_consumers (
+			invitation_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			consumed_at INTEGER NOT NULL,
+			PRIMARY KEY (invitation_id, user_id),
+			FOREIGN KEY (invitation_id) REFERENCES session_invitations(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_session_invitation_consumers_user ON session_invitation_consumers(user_id);`,
 		// Background file transfer jobs (persisted across restarts).
 		`CREATE TABLE IF NOT EXISTS file_transfer_jobs (
 			id TEXT PRIMARY KEY,

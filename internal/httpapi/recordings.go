@@ -22,9 +22,23 @@ import (
 )
 
 var (
-	errRecordingVideoTools  = errors.New("recording video tools missing")
-	errRecordingVideoExport = errors.New("recording video export failed")
+	errRecordingVideoTools = errors.New("recording video tools missing")
 )
+
+// exportStageError turns a tool failure into a user-visible message without
+// leaking ffmpeg/agg stderr (details are audit-logged at call sites).
+func exportStageError(stage string, ctx context.Context, out []byte, runErr error) error {
+	if runErr == nil {
+		return nil
+	}
+	if errors.Is(runErr, context.Canceled) || (ctx != nil && errors.Is(ctx.Err(), context.Canceled)) {
+		return context.Canceled
+	}
+	if errors.Is(runErr, context.DeadlineExceeded) || (ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
+		return fmt.Errorf("export %s timed out", stage)
+	}
+	return fmt.Errorf("export %s failed", stage)
+}
 
 // exportProgressFunc reports conversion stage and percent (0–100) for export jobs.
 type exportProgressFunc func(stage string, percent int)
@@ -40,17 +54,22 @@ func (a *App) userCanViewSessionRecordings(ctx context.Context, userID, sessionI
 	// for that session (named invite or single-use link). This is backed by the
 	// persistent session_invitations table rather than the in-memory room state.
 	//
-	// NOTE: multi-use link invitations only record the first consumer's user ID
-	// today (invitee_user_id is COALESCE'd), so this check is best-effort for that
-	// mode until we introduce a per-consumer usage table.
+	// NOTE: multi-use link consumers are tracked in session_invitation_consumers.
 	err := a.DB.QueryRowContext(ctx, `
-		SELECT COUNT(1)
-		FROM session_invitations
-		WHERE session_id = ?
-		  AND invitee_user_id = ?
-		  AND revoked_at IS NULL
-		  AND use_count > 0
-	`, sessionID, userID).Scan(&n)
+		SELECT COUNT(1) FROM (
+			SELECT 1 FROM session_invitations
+			WHERE session_id = ?
+			  AND invitee_user_id = ?
+			  AND revoked_at IS NULL
+			  AND use_count > 0
+			UNION
+			SELECT 1 FROM session_invitation_consumers sic
+			INNER JOIN session_invitations si ON si.id = sic.invitation_id
+			WHERE si.session_id = ?
+			  AND sic.user_id = ?
+			  AND si.revoked_at IS NULL
+		)
+	`, sessionID, userID, sessionID, userID).Scan(&n)
 	return err == nil && n > 0
 }
 
@@ -113,7 +132,7 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	channelType := strings.TrimSpace(q.Get("channel_type"))
 	sessionID := strings.TrimSpace(q.Get("session_id"))
 
-	query := `SELECT id, user_id, target_id, session_id, channel_type, started_at, ended_at, COALESCE(session_name, ''), COALESCE(session_description, '') FROM recordings WHERE `
+	query := `SELECT id, user_id, target_id, session_id, channel_type, started_at, ended_at, COALESCE(session_name, ''), COALESCE(session_description, ''), file_path FROM recordings WHERE `
 	args := []interface{}{}
 	// Normal users can list:
 	//  - their own recordings
@@ -125,8 +144,13 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 			WHERE invitee_user_id = ?
 			  AND revoked_at IS NULL
 			  AND use_count > 0
+			UNION
+			SELECT si.session_id FROM session_invitation_consumers sic
+			INNER JOIN session_invitations si ON si.id = sic.invitation_id
+			WHERE sic.user_id = ?
+			  AND si.revoked_at IS NULL
 		))`
-		args = append(args, filterUserID, userID)
+		args = append(args, filterUserID, userID, userID)
 	} else {
 		query += `user_id = ?`
 		args = append(args, filterUserID)
@@ -162,9 +186,9 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	var items []map[string]interface{}
 	for rows.Next() {
-		var id, recUserID, tID, sessID, channelType, startedAt, sessName, sessDesc string
+		var id, recUserID, tID, sessID, channelType, startedAt, sessName, sessDesc, filePath string
 		var endedAt sql.NullString
-		if err := rows.Scan(&id, &recUserID, &tID, &sessID, &channelType, &startedAt, &endedAt, &sessName, &sessDesc); err != nil {
+		if err := rows.Scan(&id, &recUserID, &tID, &sessID, &channelType, &startedAt, &endedAt, &sessName, &sessDesc, &filePath); err != nil {
 			continue
 		}
 		items = append(items, map[string]interface{}{
@@ -173,7 +197,8 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 			"target_id":           tID,
 			"session_id":          sessID,
 			"channel_type":        channelType,
-			"media_type":          recordingMediaType(channelType, ""),
+			"media_type":          recordingMediaType(channelType, filePath),
+			"storage_format":      recording.StorageFormat(filePath),
 			"started_at":          startedAt,
 			"ended_at":            endedAt.String,
 			"session_name":        sessName,
@@ -185,9 +210,9 @@ func (a *App) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 
 // handleGetRecordingFile serves the recording file.
 //
-// Query parameter format=cast|gif|webm (default cast). cast is the
-// raw asciinema .cast; gif/webm require agg (and ffmpeg for webm) on
-// PATH, otherwise the handler returns 503.
+// Query parameter format=cast|gif|mp4 (default cast). cast is the
+// raw asciinema .cast or native MP4. gif/mp4 conversion for terminal
+// recordings and MP4→GIF are queued asynchronously (202 Accepted).
 //
 //nolint:gocyclo // open + path resolution + format conversion all need to live together.
 func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +235,7 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 		format = "cast"
 	}
 	switch format {
-	case "cast", "gif", "webm":
+	case "cast", "gif", "mp4":
 	default:
 		writeJSONErrorKey(w, r, "recordings.formatInvalid", http.StatusBadRequest)
 		return
@@ -273,10 +298,18 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tryOpen := func(path string) (*os.File, error) {
-		return os.Open(path) // #nosec G304 -- path validated above (no .. or prefix).
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return nil, err
+		}
+		safe, err := openRecordingPath(recordingDir, absPath)
+		if err != nil {
+			return nil, err
+		}
+		return os.Open(safe) // #nosec G304 -- path validated under recordings dir.
 	}
 	sanitizeBasename := func(name string) string {
-		for _, ext := range []string{".cast", ".webm"} {
+		for _, ext := range []string{".cast", ".mp4"} {
 			if strings.HasSuffix(strings.ToLower(name), ext) {
 				prefix := name[:len(name)-len(ext)]
 				safe := strings.ReplaceAll(prefix, ":", "-")
@@ -302,26 +335,31 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if recording.IsWebMPath(mediaPath) {
+	if strings.HasSuffix(strings.ToLower(mediaPath), ".webm") {
+		f.Close()
+		writeJSONErrorKey(w, r, "recordings.fileNotFound", http.StatusNotFound)
+		return
+	}
+
+	if recording.IsMP4Path(mediaPath) {
 		f.Close()
 		switch format {
 		case "cast":
 			writeJSONErrorKey(w, r, "recordings.formatInvalid", http.StatusBadRequest)
 			return
-		case "webm":
+		case "mp4":
 			serveFile, err := tryOpen(mediaPath)
 			if err != nil {
 				writeJSONErrorKey(w, r, "recordings.fileNotFound", http.StatusNotFound)
 				return
 			}
 			defer serveFile.Close()
-			w.Header().Set("Content-Type", "video/webm")
+			w.Header().Set("Content-Type", "video/mp4")
 			setAttachmentDisposition(w, filepath.Base(mediaPath))
 			_, _ = io.Copy(w, serveFile)
 			return
 		case "gif":
-			wmText := watermarkTextForRecording(userID, sessionID.String, startedAt.String)
-			job, err := a.enqueueRecordingExport(userID, recordingID, "gif", mediaPath, wmText)
+			job, err := a.enqueueRecordingExport(userID, recordingID, "gif", mediaPath)
 			if err != nil {
 				writeInternalError(w, err)
 				return
@@ -344,8 +382,7 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 	}
 	f.Close()
 	if recordingNeedsAsyncExport(format, castPath) {
-		wmText := watermarkTextForRecording(userID, sessionID.String, startedAt.String)
-		job, err := a.enqueueRecordingExport(userID, recordingID, format, castPath, wmText)
+		job, err := a.enqueueRecordingExport(userID, recordingID, format, castPath)
 		if err != nil {
 			writeInternalError(w, err)
 			return
@@ -354,134 +391,6 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSONErrorKey(w, r, "recordings.formatInvalid", http.StatusBadRequest)
-}
-
-func watermarkTextForRecording(userID, sessionID, startedAt string) string {
-	userID = strings.TrimSpace(userID)
-	sessionID = strings.TrimSpace(sessionID)
-	startedAt = strings.TrimSpace(startedAt)
-	stamp := ""
-	if startedAt != "" {
-		stamp = "Recorded: " + startedAt
-	} else {
-		stamp = "Generated: " + time.Now().UTC().Format(time.RFC3339)
-	}
-	base := ""
-	if userID != "" && sessionID != "" {
-		base = "User: " + userID + " · Session: " + sessionID
-	} else if userID != "" {
-		base = "User: " + userID
-	} else if sessionID != "" {
-		base = "Session: " + sessionID
-	} else {
-		base = "Vantyx"
-	}
-	return base + " · " + stamp
-}
-
-func writeWatermarkTextFile(dir, text string) (string, error) {
-	f, err := os.CreateTemp(dir, "wm-*.txt")
-	if err != nil {
-		return "", err
-	}
-	name := f.Name()
-	_, werr := f.WriteString(strings.ReplaceAll(text, "\n", " ") + "\n")
-	cerr := f.Close()
-	if werr != nil {
-		_ = os.Remove(name)
-		return "", werr
-	}
-	if cerr != nil {
-		_ = os.Remove(name)
-		return "", cerr
-	}
-	return name, nil
-}
-
-// Watermark tile geometry matches web playback (recordings_page.js).
-const (
-	watermarkTileW     = 420
-	watermarkTileH     = 300
-	watermarkFontSize  = "16"
-	watermarkFontAlpha = "0.28"
-	// Tailwind -rotate-12
-	watermarkRotateRad = "-12*PI/180"
-)
-
-func probeVideoSize(ctx context.Context, path string) (width, height int, err error) {
-	ffprobe, err := exec.LookPath("ffprobe")
-	if err != nil {
-		return 0, 0, err
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	cmd := exec.CommandContext(ctx, ffprobe, "-nostdin", "-v", "error", "-select_streams", "v:0",
-		"-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path) // #nosec G204 G702 -- ffprobe path from LookPath; media path from validated recording dir.
-	out, err := cmd.Output()
-	if err != nil {
-		return 0, 0, err
-	}
-	parts := strings.Split(strings.TrimSpace(string(out)), "x")
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("ffprobe: unexpected size %q", strings.TrimSpace(string(out)))
-	}
-	w, err1 := strconv.Atoi(parts[0])
-	h, err2 := strconv.Atoi(parts[1])
-	if err1 != nil || err2 != nil || w <= 0 || h <= 0 {
-		return 0, 0, fmt.Errorf("ffprobe: invalid dimensions %q", strings.TrimSpace(string(out)))
-	}
-	return w, h, nil
-}
-
-func watermarkTileLayout(videoW, videoH int) (cols, rows int) {
-	cols = (videoW + watermarkTileW - 1) / watermarkTileW
-	rows = (videoH + watermarkTileH - 1) / watermarkTileH
-	if cols < 1 {
-		cols = 1
-	}
-	if rows < 1 {
-		rows = 1
-	}
-	return cols, rows
-}
-
-func exportVideoDimensions(ctx context.Context, path string) (width, height int) {
-	w, h, err := probeVideoSize(ctx, path)
-	if err != nil || w <= 0 || h <= 0 {
-		return 1920, 1080
-	}
-	return w, h
-}
-
-func lavfiWatermarkTileInput() string {
-	return fmt.Sprintf("color=c=black@0:s=%dx%d,format=rgba", watermarkTileW, watermarkTileH)
-}
-
-// buildFastTiledWatermarkOverlay tiles a rotated watermark cell across the
-// full frame (matching SPA playback) using ffmpeg's tile filter and a single
-// overlay, which is much faster than chaining dozens of overlay filters.
-func buildFastTiledWatermarkOverlay(videoW, videoH int, textFile string) string {
-	cols, rows := watermarkTileLayout(videoW, videoH)
-	draw := drawtextOnWatermarkTile(textFile)
-	return fmt.Sprintf(
-		"[1:v]%s[wmcell];"+
-			"[wmcell]tile=layout=%dx%d:margin=0:padding=0:init_padding=0[fullwm];"+
-			"[fullwm]crop=%d:%d:0:0[fullwm2];"+
-			"[0:v][fullwm2]overlay=0:0:format=auto",
-		draw, cols, rows, videoW, videoH,
-	)
-}
-
-func drawtextOnWatermarkTile(textFile string) string {
-	// Two stacked lines like the SPA watermark block.
-	base := "drawtext=textfile=" + textFile +
-		":reload=0:fontsize=" + watermarkFontSize +
-		":fontcolor=white@" + watermarkFontAlpha +
-		":shadowcolor=black@0.35:shadowx=1:shadowy=1"
-	return base + ":x=(w-text_w)/2:y=(h-text_h)/2-10," +
-		base + ":x=(w-text_w)/2:y=(h-text_h)/2+10," +
-		"rotate=angle=" + watermarkRotateRad + ":fillcolor=black@0:ow=iw:oh=ih"
 }
 
 func ffmpegGlobalArgs(ffmpegThreads int) []string {
@@ -500,24 +409,22 @@ func runFFmpeg(ctx context.Context, ffmpegPath string, ffmpegThreads int, args .
 	return cmd.CombinedOutput()
 }
 
-func vp9VideoArgs(outputPath string) []string {
+func h264MP4Args(outputPath string) []string {
 	return []string{
-		"-c:v", "libvpx-vp9",
+		"-c:v", "libx264",
+		"-preset", "ultrafast",
+		"-tune", "animation",
+		"-crf", "28",
 		"-pix_fmt", "yuv420p",
 		"-an",
-		"-b:v", "0",
-		"-crf", "30",
-		"-deadline", "realtime",
-		"-cpu-used", "5",
+		"-movflags", "+faststart",
 		outputPath,
 	}
 }
 
-// convertCastToVideo converts a .cast file to gif or webm using agg
-// (and ffmpeg for webm). It returns (outPath, contentType,
-// contentDisposition, error); the caller is responsible for
-// os.Remove(outPath).
-func convertCastToVideo(ctx context.Context, castPath, format, watermarkText string, ffmpegThreads int, onProgress exportProgressFunc) (string, string, string, error) {
+// renderCastGIFIntermediate runs agg on a .cast file. The returned GIF path
+// is tracked in temps when non-nil.
+func renderCastGIFIntermediate(ctx context.Context, castPath, workDir string, onProgress exportProgressFunc, temps *exportTempTracker) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -527,8 +434,58 @@ func convertCastToVideo(ctx context.Context, castPath, format, watermarkText str
 	aggPath, err := exec.LookPath("agg")
 	if err != nil {
 		auditRecordingExportFailure("agg_lookup", nil, err)
-		return "", "", "", errRecordingVideoTools
+		return "", errRecordingVideoTools
 	}
+	if strings.TrimSpace(workDir) == "" {
+		workDir = filepath.Dir(castPath)
+	}
+	gifFile, err := os.CreateTemp(workDir, "rec-*.gif")
+	if err != nil {
+		return "", err
+	}
+	gifPath := gifFile.Name()
+	gifFile.Close()
+	if temps != nil {
+		temps.track(gifPath)
+	}
+	cmd := exec.CommandContext(ctx, aggPath, "--", castPath, gifPath) // #nosec G204 G702 -- paths from validated castPath and temp file; `--` blocks option injection.
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		_ = os.Remove(gifPath)
+		auditRecordingExportFailure("agg", out, runErr)
+		return "", exportStageError("agg", ctx, out, runErr)
+	}
+	if onProgress != nil {
+		onProgress("agg", 45)
+	}
+	return gifPath, nil
+}
+
+// convertCastToGIF converts a .cast file to GIF using agg.
+func convertCastToGIF(ctx context.Context, castPath, workDir string, onProgress exportProgressFunc, temps *exportTempTracker) (string, string, string, error) {
+	gifPath, err := renderCastGIFIntermediate(ctx, castPath, workDir, onProgress, temps)
+	if err != nil {
+		return "", "", "", err
+	}
+	if onProgress != nil {
+		onProgress("finalize", 95)
+	}
+	if temps != nil {
+		temps.release(gifPath)
+	}
+	return gifPath, "image/gif", `attachment; filename="recording.gif"`, nil
+}
+
+// convertCastToMP4 converts a .cast file to MP4 (H.264) via agg and ffmpeg.
+func convertCastToMP4(ctx context.Context, castPath, workDir string, ffmpegThreads int, onProgress exportProgressFunc, temps *exportTempTracker) (string, string, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	gifPath, err := renderCastGIFIntermediate(ctx, castPath, workDir, onProgress, temps)
+	if err != nil {
+		return "", "", "", err
+	}
+	defer func() { _ = os.Remove(gifPath) }()
+
 	ffmpegPath, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		auditRecordingExportFailure("ffmpeg_lookup", nil, err)
@@ -537,121 +494,42 @@ func convertCastToVideo(ctx context.Context, castPath, format, watermarkText str
 	if ffmpegThreads < 1 {
 		ffmpegThreads = 1
 	}
-	dir := filepath.Dir(castPath)
-	gifFile, err := os.CreateTemp(dir, "rec-*.gif")
+	if onProgress != nil {
+		onProgress("ffmpeg", 55)
+	}
+	if strings.TrimSpace(workDir) == "" {
+		workDir = filepath.Dir(castPath)
+	}
+	mp4File, err := os.CreateTemp(workDir, "rec-*.mp4")
 	if err != nil {
 		return "", "", "", err
 	}
-	gifPath := gifFile.Name()
-	gifFile.Close()
-	defer func() {
-		if format == "webm" {
-			_ = os.Remove(gifPath)
-		}
-	}()
-	// `--` forces every subsequent argument to be treated as a
-	// positional file path, so a basename that happens to start with
-	// "-" cannot be re-interpreted as an agg flag (CWE-88).
-	cmd := exec.CommandContext(ctx, aggPath, "--", castPath, gifPath) // #nosec G204 G702 -- paths from validated castPath and temp file; `--` blocks option injection.
-	if out, runErr := cmd.CombinedOutput(); runErr != nil {
-		_ = os.Remove(gifPath)
-		auditRecordingExportFailure("agg", out, runErr)
-		return "", "", "", errRecordingVideoExport
+	mp4Path := mp4File.Name()
+	mp4File.Close()
+	if temps != nil {
+		temps.track(mp4Path)
 	}
-	if onProgress != nil {
-		onProgress("agg", 45)
-	}
-	wmFile := ""
-	if strings.TrimSpace(watermarkText) != "" {
-		wmFile, err = writeWatermarkTextFile(dir, watermarkText)
-		if err != nil {
-			_ = os.Remove(gifPath)
-			return "", "", "", err
-		}
-		defer os.Remove(wmFile)
-	}
-
-	wmTextFileEsc := ""
-	if wmFile != "" {
-		// Path may contain ":"; escape it for ffmpeg filters.
-		wmTextFileEsc = strings.ReplaceAll(wmFile, ":", "\\:")
-	}
-
-	if format == "gif" {
-		if onProgress != nil {
-			onProgress("ffmpeg", 50)
-		}
-		outGif, err := os.CreateTemp(dir, "rec-wm-*.gif")
-		if err != nil {
-			_ = os.Remove(gifPath)
-			return "", "", "", err
-		}
-		outGifPath := outGif.Name()
-		outGif.Close()
-		// Better GIF quality: palettegen/paletteuse after watermark.
-		filter := "[0:v]split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"
-		var args []string
-		if wmTextFileEsc != "" {
-			vw, vh := exportVideoDimensions(ctx, gifPath)
-			filter = buildFastTiledWatermarkOverlay(vw, vh, wmTextFileEsc) + ",split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"
-			args = []string{
-				"-y", "-i", gifPath,
-				"-f", "lavfi", "-i", lavfiWatermarkTileInput(),
-				"-filter_complex", filter,
-				"-loop", "0", outGifPath,
-			}
-		} else {
-			args = []string{"-y", "-i", gifPath, "-filter_complex", filter, "-loop", "0", outGifPath}
-		}
-		if out, runErr := runFFmpeg(ctx, ffmpegPath, ffmpegThreads, args...); runErr != nil {
-			_ = os.Remove(outGifPath)
-			auditRecordingExportFailure("ffmpeg_gif", out, runErr)
-			return "", "", "", errRecordingVideoExport
-		}
-		if onProgress != nil {
-			onProgress("finalize", 95)
-		}
-		_ = os.Remove(gifPath)
-		return outGifPath, "image/gif", `attachment; filename="recording.gif"`, nil
-	}
-
-	if onProgress != nil {
-		onProgress("ffmpeg", 50)
-	}
-	webmFile, err := os.CreateTemp(dir, "rec-*.webm")
-	if err != nil {
-		return "", "", "", err
-	}
-	webmPath := webmFile.Name()
-	webmFile.Close()
 	args := []string{
 		"-y", "-i", gifPath,
 		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
 	}
-	args = append(args, vp9VideoArgs(webmPath)...)
-	if wmTextFileEsc != "" {
-		vw, vh := exportVideoDimensions(ctx, gifPath)
-		filter := buildFastTiledWatermarkOverlay(vw, vh, wmTextFileEsc) + ",scale=trunc(iw/2)*2:trunc(ih/2)*2"
-		args = []string{
-			"-y", "-i", gifPath,
-			"-f", "lavfi", "-i", lavfiWatermarkTileInput(),
-			"-filter_complex", filter,
-		}
-		args = append(args, vp9VideoArgs(webmPath)...)
-	}
+	args = append(args, h264MP4Args(mp4Path)...)
 	if out, runErr := runFFmpeg(ctx, ffmpegPath, ffmpegThreads, args...); runErr != nil {
-		_ = os.Remove(webmPath)
-		auditRecordingExportFailure("ffmpeg_webm", out, runErr)
-		return "", "", "", errRecordingVideoExport
+		_ = os.Remove(mp4Path)
+		auditRecordingExportFailure("ffmpeg_mp4", out, runErr)
+		return "", "", "", exportStageError("ffmpeg mp4", ctx, out, runErr)
 	}
 	if onProgress != nil {
 		onProgress("finalize", 95)
 	}
-	return webmPath, "video/webm", `attachment; filename="recording.webm"`, nil
+	if temps != nil {
+		temps.release(mp4Path)
+	}
+	return mp4Path, "video/mp4", `attachment; filename="recording.mp4"`, nil
 }
 
-// convertWebMToGIF transcodes a WebM screen recording to GIF with optional watermark.
-func convertWebMToGIF(ctx context.Context, webmPath, watermarkText string, ffmpegThreads int, onProgress exportProgressFunc) (string, string, string, error) {
+// convertVideoToGIF transcodes an MP4 screen recording to GIF.
+func convertVideoToGIF(ctx context.Context, videoPath, workDir string, ffmpegThreads int, onProgress exportProgressFunc, temps *exportTempTracker) (string, string, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -666,49 +544,29 @@ func convertWebMToGIF(ctx context.Context, webmPath, watermarkText string, ffmpe
 	if ffmpegThreads < 1 {
 		ffmpegThreads = 1
 	}
-	dir := filepath.Dir(webmPath)
-	outGif, err := os.CreateTemp(dir, "rec-wm-*.gif")
+	if strings.TrimSpace(workDir) == "" {
+		workDir = filepath.Dir(videoPath)
+	}
+	outGif, err := os.CreateTemp(workDir, "rec-*.gif")
 	if err != nil {
 		return "", "", "", err
 	}
 	outGifPath := outGif.Name()
 	outGif.Close()
-
-	wmFile := ""
-	if strings.TrimSpace(watermarkText) != "" {
-		wmFile, err = writeWatermarkTextFile(dir, watermarkText)
-		if err != nil {
-			_ = os.Remove(outGifPath)
-			return "", "", "", err
-		}
-		defer os.Remove(wmFile)
+	if temps != nil {
+		temps.track(outGifPath)
 	}
-	wmTextFileEsc := ""
-	if wmFile != "" {
-		wmTextFileEsc = strings.ReplaceAll(wmFile, ":", "\\:")
-	}
-
-	filter := "[0:v]split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"
-	var args []string
-	if wmTextFileEsc != "" {
-		vw, vh := exportVideoDimensions(ctx, webmPath)
-		filter = buildFastTiledWatermarkOverlay(vw, vh, wmTextFileEsc) + ",split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"
-		args = []string{
-			"-y", "-i", webmPath,
-			"-f", "lavfi", "-i", lavfiWatermarkTileInput(),
-			"-filter_complex", filter,
-			"-loop", "0", outGifPath,
-		}
-	} else {
-		args = []string{"-y", "-i", webmPath, "-filter_complex", filter, "-loop", "0", outGifPath}
-	}
+	args := []string{"-y", "-i", videoPath, "-an", "-loop", "0", outGifPath}
 	if out, runErr := runFFmpeg(ctx, ffmpegPath, ffmpegThreads, args...); runErr != nil {
 		_ = os.Remove(outGifPath)
-		auditRecordingExportFailure("ffmpeg_webm_gif", out, runErr)
-		return "", "", "", errRecordingVideoExport
+		auditRecordingExportFailure("ffmpeg_video_gif", out, runErr)
+		return "", "", "", exportStageError("ffmpeg gif", ctx, out, runErr)
 	}
 	if onProgress != nil {
 		onProgress("finalize", 95)
+	}
+	if temps != nil {
+		temps.release(outGifPath)
 	}
 	return outGifPath, "image/gif", `attachment; filename="recording.gif"`, nil
 }

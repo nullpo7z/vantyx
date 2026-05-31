@@ -23,9 +23,13 @@ import (
 )
 
 const (
-	recordingExportAcquireTimeout = 5 * time.Minute
-	recordingExportConvertTimeout = 15 * time.Minute
-	recordingExportStaleAfter     = 20 * time.Minute
+	recordingExportAcquireTimeout        = 5 * time.Minute
+	recordingExportConvertTimeout        = 45 * time.Minute
+	recordingExportStaleAfter            = 50 * time.Minute
+	recordingExportConvertTimeoutEnv     = "VANTYX_RECORDING_EXPORT_CONVERT_TIMEOUT"
+	recordingExportCompletedTTL          = 7 * 24 * time.Hour
+	recordingExportCompletedTTLEnv       = "VANTYX_RECORDING_EXPORT_COMPLETED_TTL"
+	recordingExportOrphanTempMaxAge      = 24 * time.Hour
 )
 
 type recordingMediaAccess struct {
@@ -62,6 +66,8 @@ type recordingExportJob struct {
 	SessionDescription string
 	ChannelType        string
 	TargetID           string
+	TargetName         string
+	TargetPath         string
 	RecordingStartedAt string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
@@ -112,12 +118,12 @@ func (r *recordingExportRegistry) remove(id string) (*recordingExportJob, bool) 
 	return j, ok
 }
 
-func (r *recordingExportRegistry) listForUser(userID string) []*recordingExportJob {
+func (r *recordingExportRegistry) listForViewer(userID string, includeAll bool) []*recordingExportJob {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]*recordingExportJob, 0)
 	for _, j := range r.jobs {
-		if j.UserID == userID {
+		if includeAll || j.UserID == userID {
 			out = append(out, j)
 		}
 	}
@@ -128,14 +134,15 @@ func (r *recordingExportRegistry) listForUser(userID string) []*recordingExportJ
 func (r *recordingExportRegistry) findActive(userID, recordingID, format string) *recordingExportJob {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.findActiveLocked(userID, recordingID, format)
+}
+
+func (r *recordingExportRegistry) findActiveLocked(userID, recordingID, format string) *recordingExportJob {
 	for _, j := range r.jobs {
 		if j.UserID != userID || j.RecordingID != recordingID || j.Format != format {
 			continue
 		}
 		if j.State == recordingExportQueued || j.State == recordingExportRunning {
-			if j.State == recordingExportRunning && time.Since(j.UpdatedAt) > recordingExportStaleAfter {
-				continue
-			}
 			return j
 		}
 	}
@@ -165,6 +172,8 @@ func (j *recordingExportJob) snapshot() map[string]interface{} {
 		"session_description":  j.SessionDescription,
 		"channel_type":         j.ChannelType,
 		"target_id":            j.TargetID,
+		"target_name":          j.TargetName,
+		"target_path":          j.TargetPath,
 		"recording_started_at": j.RecordingStartedAt,
 		"created_at":           j.CreatedAt.UTC().Format(time.RFC3339),
 		"updated_at":           j.UpdatedAt.UTC().Format(time.RFC3339),
@@ -178,6 +187,8 @@ type recordingExportMeta struct {
 	SessionDescription string
 	ChannelType        string
 	TargetID           string
+	TargetName         string
+	TargetPath         string
 	StartedAt          string
 }
 
@@ -188,9 +199,13 @@ func (a *App) lookupRecordingExportMeta(recordingID string) recordingExportMeta 
 	var meta recordingExportMeta
 	var startedAt sql.NullString
 	err := a.DB.QueryRowContext(context.Background(),
-		`SELECT target_id, channel_type, started_at, COALESCE(session_name, ''), COALESCE(session_description, '') FROM recordings WHERE id = ?`,
+		`SELECT r.target_id, r.channel_type, r.started_at, COALESCE(r.session_name, ''), COALESCE(r.session_description, ''),
+		        COALESCE(t.name, ''), COALESCE(t.path, '')
+		 FROM recordings r
+		 LEFT JOIN targets t ON t.id = r.target_id
+		 WHERE r.id = ?`,
 		recordingID,
-	).Scan(&meta.TargetID, &meta.ChannelType, &startedAt, &meta.SessionName, &meta.SessionDescription)
+	).Scan(&meta.TargetID, &meta.ChannelType, &startedAt, &meta.SessionName, &meta.SessionDescription, &meta.TargetName, &meta.TargetPath)
 	if err != nil {
 		return recordingExportMeta{}
 	}
@@ -200,11 +215,134 @@ func (a *App) lookupRecordingExportMeta(recordingID string) recordingExportMeta 
 	return meta
 }
 
-func (a *App) enqueueRecordingExport(userID, recordingID, format, mediaPath, wmText string) (*recordingExportJob, error) {
+func recordingExportConvertTimeoutDuration() time.Duration {
+	v := strings.TrimSpace(os.Getenv(recordingExportConvertTimeoutEnv))
+	if v == "" {
+		return recordingExportConvertTimeout
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 5*time.Minute {
+		return recordingExportConvertTimeout
+	}
+	return d
+}
+
+func recordingExportStaleDuration() time.Duration {
+	stale := recordingExportStaleAfter
+	minStale := recordingExportConvertTimeoutDuration() + 5*time.Minute
+	if stale < minStale {
+		return minStale
+	}
+	return stale
+}
+
+func recordingExportCompletedTTLDuration() time.Duration {
+	v := strings.TrimSpace(os.Getenv(recordingExportCompletedTTLEnv))
+	if v == "" {
+		return recordingExportCompletedTTL
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < time.Hour {
+		return recordingExportCompletedTTL
+	}
+	return d
+}
+
+func (a *App) isAdminUser(userID string) bool {
+	if a == nil || a.UserStore == nil {
+		return false
+	}
+	u, err := a.UserStore.GetByID(userID)
+	return err == nil && u != nil && u.Role == auth.RoleAdmin
+}
+
+func (a *App) sweepRecordingExportsMaintenance() {
+	a.sweepStaleRecordingExports()
+	a.sweepCompletedRecordingExports()
+}
+
+func (a *App) sweepStaleRecordingExports() {
+	if a == nil || a.RecordingExports == nil {
+		return
+	}
+	now := time.Now().UTC()
+	a.RecordingExports.mu.RLock()
+	stale := make([]*recordingExportJob, 0)
+	for _, j := range a.RecordingExports.jobs {
+		if j.State != recordingExportRunning {
+			continue
+		}
+		if now.Sub(j.UpdatedAt) > recordingExportStaleDuration() {
+			stale = append(stale, j)
+		}
+	}
+	a.RecordingExports.mu.RUnlock()
+	for _, j := range stale {
+		a.requestCancelRecordingExport(j)
+		a.updateRecordingExportState(j, recordingExportFailed, "export timed out (no progress)")
+	}
+}
+
+func (a *App) sweepCompletedRecordingExports() {
+	if a == nil || a.RecordingExports == nil {
+		return
+	}
+	ttl := recordingExportCompletedTTLDuration()
+	now := time.Now().UTC()
+	a.RecordingExports.mu.Lock()
+	defer a.RecordingExports.mu.Unlock()
+	for id, j := range a.RecordingExports.jobs {
+		switch j.State {
+		case recordingExportCompleted, recordingExportFailed, recordingExportCancelled:
+		default:
+			continue
+		}
+		if now.Sub(j.UpdatedAt) <= ttl {
+			continue
+		}
+		if j.OutputPath != "" {
+			_ = os.Remove(j.OutputPath)
+		}
+		delete(a.RecordingExports.jobs, id)
+	}
+}
+
+func cleanupOldGlobTemps(dir string, patterns []string, maxAge time.Duration) {
+	if strings.TrimSpace(dir) == "" {
+		return
+	}
+	now := time.Now()
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			continue
+		}
+		for _, p := range matches {
+			st, err := os.Stat(p)
+			if err != nil || now.Sub(st.ModTime()) < maxAge {
+				continue
+			}
+			_ = os.Remove(p)
+		}
+	}
+}
+
+func cleanupOrphanExportTemps(exportDir string) {
+	cleanupOldGlobTemps(exportDir, []string{"rec-*.gif", "rec-*.mp4"}, recordingExportOrphanTempMaxAge)
+}
+
+func cleanupLegacyRecordingDirExportTemps(recordingsDir string) {
+	cleanupOldGlobTemps(recordingsDir, []string{"rec-*.gif", "rec-*.mp4"}, recordingExportOrphanTempMaxAge)
+}
+
+func (a *App) enqueueRecordingExport(userID, recordingID, format, mediaPath string) (*recordingExportJob, error) {
 	if a.RecordingExports == nil {
 		return nil, errors.New("recording export unavailable")
 	}
-	if existing := a.RecordingExports.findActive(userID, recordingID, format); existing != nil {
+	a.sweepRecordingExportsMaintenance()
+	a.RecordingExports.mu.Lock()
+	defer a.RecordingExports.mu.Unlock()
+	if existing := a.RecordingExports.findActiveLocked(userID, recordingID, format); existing != nil {
 		return existing, nil
 	}
 	jobID, err := newRecordingExportJobID()
@@ -213,6 +351,7 @@ func (a *App) enqueueRecordingExport(userID, recordingID, format, mediaPath, wmT
 	}
 	now := time.Now().UTC()
 	meta := a.lookupRecordingExportMeta(recordingID)
+	jobCtx, jobCancel := context.WithCancel(context.Background())
 	job := &recordingExportJob{
 		ID:                 jobID,
 		UserID:             userID,
@@ -223,26 +362,27 @@ func (a *App) enqueueRecordingExport(userID, recordingID, format, mediaPath, wmT
 		SessionDescription: meta.SessionDescription,
 		ChannelType:        meta.ChannelType,
 		TargetID:           meta.TargetID,
+		TargetName:         meta.TargetName,
+		TargetPath:         meta.TargetPath,
 		RecordingStartedAt: meta.StartedAt,
 		CreatedAt:          now,
 		UpdatedAt:          now,
+		cancel:             jobCancel,
 	}
-	a.RecordingExports.set(job)
-	go a.runRecordingExportJob(job, mediaPath, wmText)
+	a.RecordingExports.jobs[job.ID] = job
+	go a.runRecordingExportJob(job, mediaPath, jobCtx)
 	return job, nil
 }
 
-func (a *App) runRecordingExportJob(job *recordingExportJob, mediaPath, wmText string) {
-	jobCtx, jobCancel := context.WithCancel(context.Background())
-	defer jobCancel()
-
-	a.RecordingExports.mu.Lock()
-	job.cancel = jobCancel
-	a.RecordingExports.mu.Unlock()
+func (a *App) runRecordingExportJob(job *recordingExportJob, mediaPath string, jobCtx context.Context) {
 	defer func() {
 		a.RecordingExports.mu.Lock()
+		cancel := job.cancel
 		job.cancel = nil
 		a.RecordingExports.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
 	}()
 
 	a.updateRecordingExportProgress(job, 0, "queued")
@@ -254,18 +394,28 @@ func (a *App) runRecordingExportJob(job *recordingExportJob, mediaPath, wmText s
 
 	gov := recording.DefaultGovernor()
 	if err := gov.AcquireExport(acquireCtx); err != nil {
-		a.finishRecordingExportJob(job, "", "", "", fmt.Errorf("export queue wait: %w", err))
+		if errors.Is(err, context.Canceled) {
+			a.finishRecordingExportJob(job, "", "", "", context.Canceled)
+			return
+		}
+		a.finishRecordingExportJob(job, "", "", "", fmt.Errorf("export queue wait failed"))
 		return
 	}
 	defer gov.ReleaseExport()
 
-	convertCtx, convertCancel := context.WithTimeout(jobCtx, recordingExportConvertTimeout)
+	convertCtx, convertCancel := context.WithTimeout(jobCtx, recordingExportConvertTimeoutDuration())
 	defer convertCancel()
 
 	a.updateRecordingExportState(job, recordingExportRunning, "")
 	a.updateRecordingExportProgress(job, 5, "starting")
 	threads := gov.FFmpegThreads()
 	report := a.recordingExportProgressReporter(job)
+	temps := &exportTempTracker{}
+	defer func() {
+		if job.State != recordingExportCompleted {
+			temps.cleanup()
+		}
+	}()
 
 	var (
 		outPath     string
@@ -273,11 +423,14 @@ func (a *App) runRecordingExportJob(job *recordingExportJob, mediaPath, wmText s
 		disposition string
 		err         error
 	)
+	workDir := a.RecordingExports.tempDir
 	switch {
-	case recording.IsWebMPath(mediaPath) && job.Format == "gif":
-		outPath, contentType, disposition, err = convertWebMToGIF(convertCtx, mediaPath, wmText, threads, report)
-	case job.Format == "gif" || job.Format == "webm":
-		outPath, contentType, disposition, err = convertCastToVideo(convertCtx, mediaPath, job.Format, wmText, threads, report)
+	case recording.IsMP4Path(mediaPath) && job.Format == "gif":
+		outPath, contentType, disposition, err = convertVideoToGIF(convertCtx, mediaPath, workDir, threads, report, temps)
+	case job.Format == "gif":
+		outPath, contentType, disposition, err = convertCastToGIF(convertCtx, mediaPath, workDir, report, temps)
+	case job.Format == "mp4":
+		outPath, contentType, disposition, err = convertCastToMP4(convertCtx, mediaPath, workDir, threads, report, temps)
 	default:
 		err = fmt.Errorf("unsupported export format %q", job.Format)
 	}
@@ -342,7 +495,7 @@ func (a *App) finishRecordingExportJob(job *recordingExportJob, outPath, content
 			a.updateRecordingExportState(job, recordingExportCancelled, "")
 			a.updateRecordingExportProgress(job, 0, "cancelled")
 		} else {
-			a.updateRecordingExportState(job, recordingExportFailed, runErr.Error())
+			a.updateRecordingExportState(job, recordingExportFailed, userVisibleExportError(runErr))
 		}
 		if outPath != "" {
 			_ = os.Remove(outPath)
@@ -419,7 +572,13 @@ func (a *App) handleGetRecordingExportFile(w http.ResponseWriter, r *http.Reques
 		writeJSONErrorKey(w, r, "recordings.exportNotReady", http.StatusConflict)
 		return
 	}
-	out, err := os.Open(job.OutputPath) // #nosec G304 -- path from our temp export job.
+	exportDir := a.RecordingExports.tempDir
+	safePath, err := openExportPath(exportDir, job.OutputPath)
+	if err != nil {
+		writeJSONErrorKey(w, r, "recordings.fileNotFound", http.StatusNotFound)
+		return
+	}
+	out, err := os.Open(safePath) // #nosec G304 -- path validated under export dir.
 	if err != nil {
 		writeJSONErrorKey(w, r, "recordings.fileNotFound", http.StatusNotFound)
 		return
@@ -436,10 +595,14 @@ func (a *App) handleGetRecordingExportFile(w http.ResponseWriter, r *http.Reques
 }
 
 func recordingNeedsAsyncExport(format, mediaPath string) bool {
-	if format == "gif" {
+	switch format {
+	case "mp4":
+		return !recording.IsMP4Path(mediaPath)
+	case "gif":
 		return true
+	default:
+		return false
 	}
-	return format == "webm" && !recording.IsWebMPath(mediaPath)
 }
 
 func writeRecordingExportAccepted(w http.ResponseWriter, job *recordingExportJob) {
@@ -456,7 +619,7 @@ func decodeRecordingID(raw string) string {
 }
 
 func sanitizeRecordingBasename(name string) string {
-	for _, ext := range []string{".cast", ".webm"} {
+	for _, ext := range []string{".cast", ".mp4"} {
 		if strings.HasSuffix(strings.ToLower(name), ext) {
 			prefix := name[:len(name)-len(ext)]
 			safe := strings.ReplaceAll(prefix, ":", "-")
@@ -482,17 +645,67 @@ func resolveRecordingMediaPath(recordingDir, filePath string) (string, error) {
 		return "", fmt.Errorf("invalid recording path")
 	}
 	if _, err := os.Stat(absPath); err == nil {
-		return absPath, nil
+		return openRecordingPath(recordingDir, absPath)
 	}
 	dir, base := filepath.Dir(absPath), filepath.Base(absPath)
 	safeBase := sanitizeRecordingBasename(base)
 	if safeBase != base {
 		alt := filepath.Join(dir, safeBase)
 		if _, err := os.Stat(alt); err == nil {
-			return alt, nil
+			return openRecordingPath(recordingDir, alt)
 		}
 	}
 	return "", os.ErrNotExist
+}
+
+// openRecordingPath resolves symlinks and verifies the target stays inside recordingDir.
+func openRecordingPath(recordingDir, absPath string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", os.ErrNotExist
+		}
+		return "", err
+	}
+	absDir, err := filepath.Abs(recordingDir)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absDir, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid recording path")
+	}
+	return resolved, nil
+}
+
+func userVisibleExportError(runErr error) string {
+	if runErr == nil {
+		return ""
+	}
+	if errors.Is(runErr, errRecordingVideoTools) {
+		return "Video export requires agg and ffmpeg on the server"
+	}
+	return runErr.Error()
+}
+
+// openExportPath resolves symlinks and verifies the target stays inside exportDir.
+func openExportPath(exportDir, absPath string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", os.ErrNotExist
+		}
+		return "", err
+	}
+	absDir, err := filepath.Abs(exportDir)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absDir, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid export path")
+	}
+	return resolved, nil
 }
 
 func (a *App) resolveRecordingMediaAccess(w http.ResponseWriter, r *http.Request, recordingID string) (*recordingMediaAccess, bool) {
@@ -565,7 +778,9 @@ func (a *App) handleListRecordingExports(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, map[string]interface{}{"items": []interface{}{}})
 		return
 	}
-	jobs := a.RecordingExports.listForUser(userID)
+	a.sweepRecordingExportsMaintenance()
+	includeAll := a.isAdminUser(userID)
+	jobs := a.RecordingExports.listForViewer(userID, includeAll)
 	items := make([]map[string]interface{}, 0, len(jobs))
 	for _, j := range jobs {
 		items = append(items, j.snapshot())
@@ -590,6 +805,8 @@ func (a *App) handleDeleteRecordingExport(w http.ResponseWriter, r *http.Request
 	}
 	if job.State == recordingExportQueued || job.State == recordingExportRunning {
 		a.requestCancelRecordingExport(job)
+		a.updateRecordingExportState(job, recordingExportCancelled, "")
+		a.updateRecordingExportProgress(job, 0, "cancelled")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -604,7 +821,7 @@ func (a *App) handleDeleteRecordingExport(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handlePostRecordingExport queues GIF/WebM generation for a recording.
+// handlePostRecordingExport queues GIF/MP4 generation for a recording.
 func (a *App) handlePostRecordingExport(w http.ResponseWriter, r *http.Request) {
 	rawID := chi.URLParam(r, "recording_id")
 	if rawID == "" {
@@ -613,9 +830,7 @@ func (a *App) handlePostRecordingExport(w http.ResponseWriter, r *http.Request) 
 	}
 	recordingID := decodeRecordingID(rawID)
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
-	switch format {
-	case "gif", "webm":
-	default:
+	if format != "gif" && format != "mp4" {
 		writeJSONErrorKey(w, r, "recordings.formatInvalid", http.StatusBadRequest)
 		return
 	}
@@ -624,12 +839,15 @@ func (a *App) handlePostRecordingExport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	userID := strings.TrimSpace(a.currentUserID(r))
+	if format == "mp4" && recording.IsMP4Path(access.MediaPath) {
+		writeJSONErrorKey(w, r, "recordings.exportDirectOnly", http.StatusBadRequest)
+		return
+	}
 	if !recordingNeedsAsyncExport(format, access.MediaPath) {
 		writeJSONErrorKey(w, r, "recordings.exportDirectOnly", http.StatusBadRequest)
 		return
 	}
-	wmText := watermarkTextForRecording(userID, access.SessionID, access.StartedAt)
-	job, err := a.enqueueRecordingExport(userID, recordingID, format, access.MediaPath, wmText)
+	job, err := a.enqueueRecordingExport(userID, recordingID, format, access.MediaPath)
 	if err != nil {
 		writeInternalError(w, err)
 		return

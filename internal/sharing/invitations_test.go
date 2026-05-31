@@ -34,12 +34,6 @@ func newTestDB(t *testing.T) *sql.DB {
 		used_at INTEGER,
 		revoked_at INTEGER,
 		created_at INTEGER NOT NULL
-	);
-	CREATE TABLE session_invitation_consumers (
-		invitation_id TEXT NOT NULL,
-		user_id TEXT NOT NULL,
-		consumed_at INTEGER NOT NULL,
-		PRIMARY KEY (invitation_id, user_id)
 	);`
 	if _, err := db.Exec(ddl); err != nil {
 		t.Fatalf("create table: %v", err)

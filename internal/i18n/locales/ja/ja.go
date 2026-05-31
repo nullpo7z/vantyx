@@ -113,8 +113,6 @@ var Messages = map[string]string{
 	"sharing.linkMaxUsesInvalid":     "リンクの利用回数が不正です",
 	"sharing.cannotInviteSelf":       "自分自身を招待することはできません",
 	"sharing.tokenOrIDRequired":      "招待トークンまたは招待 ID が必要です",
-	"sharing.linkTokenRequired":      "リンク招待には招待トークンが必要です",
-	"sharing.userKicked":             "このセッションから削除されたため再参加できません",
 	"sharing.invitationNotFound":     "招待が見つかりません",
 	"sharing.invitationInactive":     "この招待は失効しているか取り消されています",
 	"sharing.invitationOtherUser":    "この招待は別のユーザー宛てです",
@@ -133,18 +131,20 @@ var Messages = map[string]string{
 
 	// Recordings.
 	"recordings.idRequired":         "recording_id は必須です",
-	"recordings.formatInvalid":      "format は cast, gif, mp4 のいずれかである必要があります",
+	"recordings.formatInvalid":      "format は cast, gif, webm のいずれかである必要があります",
 	"recordings.notAvailable":       "録画機能を利用できません",
 	"recordings.notFound":           "録画が見つかりません",
 	"recordings.notConfigured":      "録画機能が設定されていません",
 	"recordings.fileNotFound":       "録画ファイルが見つかりません",
 	"recordings.convertReadFailed":  "変換後ファイルの読み込みに失敗しました",
 	"recordings.videoExportFailed":  "動画の書き出しに失敗しました。",
+	"recordings.videoToolsRequired": "動画の書き出しを利用できません。サーバーに agg と ffmpeg が必要です。",
 	"recordings.exportNotFound":     "書き出しジョブが見つかりません",
 	"recordings.exportIdRequired":   "書き出し ID が必要です",
 	"recordings.exportUnavailable":  "書き出しサービスを利用できません",
 	"recordings.exportNotReady":     "書き出しはまだ完了していません",
-	"recordings.exportDirectOnly":   "この形式は直接ダウンロードのみです。GIF/MP4 変換は書き出しキューを利用してください",
+	"recordings.exportDirectOnly":   "この形式は直接ダウンロードのみです。GIF/WebM 変換は書き出しキューを利用してください",
+	"recordings.exportBusy":         "変換中のため削除できません",
 
 	// RDP / VNC / TFTP capability checks.
 	"rdp.notRDP":         "RDP サーバーではありません",

@@ -1,6 +1,5 @@
 import API from './api.js'
 import { t } from './i18n.js'
-import { targetFullPathForDisplay } from './session_list_shared.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
 
 const POLL_MS = 2000
@@ -53,14 +52,8 @@ function abbreviateRecordingId(id) {
 
 function exportJobLabel(job) {
   const format = String(job.format || '').toUpperCase()
-  const fullPath = targetFullPathForDisplay({
-    target_name: job.target_name,
-    target_id: job.target_id,
-    target_path: job.target_path,
-  })
   const sessionName = String(job.session_name || '').trim()
   const startedAt = String(job.recording_started_at || '').trim()
-  if (fullPath && fullPath !== '—') return `${fullPath} (${format})`
   if (sessionName) return `${sessionName} (${format})`
   if (startedAt) return `${startedAt} (${format})`
   const recordingId = String(job.recording_id || '').trim()
@@ -69,27 +62,25 @@ function exportJobLabel(job) {
 }
 
 function renderSessionCell(job, escapeHtml) {
-  const fullPath = targetFullPathForDisplay({
-    target_name: job.target_name,
-    target_id: job.target_id,
-    target_path: job.target_path,
-  })
   const sessionName = String(job.session_name || '').trim()
   const description = String(job.session_description || '').trim()
   const startedAt = String(job.recording_started_at || '').trim()
   const channelType = String(job.channel_type || '').trim()
+  const title = [sessionName, description, startedAt].filter(Boolean).join(' · ')
+  const primary =
+    sessionName ||
+    (startedAt ? startedAt : abbreviateRecordingId(job.recording_id || '')) ||
+    '—'
   const metaParts = []
-  if (sessionName) metaParts.push(sessionName)
   if (description) metaParts.push(description)
-  if (startedAt) metaParts.push(startedAt)
+  if (startedAt && sessionName) metaParts.push(startedAt)
   if (channelType) metaParts.push(channelType)
-  const title = [fullPath, ...metaParts].filter((p) => p && p !== '—').join(' · ')
   const metaHtml =
     metaParts.length > 0
       ? `<div class="text-xs text-slate-500 mt-0.5 truncate" title="${escapeHtml(metaParts.join(' · '))}">${escapeHtml(metaParts.join(' · '))}</div>`
       : ''
   return `<div class="min-w-0" title="${escapeHtml(title)}">
-    <div class="text-sm font-medium text-slate-900 font-mono break-all">${escapeHtml(fullPath)}</div>
+    <div class="text-sm font-medium text-slate-900 truncate">${escapeHtml(primary)}</div>
     ${metaHtml}
   </div>`
 }
@@ -164,9 +155,8 @@ function renderExportRows(items, escapeHtml) {
           <td class="px-4 py-2 text-sm">${renderProgressCell(state, progress, progressStage, escapeHtml)}</td>
           <td class="px-4 py-2 text-sm text-slate-600 whitespace-nowrap">${escapeHtml(formatDisplayTime(job.created_at))}</td>
           <td class="px-4 py-2 text-sm text-slate-600 whitespace-nowrap">${escapeHtml(formatDisplayTime(job.updated_at))}</td>
-          <td class="px-4 py-2">
-            <div class="inline-flex flex-nowrap items-center gap-2">${downloadBtn}${cancelBtn}${deleteBtn}</div>
-            ${errHtml}
+          <td class="px-4 py-2 whitespace-nowrap">
+            <div class="flex items-center gap-2 flex-wrap">${downloadBtn}${cancelBtn}${deleteBtn}${errHtml}</div>
           </td>
         </tr>
       `
@@ -192,12 +182,12 @@ function buildExportsShell(mainContent, escapeHtml, onBackToRecordings) {
         <div class="overflow-x-auto">
           <table class="min-w-[720px] w-full table-fixed text-left text-sm">
             <colgroup>
-              <col class="w-[30%]" />
+              <col class="w-[34%]" />
               <col class="w-[8%]" />
-              <col class="w-[14%]" />
-              <col class="w-[16%]" />
-              <col class="w-[16%]" />
-              <col class="w-[16%]" />
+              <col class="w-[10%]" />
+              <col class="w-[18%]" />
+              <col class="w-[18%]" />
+              <col class="w-[12%]" />
             </colgroup>
             <thead class="bg-slate-50 border-b border-slate-200">
               <tr>
@@ -315,15 +305,12 @@ export async function renderRecordingExportsPage({ mainContent, escapeHtml, onBa
       }
       syncPollTimer(items)
     } catch (e) {
-      const msg = e instanceof Error ? e.message : t('recordingExports.fetchFailed')
       if (!shellReady) {
-        mainContent.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(msg)}</p>`
+        mainContent.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(e.message || t('recordingExports.fetchFailed'))}</p>`
       } else {
-        const tbody = mainContent.querySelector('#exports-table-body')
-        if (tbody) {
-          tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-8 text-center text-red-600">${escapeHtml(msg)}</td></tr>`
-        }
+        await uiAlert(e.message || t('recordingExports.fetchFailed'))
       }
+      stopPoll()
     } finally {
       refreshInFlight = false
     }

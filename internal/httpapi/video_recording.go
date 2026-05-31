@@ -42,15 +42,13 @@ func (g *governedCapture) Stop() error {
 type videoRecordingRegistry struct {
 	mu      sync.Mutex
 	active  map[string]*videoRecordingHandle
-	started map[string]bool
-	pending map[string]context.CancelFunc
+	started map[string]bool // session IDs with a DB row (including finished)
 }
 
 func newVideoRecordingRegistry() *videoRecordingRegistry {
 	return &videoRecordingRegistry{
 		active:  make(map[string]*videoRecordingHandle),
 		started: make(map[string]bool),
-		pending: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -64,50 +62,22 @@ func (a *App) videoRegistry() *videoRecordingRegistry {
 	return a.videoRecordings
 }
 
-func (r *videoRecordingRegistry) beginPending(sessionID string, cancel context.CancelFunc) bool {
-	if r == nil || sessionID == "" || cancel == nil {
+func (r *videoRecordingRegistry) hasActive(sessionID string) bool {
+	if r == nil {
 		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.active[sessionID]; ok {
-		return false
-	}
-	if _, ok := r.pending[sessionID]; ok {
-		return false
-	}
-	r.pending[sessionID] = cancel
-	return true
+	_, ok := r.active[sessionID]
+	return ok
 }
 
-func (r *videoRecordingRegistry) endPending(sessionID string) {
-	if r == nil || sessionID == "" {
-		return
-	}
-	r.mu.Lock()
-	delete(r.pending, sessionID)
-	r.mu.Unlock()
-}
-
-func (r *videoRecordingRegistry) cancelPending(sessionID string) {
-	if r == nil || sessionID == "" {
-		return
-	}
-	r.mu.Lock()
-	cancel := r.pending[sessionID]
-	delete(r.pending, sessionID)
-	r.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-}
-
-func (a *App) beginVideoRecordingRow(ctx context.Context, sessionID, userID, targetID, channelType, videoPath string) {
+func (a *App) beginVideoRecordingRow(ctx context.Context, sessionID, userID, targetID, channelType, webmPath string) {
 	if a == nil || a.DB == nil {
 		return
 	}
 	startedAt := time.Now().UTC().Format("2006-01-02 15:04:05")
-	if err := a.InsertRecording(ctx, sessionID, userID, targetID, sessionID, channelType, videoPath, startedAt, "", ""); err != nil {
+	if err := a.InsertRecording(ctx, sessionID, userID, targetID, sessionID, channelType, webmPath, startedAt, "", ""); err != nil {
 		audit("recording_insert_failed", auditFields{
 			"session_id": sessionID,
 			"channel":    channelType,
@@ -132,26 +102,8 @@ func (a *App) registerVideoRecording(sessionID string, stopper videoRecordingSto
 		return
 	}
 	reg.mu.Lock()
-	if prev, ok := reg.active[sessionID]; ok && prev != nil {
-		reg.mu.Unlock()
-		a.stopVideoRecordingHandle(prev)
-		reg.mu.Lock()
-	}
+	defer reg.mu.Unlock()
 	reg.active[sessionID] = &videoRecordingHandle{stop: stopper, path: path, release: release}
-	delete(reg.pending, sessionID)
-	reg.mu.Unlock()
-}
-
-func (a *App) stopVideoRecordingHandle(handle *videoRecordingHandle) {
-	if handle == nil {
-		return
-	}
-	if handle.stop != nil {
-		_ = handle.stop.Stop()
-	}
-	if handle.release != nil {
-		handle.release()
-	}
 }
 
 func (a *App) finishVideoRecording(sessionID string) {
@@ -159,16 +111,18 @@ func (a *App) finishVideoRecording(sessionID string) {
 	if reg == nil || sessionID == "" {
 		return
 	}
-	reg.cancelPending(sessionID)
-
 	reg.mu.Lock()
 	handle, ok := reg.active[sessionID]
 	delete(reg.active, sessionID)
 	_, started := reg.started[sessionID]
 	reg.mu.Unlock()
-
-	if ok {
-		a.stopVideoRecordingHandle(handle)
+	if ok && handle != nil {
+		if handle.stop != nil {
+			_ = handle.stop.Stop()
+		}
+		if handle.release != nil {
+			handle.release()
+		}
 	}
 	if started && a != nil && a.DB != nil {
 		endedAt := time.Now().UTC().Format("2006-01-02 15:04:05")
@@ -176,66 +130,44 @@ func (a *App) finishVideoRecording(sessionID string) {
 	}
 }
 
-func (a *App) startRDPVideoRecording(parentCtx context.Context, sessionID, userID, targetID string, display, width, height int) {
-	a.startVideoRecording(parentCtx, sessionID, userID, targetID, "rdp", func(ctx context.Context, threads int) (videoRecordingStopper, string, error) {
+func (a *App) startRDPVideoRecording(ctx context.Context, sessionID, userID, targetID string, display, width, height int) {
+	if a.videoRegistry().hasActive(sessionID) {
+		return
+	}
+	go a.runGovernedCapture(ctx, sessionID, userID, targetID, "rdp", func(ctx context.Context, threads int) (videoRecordingStopper, string, error) {
 		recordingDir := os.Getenv("VANTYX_RECORDINGS_DIR")
 		if recordingDir == "" || a == nil || a.DB == nil {
 			return nil, "", os.ErrInvalid
 		}
 		_ = os.MkdirAll(recordingDir, 0o750) // #nosec G703
-		mp4Path := recording.MP4Path(recordingDir, sessionID)
-		rec, err := recording.StartX11Grab(ctx, display, width, height, 0, threads, mp4Path)
+		webmPath := recording.WebMPath(recordingDir, sessionID)
+		rec, err := recording.StartX11Grab(ctx, display, width, height, 0, threads, webmPath)
 		if err != nil {
 			return nil, "", err
 		}
-		return rec, mp4Path, nil
+		return rec, webmPath, nil
 	})
 }
 
-func (a *App) startVNCVideoRecording(parentCtx context.Context, sessionID, userID, targetID, host string, port int, password string) {
-	a.startVideoRecording(parentCtx, sessionID, userID, targetID, "vnc", func(ctx context.Context, threads int) (videoRecordingStopper, string, error) {
+func (a *App) startVNCVideoRecording(ctx context.Context, sessionID, userID, targetID, host string, port int, password string) {
+	go a.runGovernedCapture(ctx, sessionID, userID, targetID, "vnc", func(ctx context.Context, threads int) (videoRecordingStopper, string, error) {
 		recordingDir := os.Getenv("VANTYX_RECORDINGS_DIR")
 		if recordingDir == "" || a == nil || a.DB == nil {
 			return nil, "", os.ErrInvalid
 		}
 		_ = os.MkdirAll(recordingDir, 0o750) // #nosec G703
-		mp4Path := recording.MP4Path(recordingDir, sessionID)
-		cap, err := recording.StartVNCCapture(ctx, host, port, password, 1920, 1080, 0, mp4Path)
+		webmPath := recording.WebMPath(recordingDir, sessionID)
+		cap, err := recording.StartVNCCapture(ctx, host, port, password, 1920, 1080, 0, webmPath)
 		if err != nil {
 			return nil, "", err
 		}
-		return cap, mp4Path, nil
+		return cap, webmPath, nil
 	})
 }
 
 type captureStarter func(ctx context.Context, ffmpegThreads int) (videoRecordingStopper, string, error)
 
-func (a *App) startVideoRecording(parentCtx context.Context, sessionID, userID, targetID, channelType string, start captureStarter) {
-	recCtx, recCancel := context.WithCancel(context.Background())
-	if parentCtx != nil {
-		go func() {
-			select {
-			case <-parentCtx.Done():
-				recCancel()
-			case <-recCtx.Done():
-			}
-		}()
-	}
-	reg := a.videoRegistry()
-	if reg == nil || !reg.beginPending(sessionID, recCancel) {
-		recCancel()
-		return
-	}
-	go func() {
-		defer reg.endPending(sessionID)
-		a.runGovernedCapture(recCtx, sessionID, userID, targetID, channelType, start)
-	}()
-}
-
 func (a *App) runGovernedCapture(ctx context.Context, sessionID, userID, targetID, channelType string, start captureStarter) {
-	if ctx.Err() != nil {
-		return
-	}
 	gov := recording.DefaultGovernor()
 	acquireCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
@@ -254,31 +186,23 @@ func (a *App) runGovernedCapture(ctx context.Context, sessionID, userID, targetI
 			gov.Release()
 		}
 	}
-	defer release()
-
-	if ctx.Err() != nil {
-		return
-	}
-	inner, videoPath, err := start(ctx, gov.FFmpegThreads())
+	inner, webmPath, err := start(ctx, gov.FFmpegThreads())
 	if err != nil {
+		release()
 		audit("recording_create_failed", auditFields{
 			"session_id": sessionID,
 			"channel":    channelType,
-			"path":       videoPath,
+			"path":       webmPath,
 			"error":      err.Error(),
 		})
 		return
 	}
-	if ctx.Err() != nil {
-		_ = inner.Stop()
-		return
-	}
-	a.beginVideoRecordingRow(ctx, sessionID, userID, targetID, channelType, videoPath)
+	a.beginVideoRecordingRow(ctx, sessionID, userID, targetID, channelType, webmPath)
 	wrapped := &governedCapture{
 		inner: inner,
 		done:  release,
 	}
-	a.registerVideoRecording(sessionID, wrapped, videoPath, nil)
+	a.registerVideoRecording(sessionID, wrapped, webmPath, nil)
 }
 
 func recordingMediaType(channelType, filePath string) string {
@@ -286,7 +210,7 @@ func recordingMediaType(channelType, filePath string) string {
 	case "rdp", "vnc":
 		return "video"
 	}
-	if recording.IsMP4Path(filePath) {
+	if recording.IsWebMPath(filePath) {
 		return "video"
 	}
 	return "cast"

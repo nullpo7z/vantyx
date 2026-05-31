@@ -137,6 +137,7 @@ func Start(ctx context.Context, host string, port int, username, password string
 
 	rdpAddr := fmt.Sprintf("/v:%s:%d", host, port)
 	args := []string{
+		rdpAddr,
 		fmt.Sprintf("/size:%dx%d", width, height),
 		// Dynamic resolution support (mstsc-like behavior). When the remote desktop
 		// changes its resolution, allow FreeRDP to adjust without forcing a reconnect.
@@ -146,17 +147,11 @@ func Start(ctx context.Context, host string, port int, username, password string
 		"+clipboard",
 		"/gfx",
 	}
-	if username != "" || password != "" {
-		credFile, credErr := writeFreerdpCredentialsFile(host, port, username, password)
-		if credErr != nil {
-			cancel()
-			_ = b.xvfb.Process.Kill()
-			return nil, credErr
-		}
-		defer os.Remove(credFile) // #nosec G304 -- temp credentials file removed after start.
-		args = append([]string{"/from-file:" + credFile}, args...)
-	} else {
-		args = append([]string{rdpAddr}, args...)
+	if username != "" {
+		args = append(args, "/u:"+username)
+	}
+	if password != "" {
+		args = append(args, "/p:"+password)
 	}
 
 	var freerdpStderr bytes.Buffer
@@ -569,50 +564,4 @@ func (m *Manager) StopAll() {
 	for _, b := range all {
 		b.Stop()
 	}
-}
-
-func writeFreerdpCredentialsFile(host string, port int, username, password string) (string, error) {
-	if err := validateRDPString(host, 253); err != nil {
-		return "", err
-	}
-	if err := validateRDPString(username, 512); err != nil {
-		return "", err
-	}
-	if err := validateRDPString(password, 512); err != nil {
-		return "", err
-	}
-	f, err := os.CreateTemp("", "freerdp-*.rdp")
-	if err != nil {
-		return "", err
-	}
-	path := f.Name()
-	if err := f.Chmod(0o600); err != nil { // #nosec G302 -- credentials file must be owner-only.
-		_ = f.Close()
-		_ = os.Remove(path)
-		return "", err
-	}
-	if _, err := fmt.Fprintf(f, "full address:s:%s:%d\n", host, port); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return "", err
-	}
-	if username != "" {
-		if _, err := fmt.Fprintf(f, "username:s:%s\n", username); err != nil {
-			_ = f.Close()
-			_ = os.Remove(path)
-			return "", err
-		}
-	}
-	if password != "" {
-		if _, err := fmt.Fprintf(f, "password:s:%s\n", password); err != nil {
-			_ = f.Close()
-			_ = os.Remove(path)
-			return "", err
-		}
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(path)
-		return "", err
-	}
-	return path, nil
 }

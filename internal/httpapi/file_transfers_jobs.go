@@ -301,31 +301,7 @@ func (a *App) runTFTPServerUpload(ctx context.Context, job *filetransfer.Job, ta
 // failTransferJob marks a job as failed with the supplied user-visible
 // message. Kept as a method so future callers can hook in audit events.
 func (a *App) failTransferJob(job *filetransfer.Job, msg string) {
-	job.SetState(filetransfer.StateFailed, sanitizeTransferErrorMessage(msg))
-}
-
-// sanitizeTransferErrorMessage strips control characters and caps length so
-// remote protocol errors cannot inject markup into the SPA.
-func sanitizeTransferErrorMessage(msg string) string {
-	msg = strings.TrimSpace(msg)
-	if msg == "" {
-		return "transfer failed"
-	}
-	var b strings.Builder
-	for _, r := range msg {
-		if r == '\n' || r == '\r' || r == '\t' || (r >= 32 && r != '<' && r != '>') {
-			b.WriteRune(r)
-		}
-	}
-	out := strings.TrimSpace(b.String())
-	if out == "" {
-		return "transfer failed"
-	}
-	const maxLen = 240
-	if len(out) > maxLen {
-		return out[:maxLen] + "…"
-	}
-	return out
+	job.SetState(filetransfer.StateFailed, msg)
 }
 
 // cleanupTransferJob removes the staging file (if any) and drops the

@@ -149,7 +149,7 @@ export function renderFilesPage(container) {
               <div class="h-full ${t.status === 'error' ? 'bg-red-400' : 'bg-sky-500'}" style="width:${t.status === 'done' ? 100 : (t.percent || 0)}%"></div>
             </div>
             <span class="text-xs min-w-[3rem] text-right">
-              ${t.status === 'pending' && (t.percent || 0) > 0 ? `${t.percent}%` : t.status === 'pending' ? tr('files.transferInFlight') : t.status === 'done' ? tr('files.transferDoneShort') : escapeHtml((t.err && t.err.message) || tr('files.transferError'))}
+              ${t.status === 'pending' && (t.percent || 0) > 0 ? `${t.percent}%` : t.status === 'pending' ? tr('files.transferInFlight') : t.status === 'done' ? tr('files.transferDoneShort') : (t.err && t.err.message) || tr('files.transferError')}
             </span>
           </div>
         </div>

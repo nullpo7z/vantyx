@@ -769,12 +769,8 @@ func (a *App) handleJoinSession(w http.ResponseWriter, r *http.Request) {
 	var lookupErr error
 	if body.InvitationToken != "" {
 		inv, lookupErr = a.SharingStore.GetByTokenHash(r.Context(), sharing.HashToken(body.InvitationToken))
-	} else if body.InvitationID != "" {
+	} else {
 		inv, _, lookupErr = a.SharingStore.GetByID(r.Context(), body.InvitationID)
-		if lookupErr == nil && inv.IsLink() {
-			writeJSONErrorKey(w, r, "sharing.linkTokenRequired", http.StatusBadRequest)
-			return
-		}
 	}
 	if lookupErr != nil {
 		if errors.Is(lookupErr, sharing.ErrInvitationNotFound) {
@@ -842,18 +838,7 @@ func (a *App) handleJoinSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if room != nil {
-		if room.IsKicked(userID) {
-			writeJSONErrorKey(w, r, "sharing.userKicked", http.StatusForbidden)
-			return
-		}
-		if err := room.AddViewer(userID, username, now); err != nil {
-			if errors.Is(err, sharing.ErrUserKicked) {
-				writeJSONErrorKey(w, r, "sharing.userKicked", http.StatusForbidden)
-				return
-			}
-			writeInternalError(w, err)
-			return
-		}
+		room.AddViewer(userID, username, now)
 	}
 	audit("session_invitation_consumed", auditFields{
 		"user_id":    userID,

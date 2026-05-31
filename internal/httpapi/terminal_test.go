@@ -1214,7 +1214,7 @@ func TestHandleGetRecordingFile_InvalidFormat(t *testing.T) {
 	_ = app.InsertRecording(ctx, "rec-fmt-1", "admin", "t1", "s1", "ssh", castFile, time.Now().UTC().Format(time.RFC3339), "", "")
 
 	httpSess, _ := app.SessionStore.Create("admin")
-	req := httptest.NewRequest(http.MethodGet, "/api/recordings/rec-fmt-1/file?format=avi", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/rec-fmt-1/file?format=mp4", nil)
 	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)

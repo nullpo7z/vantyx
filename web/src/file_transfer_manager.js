@@ -97,11 +97,9 @@ function notifyIfChanged() {
 const cleanupTimers = new Map() // jobId -> timeoutId
 const cleanedJobIds = new Set() // tombstones for jobs we already cleaned up locally
 
-function hasLocalUploadGhost() {
-  for (const j of jobs.values()) {
-    if (j && j._local && j.direction === 'upload') return true
-  }
-  return false
+function hasLocalUploadGhostFor(jobId) {
+  const j = jobs.get(jobId)
+  return Boolean(j && j._local && j.direction === 'upload')
 }
 
 const localAborts = new Map() // tempId -> abort fn
@@ -131,9 +129,11 @@ async function applySnapshot(item) {
   // (see startBackgroundUpload). Drop server-side "receiving" events for the
   // same job so the bar shows the immediate browser progress rather than the
   // slightly-delayed server view.
-  if (item.state === 'receiving' && item.direction === 'upload' && hasLocalUploadGhost()) {
+  if (item.state === 'receiving' && item.direction === 'upload' && hasLocalUploadGhostFor(item.id)) {
     return
   }
+  const prev = jobs.get(item.id)
+  const wasCompleted = prev?.state === 'completed'
   const isTerminal =
     item.state === 'completed' || item.state === 'failed' || item.state === 'cancelled'
   let cleanupDelay = TERMINAL_DISPLAY_MS
@@ -158,7 +158,7 @@ async function applySnapshot(item) {
       cleanupTimers.delete(item.id)
     }
   } else {
-    if (item.state === 'completed' && item.direction === 'download') {
+    if (item.state === 'completed' && item.direction === 'download' && !wasCompleted) {
       await maybeDeliverDownload(item)
     }
     if (isTerminal) {
@@ -182,10 +182,37 @@ async function pollOnce() {
 }
 
 const deliveredDownloads = new Set()
+const deliveringDownloads = new Set()
+const DELIVERED_STORAGE_KEY = 'vantyx_file_transfer_delivered'
+
+function loadPersistedDelivered() {
+  try {
+    const raw = localStorage.getItem(DELIVERED_STORAGE_KEY)
+    const arr = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(arr)) return
+    for (const id of arr) {
+      if (typeof id === 'string' && id) deliveredDownloads.add(id)
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function persistDelivered(id) {
+  if (!id) return
+  try {
+    const ids = [...deliveredDownloads].slice(-100)
+    localStorage.setItem(DELIVERED_STORAGE_KEY, JSON.stringify(ids))
+  } catch {
+    /* ignore */
+  }
+}
 
 async function maybeDeliverDownload(job) {
-  if (deliveredDownloads.has(job.id)) return
-  deliveredDownloads.add(job.id)
+  if (!job?.id || deliveredDownloads.has(job.id) || deliveringDownloads.has(job.id)) {
+    return
+  }
+  deliveringDownloads.add(job.id)
   try {
     const blob = await API.fileTransferContent(job.id)
     const a = document.createElement('a')
@@ -193,9 +220,13 @@ async function maybeDeliverDownload(job) {
     a.download = job.file_name || 'download'
     a.click()
     URL.revokeObjectURL(a.href)
+    deliveredDownloads.add(job.id)
+    persistDelivered(job.id)
     await API.fileTransferDelete(job.id).catch(() => {})
   } catch {
-    deliveredDownloads.delete(job.id)
+    /* allow retry on next snapshot if fetch failed */
+  } finally {
+    deliveringDownloads.delete(job.id)
   }
 }
 
@@ -352,6 +383,7 @@ export function getFileTransferJobs() {
 }
 
 export function initFileTransferManager() {
+  loadPersistedDelivered()
   ensurePolling()
 }
 

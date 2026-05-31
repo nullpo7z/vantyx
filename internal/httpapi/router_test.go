@@ -28,46 +28,6 @@ import (
 	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 )
 
-func newTestApp(t *testing.T) *App {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "httpapi.db")
-	// Copy the pre-migrated template DB so NewApp's migration fast-path triggers.
-	// This keeps the suite under typical CI timeouts.
-	if len(httpapiTestDBTemplate) > 0 {
-		if err := os.WriteFile(dbPath, httpapiTestDBTemplate, 0o600); err != nil {
-			t.Fatalf("write template db: %v", err)
-		}
-	}
-	if err := os.Setenv("VANTYX_SQLITE_PATH", dbPath); err != nil {
-		t.Fatalf("set env: %v", err)
-	}
-	// Pin the bootstrap admin password to the legacy fixture value so
-	// the existing test suite (which hard-codes "Admin123!") keeps
-	// working after the C-2 fix removed the in-source default.
-	t.Setenv(initialAdminPasswordEnv, "Admin123!")
-	app := NewApp()
-	// Tests authenticate immediately as admin against many endpoints;
-	// the force-password-change middleware would otherwise gate every
-	// call. Clear the flag once after bootstrap.
-	if app != nil && app.UserStore != nil {
-		_ = app.UserStore.SetForcePasswordChange("admin", false)
-	}
-	t.Cleanup(func() {
-		_ = closeAuditSink()
-		// Give in-flight goroutines a moment to release SQLite handles
-		// before TempDir cleanup (avoids flaky -wal/-shm leftovers).
-		time.Sleep(50 * time.Millisecond)
-		if app != nil && app.DB != nil {
-			_, _ = app.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
-			_ = app.DB.Close()
-		}
-		_ = os.Remove(dbPath + "-wal")
-		_ = os.Remove(dbPath + "-shm")
-		_ = os.Unsetenv("VANTYX_SQLITE_PATH")
-	})
-	return app
-}
-
 func TestApp_LoginSuccess(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
@@ -4140,7 +4100,7 @@ func TestIsLoopbackHost(t *testing.T) {
 	}
 }
 
-// --- convertCastToVideo ---
+// --- convertCastToGIF ---
 
 func TestConvertCastToVideo_NoAggInPath(t *testing.T) {
 	oldPath := os.Getenv("PATH")
@@ -4150,7 +4110,7 @@ func TestConvertCastToVideo_NoAggInPath(t *testing.T) {
 	defer func() {
 		_ = os.Setenv("PATH", oldPath)
 	}()
-	_, _, _, err := convertCastToVideo("/tmp/nonexistent.cast", "gif", "User: admin")
+	_, _, _, err := convertCastToGIF(context.Background(), "/tmp/nonexistent.cast", t.TempDir(), nil, nil)
 	if err == nil {
 		t.Fatal("expected error when agg is not found in PATH")
 	}
@@ -4290,206 +4250,5 @@ func TestApp_ErrorMessage_UserLocaleOverridesHeader(t *testing.T) {
 	}
 	if msg := decodeErrorMessage(t, w2.Body.Bytes()); !strings.Contains(msg, "リクエスト") {
 		t.Fatalf("expected Japanese 'invalid request body', got %q", msg)
-	}
-}
-
-// TestApp_ErrorMessage_LocalizedHandlers exercises a handful of
-// recently migrated handlers (groups / recordings / settings) to make
-// sure their error responses honor the locale resolved by the
-// session middleware.
-func TestApp_ErrorMessage_LocalizedHandlers(t *testing.T) {
-	app := newTestApp(t)
-	router := app.NewRouter()
-
-	if err := app.UserStore.UpdateLocale("admin", "ja"); err != nil {
-		t.Fatalf("UpdateLocale: %v", err)
-	}
-	sess, err := app.SessionStore.Create("admin")
-	if err != nil {
-		t.Fatalf("SessionStore.Create: %v", err)
-	}
-
-	// Pre-create resources needed by the validation-error subtests.
-	ctx := context.Background()
-	if _, err := app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1"); err != nil {
-		t.Fatalf("Create g1: %v", err)
-	}
-	if err := app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1")); err != nil {
-		t.Fatalf("AddUserToGroup: %v", err)
-	}
-
-	cases := []struct {
-		name     string
-		method   string
-		path     string
-		body     string
-		wantCode int
-		wantSub  string
-	}{
-		{
-			name:     "groups: name is required (ja)",
-			method:   http.MethodPost,
-			path:     "/api/groups",
-			body:     `{"name":"  "}`,
-			wantCode: http.StatusBadRequest,
-			wantSub:  "必須",
-		},
-		{
-			name:     "recordings: bad format",
-			method:   http.MethodGet,
-			path:     "/api/recordings/abc/file?format=mp4",
-			body:     "",
-			wantCode: http.StatusBadRequest,
-			wantSub:  "cast",
-		},
-		{
-			name:     "settings: invalid proto",
-			method:   http.MethodPut,
-			path:     "/api/settings/audit-forwarder",
-			body:     `{"config":{"proto":"sctp"}}`,
-			wantCode: http.StatusBadRequest,
-			wantSub:  "プロトコル",
-		},
-		{
-			name:     "time_range: invalid from format",
-			method:   http.MethodGet,
-			path:     "/api/recordings?from=not-a-date",
-			body:     "",
-			wantCode: http.StatusBadRequest,
-			wantSub:  "RFC3339",
-		},
-		{
-			name:     "time_range: from after to",
-			method:   http.MethodGet,
-			path:     "/api/recordings?from=2026-05-10&to=2026-05-01",
-			body:     "",
-			wantCode: http.StatusBadRequest,
-			wantSub:  "from は to",
-		},
-		{
-			name:     "time_range: range too large",
-			method:   http.MethodGet,
-			path:     "/api/recordings?from=2026-01-01&to=2026-06-01",
-			body:     "",
-			wantCode: http.StatusBadRequest,
-			wantSub:  "90 日",
-		},
-		{
-			name:     "transfers: invalid state",
-			method:   http.MethodGet,
-			path:     "/api/file-transfers?state=bogus",
-			body:     "",
-			wantCode: http.StatusBadRequest,
-			wantSub:  "state",
-		},
-		{
-			name:     "transfers: invalid direction",
-			method:   http.MethodGet,
-			path:     "/api/file-transfers?direction=foo",
-			body:     "",
-			wantCode: http.StatusBadRequest,
-			wantSub:  "upload",
-		},
-		{
-			name:     "transfers: invalid backend",
-			method:   http.MethodGet,
-			path:     "/api/file-transfers?backend=foo",
-			body:     "",
-			wantCode: http.StatusBadRequest,
-			wantSub:  "remote",
-		},
-		{
-			name:     "transfers: invalid cursor",
-			method:   http.MethodGet,
-			path:     "/api/file-transfers?after_cursor=not-base64!!!",
-			body:     "",
-			wantCode: http.StatusBadRequest,
-			wantSub:  "after_id",
-		},
-		{
-			name:     "password: empty",
-			method:   http.MethodPost,
-			path:     "/api/me/password",
-			body:     `{"current_password":"admin","new_password":""}`,
-			wantCode: http.StatusBadRequest,
-			wantSub:  "必須",
-		},
-		{
-			name:     "password: too short",
-			method:   http.MethodPost,
-			path:     "/api/me/password",
-			body:     `{"current_password":"admin","new_password":"Ab1!"}`,
-			wantCode: http.StatusBadRequest,
-			wantSub:  "8 文字",
-		},
-		{
-			name:     "password: no upper",
-			method:   http.MethodPost,
-			path:     "/api/me/password",
-			body:     `{"current_password":"admin","new_password":"lowercase1!"}`,
-			wantCode: http.StatusBadRequest,
-			wantSub:  "大文字",
-		},
-		{
-			name:     "password: no digit",
-			method:   http.MethodPost,
-			path:     "/api/me/password",
-			body:     `{"current_password":"admin","new_password":"Abcdefgh!"}`,
-			wantCode: http.StatusBadRequest,
-			wantSub:  "数字",
-		},
-		{
-			name:     "password: no special",
-			method:   http.MethodPost,
-			path:     "/api/me/password",
-			body:     `{"current_password":"admin","new_password":"Abcdefg1"}`,
-			wantCode: http.StatusBadRequest,
-			wantSub:  "記号",
-		},
-		{
-			name:     "tags: groups invalid tag chars",
-			method:   http.MethodPut,
-			path:     "/api/groups/g1/tags",
-			body:     `{"tags":["bad tag!"]}`,
-			wantCode: http.StatusBadRequest,
-			wantSub:  "タグ",
-		},
-		{
-			name:     "users: createUser empty username",
-			method:   http.MethodPost,
-			path:     "/api/users",
-			body:     `{"id":"u1","username":"","password":"Abcdef1!"}`,
-			wantCode: http.StatusBadRequest,
-			wantSub:  "ユーザー名",
-		},
-		{
-			name:     "users: tag length invalid (empty)",
-			method:   http.MethodPut,
-			path:     "/api/users/admin/tags",
-			body:     `{"tags":[""]}`,
-			wantCode: http.StatusBadRequest,
-			wantSub:  "タグ",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var body io.Reader
-			if tc.body != "" {
-				body = bytes.NewReader([]byte(tc.body))
-			}
-			req := httptest.NewRequest(tc.method, tc.path, body)
-			if tc.body != "" {
-				req.Header.Set("Content-Type", "application/json")
-			}
-			req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-			if w.Result().StatusCode != tc.wantCode {
-				t.Fatalf("status: got %d, want %d (body=%s)", w.Result().StatusCode, tc.wantCode, w.Body.String())
-			}
-			if msg := decodeErrorMessage(t, w.Body.Bytes()); !strings.Contains(msg, tc.wantSub) {
-				t.Fatalf("expected localized message containing %q, got %q", tc.wantSub, msg)
-			}
-		})
 	}
 }

@@ -43,9 +43,16 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VANTYX_SQLITE_PATH` | `data/vantyx.db` | SQLite file path. Mount the parent directory to persist data across container restarts. |
-| `VANTYX_RECORDINGS_DIR` | — | Directory where asciinema recordings are written. Recording metadata is only persisted when this is set. |
+| `VANTYX_RECORDINGS_DIR` | — | Directory for session recordings: asciinema `.cast` (terminal/CLI) and H.264 `.mp4` (RDP/VNC screen capture). Metadata is only persisted when this is set. GIF/MP4 export temp files are stored under `{data_dir}/recording-exports`, not here. |
 | `VANTYX_TFTP_ROOT` | `/app/data/tftp` | Root directory for the embedded TFTP server. Per-target subdirectories are created automatically. |
 | `VANTYX_TFTP_LISTEN` | `0.0.0.0:6969` | UDP listen address for the embedded TFTP server. The container is non-root, so it cannot bind directly to port 69. |
+
+## Recording exports
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_RECORDING_EXPORT_CONVERT_TIMEOUT` | `45m` | Maximum wall time for a single GIF/MP4 export conversion job. |
+| `VANTYX_RECORDING_EXPORT_COMPLETED_TTL` | `168h` | How long completed, failed, or cancelled export jobs (and their output files) are retained in memory and on disk before automatic cleanup. |
 
 ## Access store performance tuning
 

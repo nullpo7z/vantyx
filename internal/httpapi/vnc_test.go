@@ -7,39 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
 )
-
-func newTestAppForVNC(t *testing.T) *App {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "vnc.db")
-	if err := os.Setenv("VANTYX_SQLITE_PATH", dbPath); err != nil {
-		t.Fatalf("set env: %v", err)
-	}
-	app := NewApp()
-	t.Cleanup(func() {
-		_ = closeAuditSink()
-		// Allow bridge / WebSocket goroutines to flush before SQLite
-		// teardown so TempDir cleanup does not race on -wal/-shm files.
-		time.Sleep(50 * time.Millisecond)
-		if app != nil && app.DB != nil {
-			_, _ = app.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
-			_ = app.DB.Close()
-		}
-		_ = os.Remove(dbPath + "-wal")
-		_ = os.Remove(dbPath + "-shm")
-		_ = os.Unsetenv("VANTYX_SQLITE_PATH")
-	})
-	return app
-}
 
 func TestHandleVNCWebSocket_UnauthorizedWithoutCookie(t *testing.T) {
 	app := newTestAppForVNC(t)

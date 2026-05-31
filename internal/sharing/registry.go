@@ -32,6 +32,7 @@ var (
 	ErrRequestNotPending  = errors.New("write request is no longer pending")
 	ErrCannotKickOwner    = errors.New("the session owner cannot be removed")
 	ErrCannotKickSelf     = errors.New("you cannot kick yourself")
+	ErrUserKicked         = errors.New("user was removed from the session and cannot rejoin")
 )
 
 // WriteRequestStatus tracks the lifecycle of a control-handoff request.
@@ -75,6 +76,7 @@ type Room struct {
 	createdAt  time.Time
 	memberByID map[string]*Participant
 	requests   map[string]*WriteRequest
+	kicked     map[string]struct{}
 }
 
 // SessionID returns the bound session identifier.
@@ -142,16 +144,27 @@ func (r *Room) PendingRequests() []WriteRequest {
 	return out
 }
 
+// IsKicked reports whether userID was removed by the owner and may not rejoin.
+func (r *Room) IsKicked(userID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.kicked[userID]
+	return ok
+}
+
 // AddViewer records that userID has joined the room as a viewer.
 // Re-adding an existing participant updates the username only.
-func (r *Room) AddViewer(userID, username string, now time.Time) {
+func (r *Room) AddViewer(userID, username string, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if _, blocked := r.kicked[userID]; blocked {
+		return ErrUserKicked
+	}
 	if existing, ok := r.memberByID[userID]; ok {
 		if username != "" {
 			existing.Username = username
 		}
-		return
+		return nil
 	}
 	r.memberByID[userID] = &Participant{
 		UserID:   userID,
@@ -159,6 +172,7 @@ func (r *Room) AddViewer(userID, username string, now time.Time) {
 		Role:     RoleViewer,
 		JoinedAt: now,
 	}
+	return nil
 }
 
 // RemoveParticipant detaches userID from the room. The owner cannot be
@@ -174,6 +188,10 @@ func (r *Room) RemoveParticipant(userID string) error {
 		return ErrParticipantMissing
 	}
 	delete(r.memberByID, userID)
+	if r.kicked == nil {
+		r.kicked = map[string]struct{}{}
+	}
+	r.kicked[userID] = struct{}{}
 	// Drop pending requests originating from the leaver.
 	for id, req := range r.requests {
 		if req.RequesterID == userID && req.Status == WriteRequestPending {
@@ -325,6 +343,7 @@ func (reg *Registry) EnsureRoom(sessionID, targetID, ownerID, ownerName string) 
 		createdAt:  now,
 		memberByID: map[string]*Participant{},
 		requests:   map[string]*WriteRequest{},
+		kicked:     map[string]struct{}{},
 	}
 	room.memberByID[ownerID] = &Participant{
 		UserID:   ownerID,

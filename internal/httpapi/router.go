@@ -23,6 +23,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/i18n"
 	"github.com/nullpo7z/vantyx/internal/logging"
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
+	"github.com/nullpo7z/vantyx/internal/recording"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/session"
 	"github.com/nullpo7z/vantyx/internal/sharing"
@@ -92,6 +93,12 @@ type App struct {
 	// so the HTTP layer can hand the write token to a different
 	// participant at runtime.
 	SharingBridges *bridgeRegistry
+
+	// videoRecordings tracks active RDP/VNC ffmpeg screen captures.
+	videoRecordings *videoRecordingRegistry
+
+	// RecordingExports tracks background GIF/MP4 export jobs.
+	RecordingExports *recordingExportRegistry
 }
 
 // newAppDBOpen, newAppMigrate, and newAppUserStore are test seams used
@@ -237,6 +244,14 @@ func NewApp() *App {
 		httpLogger.Warn("filetransfer reaper failed", "error", err)
 	}
 	reapCancel()
+	exportDir := filepath.Join(filepath.Dir(path), "recording-exports")
+	if err := os.MkdirAll(exportDir, 0o700); err != nil {
+		panic(err)
+	}
+	recordingsDir := os.Getenv("VANTYX_RECORDINGS_DIR")
+	cleanupOrphanExportTemps(exportDir)
+	cleanupLegacyRecordingDirExportTemps(recordingsDir)
+	_ = recording.DefaultGovernor()
 	return &App{
 		UserStore:               userStore,
 		SessionStore:            sessionStore,
@@ -255,6 +270,7 @@ func NewApp() *App {
 		SharingRegistry:         sharing.NewRegistry(),
 		SharingStore:            sharing.NewSQLiteStore(db),
 		SharingBridges:          newBridgeRegistry(),
+		RecordingExports:        newRecordingExportRegistry(exportDir),
 	}
 }
 
@@ -407,6 +423,11 @@ func (a *App) NewRouter() http.Handler {
 
 	// Recordings (asciinema).
 	r.Get("/api/recordings", a.handleListRecordings)
+	r.Get("/api/recordings/exports", a.handleListRecordingExports)
+	r.Get("/api/recordings/exports/{export_id}", a.handleGetRecordingExportStatus)
+	r.Get("/api/recordings/exports/{export_id}/file", a.handleGetRecordingExportFile)
+	r.Delete("/api/recordings/exports/{export_id}", a.handleDeleteRecordingExport)
+	r.Post("/api/recordings/{recording_id}/export", a.handlePostRecordingExport)
 	r.Get("/api/recordings/{recording_id}/file", a.handleGetRecordingFile)
 
 	// Background file transfers.

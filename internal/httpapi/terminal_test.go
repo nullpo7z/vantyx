@@ -26,44 +26,6 @@ import (
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
 
-func newTestAppForTerminal(t *testing.T) *App {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "terminal.db")
-	if err := os.Setenv("VANTYX_SQLITE_PATH", dbPath); err != nil {
-		t.Fatalf("set env: %v", err)
-	}
-	// Match the fixture password used by terminal_test.go cases that
-	// hard-code "Admin123!" after C-2 removed the in-source default.
-	t.Setenv(initialAdminPasswordEnv, "Admin123!")
-	app := NewApp()
-	if app != nil && app.UserStore != nil {
-		_ = app.UserStore.SetForcePasswordChange("admin", false)
-	}
-	t.Cleanup(func() {
-		_ = closeAuditSink()
-		// Give in-flight WebSocket / bridge goroutines a brief moment to
-		// flush their writes before we tear down SQLite. Without this we
-		// occasionally see "TempDir RemoveAll: directory not empty"
-		// because WAL/SHM files are still being touched after the test
-		// body returns.
-		time.Sleep(50 * time.Millisecond)
-		if app != nil && app.DB != nil {
-			// Truncate the WAL so the -wal and -shm sidecar files are
-			// released before TempDir cleanup; otherwise SQLite may
-			// leave them behind for a few milliseconds.
-			_, _ = app.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
-			_ = app.DB.Close()
-		}
-		// Wipe any leftover sidecar files (best-effort) so TempDir
-		// cleanup never trips on a -wal/-shm file that SQLite was slow
-		// to release.
-		_ = os.Remove(dbPath + "-wal")
-		_ = os.Remove(dbPath + "-shm")
-		_ = os.Unsetenv("VANTYX_SQLITE_PATH")
-	})
-	return app
-}
-
 // --- allowedWebSocketOrigin ---
 
 func TestAllowedWebSocketOrigin_SameOriginHTTPS(t *testing.T) {
@@ -1214,7 +1176,7 @@ func TestHandleGetRecordingFile_InvalidFormat(t *testing.T) {
 	_ = app.InsertRecording(ctx, "rec-fmt-1", "admin", "t1", "s1", "ssh", castFile, time.Now().UTC().Format(time.RFC3339), "", "")
 
 	httpSess, _ := app.SessionStore.Create("admin")
-	req := httptest.NewRequest(http.MethodGet, "/api/recordings/rec-fmt-1/file?format=mp4", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/rec-fmt-1/file?format=avi", nil)
 	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"})
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)

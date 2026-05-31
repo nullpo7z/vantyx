@@ -5,6 +5,7 @@ import { setLocale, onLocaleChange, t } from './i18n.js'
 import { initNav, setActiveNav, showAuthenticatedNav } from './nav.js'
 import { renderUsersPage } from './users_page.js'
 import { renderRecordingsPage } from './recordings_page.js'
+import { renderRecordingExportsPage } from './recording_exports_page.js'
 import { renderSessionsPage } from './sessions_page.js'
 import {
   buildGroupedSessionListHTML,
@@ -113,6 +114,7 @@ export function renderApp(container) {
   const navTargets = document.getElementById('nav-targets')
   const navSessions = document.getElementById('nav-sessions')
   const navRecordings = document.getElementById('nav-recordings')
+  const navRecordingExports = document.getElementById('nav-recording-exports')
   const navGroups = document.getElementById('nav-groups')
   const navUsers = document.getElementById('nav-users')
   const navCredentials = document.getElementById('nav-credentials')
@@ -132,6 +134,7 @@ export function renderApp(container) {
   let recordingsFilterTo = ''
   let recordingsFilterChannel = ''
   let recordingsFilterUserId = ''
+  let stopRecordingExportsPoll = null
   /** 新しいタブに渡す SSH 認証情報（BroadcastChannel 用） */
   const pendingTerminalCreds = Object.create(null)
   /** ターミナルタブ用: 親タブへフォーカス要求するための待受（opener が無い環境向け） */
@@ -232,10 +235,30 @@ export function renderApp(container) {
     })
   }
 
+  async function showRecordingExportsPage() {
+    disconnectAppSessionEvents()
+    delete mainContent.dataset.treeMode
+    mainContent.className = TREE_MAIN_CLASS
+    if (typeof stopRecordingExportsPoll === 'function') {
+      stopRecordingExportsPoll()
+      stopRecordingExportsPoll = null
+    }
+    setActiveNav('recordingExports')
+    stopRecordingExportsPoll = await renderRecordingExportsPage({
+      mainContent,
+      escapeHtml,
+      onBackToRecordings: () => showRecordingsPage(),
+    })
+  }
+
   async function showRecordingsPage() {
     disconnectAppSessionEvents()
     delete mainContent.dataset.treeMode
     mainContent.className = TREE_MAIN_CLASS
+    if (typeof stopRecordingExportsPoll === 'function') {
+      stopRecordingExportsPoll()
+      stopRecordingExportsPoll = null
+    }
     setActiveNav('recordings')
     await renderRecordingsPage({
       mainContent,
@@ -268,6 +291,7 @@ export function renderApp(container) {
         if ('filterUserId' in partial) recordingsFilterUserId = partial.filterUserId
       },
       refresh: () => showRecordingsPage(),
+      onGoToExports: () => showRecordingExportsPage(),
     })
   }
 
@@ -2871,6 +2895,7 @@ export function renderApp(container) {
     navTargets,
     navSessions,
     navRecordings,
+    navRecordingExports,
     navGroups,
     navUsers,
     navCredentials,
@@ -2880,6 +2905,7 @@ export function renderApp(container) {
     onHome: () => showTreeView('home'),
     onSessions: () => showSessionsPage(),
     onRecordings: () => showRecordingsPage(),
+    onRecordingExports: () => showRecordingExportsPage(),
     onGroups: () => showTreeView('manage'),
     onUsers: () => showUsersPage(),
     onCredentials: () => showCredentialsPage(),

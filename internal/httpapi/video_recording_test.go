@@ -12,8 +12,8 @@ func TestRecordingMediaType(t *testing.T) {
 	if got := recordingMediaType("browser", "/rec/x.cast"); got != "cast" {
 		t.Fatalf("browser: got %q", got)
 	}
-	if got := recordingMediaType("browser", "/rec/x.webm"); got != "video" {
-		t.Fatalf("webm path: got %q", got)
+	if got := recordingMediaType("browser", "/rec/x.mp4"); got != "video" {
+		t.Fatalf("mp4 path: got %q", got)
 	}
 }
 

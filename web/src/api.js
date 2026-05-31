@@ -833,7 +833,7 @@ const API = {
     }
   },
 
-  /** Queue GIF/WebM generation for a terminal recording. */
+  /** Queue GIF/MP4 generation for a recording. */
   async startRecordingExport(recordingId, format) {
     const q = new URLSearchParams()
     q.set('format', format)

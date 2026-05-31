@@ -13,18 +13,30 @@ func TestSanitizeSessionID(t *testing.T) {
 	}
 }
 
-func TestIsWebMPath(t *testing.T) {
-	if !IsWebMPath("/app/recordings/sess.webm") {
-		t.Fatal("expected .webm")
+func TestIsMP4Path(t *testing.T) {
+	if !IsMP4Path("/app/recordings/sess.mp4") {
+		t.Fatal("expected .mp4")
 	}
-	if IsWebMPath("/app/recordings/sess.cast") {
-		t.Fatal("expected not webm")
+	if IsMP4Path("/app/recordings/sess.cast") {
+		t.Fatal("expected not mp4")
 	}
 }
 
-func TestWebMPath(t *testing.T) {
-	got := WebMPath("/rec", "abc:def")
-	want := filepath.Join("/rec", "abc-def.webm")
+func TestStorageFormat(t *testing.T) {
+	if StorageFormat("/rec/a.mp4") != "mp4" {
+		t.Fatal("expected mp4")
+	}
+	if StorageFormat("/rec/a.cast") != "cast" {
+		t.Fatal("expected cast")
+	}
+	if StorageFormat("/rec/a.webm") != "" {
+		t.Fatal("webm is not a supported storage format")
+	}
+}
+
+func TestMP4Path(t *testing.T) {
+	got := MP4Path("/rec", "abc:def")
+	want := filepath.Join("/rec", "abc-def.mp4")
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}

@@ -1,5 +1,5 @@
 // Package recording writes interactive terminal sessions to disk in
-// asciinema v2 cast format and RDP/VNC screen sessions as WebM video.
+// asciinema v2 cast format and RDP/VNC screen sessions as MP4 (H.264) video.
 //
 // Terminal cast writers are line-oriented and thread-safe. Screen capture
 // uses ffmpeg x11grab (RDP via the bridge X display, VNC via Xvfb +

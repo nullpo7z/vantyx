@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
@@ -81,9 +80,7 @@ func (a *App) handleVNCWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recCtx, recCancel := context.WithCancel(context.Background())
-	defer recCancel()
-	a.startVNCVideoRecording(recCtx, sessionID, userID, targetID, target.Host, int(target.Port), target.SSHPassword)
+	a.startVNCVideoRecording(r.Context(), sessionID, userID, targetID, target.Host, int(target.Port), target.SSHPassword)
 	defer a.finishVideoRecording(sessionID)
 
 	audit("vnc_ws_start", auditFields{

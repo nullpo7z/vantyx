@@ -26,7 +26,7 @@ info:
     - ファイル転送: GET /api/targets/{target_id}/files（一覧・クエリ path）、GET /api/targets/{target_id}/files/download（ダウンロード・クエリ path）、POST /api/targets/{target_id}/files/upload（multipart: path, file）、DELETE /api/targets/{target_id}/files（削除・クエリ path）。SSH ターゲットは SFTP（保存済み認証必須）、リモート TFTP ターゲットは TFTP クライアント（認証不要・一覧・削除未対応）。
     - 組み込み TFTP サーバー（Vantyx 内蔵）: GET /api/tftp/targets/{target_id}/files/*。protocol=tftp のターゲット向け。ローカルディスク（VANTYX_TFTP_ROOT）上のファイルを操作。
     - バックグラウンドファイル転送: GET /api/file-transfers（自分のジョブ一覧）、GET /api/file-transfers/{transfer_id}（状態）、DELETE /api/file-transfers/{transfer_id}（キャンセル）、GET /api/file-transfers/{transfer_id}/content（完了したダウンロードの取得）、POST /api/file-transfers/download（JSON: backend, target_id, path → 202）、POST /api/file-transfers/upload（multipart: backend, target_id, path, file → 202）。backend は remote（SFTP/FTP/リモート TFTP）または tftp_server（組み込み TFTP）。ジョブは SQLite（file_transfer_jobs）に永続化。単一ファイル上限 64MB。アップロードは receiving（ブラウザ→Vantyx 受信）中に離脱すると失敗しうる。
-    - 録画: GET /api/recordings（メタデータ一覧。クエリ target_id でフィルタ可）。GET /api/recordings/{recording_id}/file でファイル取得。クエリ format=cast|gif|webm（省略時 cast）。cast=Asciinema 形式。gif/webm は agg（および WebM は ffmpeg）必要、未導入時 503。ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象。
+    - 録画: GET /api/recordings（メタデータ一覧。クエリ target_id でフィルタ可）。GET /api/recordings/{recording_id}/file でファイル取得。クエリ format=cast|gif|mp4（省略時 cast）。cast=Asciinema 形式またはネイティブ MP4。gif/mp4 変換は 202 Accepted でバックグラウンドキュー（GET /api/recordings/exports で進捗確認）。RDP/VNC 画面録画は MP4（H.264）で保存。ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象。
     - CLI SSH ゲートウェイ: VANTYX_SSH_LISTEN で有効化。ssh user@vantyx でログイン後、メニューからターゲット選択してプロキシ接続。VANTYX_RECORDINGS_DIR 設定時は CLI 接続も録画対象。
     - OpenAPI 仕様 (GET /api/spec) と Swagger UI (GET /docs) は admin のみアクセス可。
     エラー応答はすべて application/json の ErrorResponse (message) で統一しています。
@@ -264,6 +264,63 @@ components:
           type: string
         session_description:
           type: string
+        media_type:
+          type: string
+          description: "terminal=asciinema .cast, video=H.264 .mp4 (RDP/VNC)"
+        storage_format:
+          type: string
+          description: "cast または mp4（ファイル拡張子に基づく）"
+    RecordingExportJob:
+      type: object
+      description: 録画 GIF/MP4 バックグラウンド変換ジョブ（インメモリ）。
+      properties:
+        job_id:
+          type: string
+        recording_id:
+          type: string
+        format:
+          type: string
+          enum: [gif, mp4]
+        state:
+          type: string
+          enum: [queued, running, completed, failed, cancelled]
+        error:
+          type: string
+        progress:
+          type: integer
+        progress_stage:
+          type: string
+        session_name:
+          type: string
+        session_description:
+          type: string
+        channel_type:
+          type: string
+        target_id:
+          type: string
+        target_name:
+          type: string
+        target_path:
+          type: string
+        recording_started_at:
+          type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        status_url:
+          type: string
+        file_url:
+          type: string
+    RecordingExportListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecordingExportJob'
+      required:
+        - items
     RecordingListResponse:
       type: object
       properties:
@@ -2760,8 +2817,8 @@ paths:
       description: |
         指定した録画のファイルを返します。クエリ format で形式を指定します。
         - **cast**（省略時）: Asciinema v2 形式（.cast）。asciinema-player で再生可能。
-        - **gif**: GIF アニメーション。agg がサーバーにインストールされている必要があります。未導入時 503。
-        - **webm**: WebM 動画。agg と ffmpeg が必要。未導入時 503。
+        - **gif**: GIF アニメーション。ターミナル .cast および画面録画（MP4）からバックグラウンド変換（202 Accepted）。agg（cast 由来）または ffmpeg（MP4 由来）が必要。
+        - **mp4**: MP4 動画。画面録画は録画時 H.264 で保存済みのため直接返却（200）。ターミナル .cast からはバックグラウンド変換（202 Accepted）。
       security:
         - cookieAuth: []
       parameters:
@@ -2775,11 +2832,11 @@ paths:
           required: false
           schema:
             type: string
-            enum: [cast, gif, webm]
+            enum: [cast, gif, mp4]
             default: cast
       responses:
         '200':
-          description: 録画ファイル（Content-Type は形式に応じて application/json / image/gif / video/webm 等）
+          description: 録画ファイル（Content-Type は形式に応じて application/json / image/gif / video/mp4 等）
           headers:
             Content-Disposition:
               description: ダウンロード時のファイル名
@@ -2797,8 +2854,176 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '202':
+          description: gif/mp4 変換をキューに追加（バックグラウンド処理）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingExportJob'
         '503':
-          description: 録画未設定（VANTYX_RECORDINGS_DIR）または gif/webm 用の agg/ffmpeg 未導入
+          description: 録画未設定（VANTYX_RECORDINGS_DIR）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/recordings/{recording_id}/export:
+    post:
+      summary: 録画 GIF/MP4 変換をキューに追加
+      description: |
+        ターミナル .cast からの MP4/GIF、または画面録画 MP4 からの GIF をバックグラウンド変換キューに追加します。
+        同一ユーザー・録画・形式で進行中のジョブがある場合は既存ジョブを返します（202）。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: recording_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: format
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [gif, mp4]
+      responses:
+        '202':
+          description: 変換ジョブを受理
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingExportJob'
+        '400':
+          description: 形式不正、または直接ダウンロードのみの形式
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 録画が存在しない、またはアクセス不可
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 録画未設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/recordings/exports:
+    get:
+      summary: 録画書き出しジョブ一覧
+      description: ログインユーザーの GIF/MP4 変換ジョブ一覧。管理者は全ユーザーのジョブを返します。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: ジョブ一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingExportListResponse'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/recordings/exports/{export_id}:
+    get:
+      summary: 録画書き出しジョブ状態
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: export_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ジョブ状態
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingExportJob'
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ジョブが存在しない、またはアクセス不可
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: 録画書き出しジョブのキャンセルまたは削除
+      description: 進行中ジョブはキャンセル（204、state=cancelled）。完了済みはジョブと出力ファイルを削除。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: export_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: キャンセルまたは削除完了
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ジョブが存在しない、またはアクセス不可
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/recordings/exports/{export_id}/file:
+    get:
+      summary: 完了した書き出しファイルの取得
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: export_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 変換済み GIF または MP4
+        '401':
+          description: 未認証
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ジョブまたはファイルが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 変換未完了
           content:
             application/json:
               schema:

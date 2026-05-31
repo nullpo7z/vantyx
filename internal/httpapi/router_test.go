@@ -4337,7 +4337,7 @@ func TestApp_ErrorMessage_LocalizedHandlers(t *testing.T) {
 		{
 			name:     "recordings: bad format",
 			method:   http.MethodGet,
-			path:     "/api/recordings/abc/file?format=mp4",
+			path:     "/api/recordings/abc/file?format=webm",
 			body:     "",
 			wantCode: http.StatusBadRequest,
 			wantSub:  "cast",

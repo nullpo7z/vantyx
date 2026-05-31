@@ -23,13 +23,13 @@ import (
 )
 
 const (
-	recordingExportAcquireTimeout        = 5 * time.Minute
-	recordingExportConvertTimeout        = 45 * time.Minute
-	recordingExportStaleAfter            = 50 * time.Minute
-	recordingExportConvertTimeoutEnv     = "VANTYX_RECORDING_EXPORT_CONVERT_TIMEOUT"
-	recordingExportCompletedTTL          = 7 * 24 * time.Hour
-	recordingExportCompletedTTLEnv       = "VANTYX_RECORDING_EXPORT_COMPLETED_TTL"
-	recordingExportOrphanTempMaxAge      = 24 * time.Hour
+	recordingExportAcquireTimeout    = 5 * time.Minute
+	recordingExportConvertTimeout    = 45 * time.Minute
+	recordingExportStaleAfter        = 50 * time.Minute
+	recordingExportConvertTimeoutEnv = "VANTYX_RECORDING_EXPORT_CONVERT_TIMEOUT"
+	recordingExportCompletedTTL      = 7 * 24 * time.Hour
+	recordingExportCompletedTTLEnv   = "VANTYX_RECORDING_EXPORT_COMPLETED_TTL"
+	recordingExportOrphanTempMaxAge  = 24 * time.Hour
 )
 
 type recordingMediaAccess struct {

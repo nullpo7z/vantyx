@@ -1,5 +1,6 @@
 import API from './api.js'
 import { t } from './i18n.js'
+import { safeUrl } from './dom_helpers.js'
 import { targetFullPathForDisplay } from './session_list_shared.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
 
@@ -143,7 +144,7 @@ function renderExportRows(items, escapeHtml) {
       const canDelete = !canCancel
       const downloadBtn =
         state === 'completed' && fileUrl
-          ? `<a href="${escapeHtml(fileUrl)}" download class="inline-flex shrink-0 whitespace-nowrap rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">${escapeHtml(t('recordingExports.download'))}</a>`
+          ? `<a href="${safeUrl(fileUrl)}" download class="inline-flex shrink-0 whitespace-nowrap rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">${escapeHtml(t('recordingExports.download'))}</a>`
           : `<span class="whitespace-nowrap text-xs text-slate-400">${escapeHtml(t('recordingExports.notReady'))}</span>`
       const cancelBtn = canCancel
         ? `<button type="button" class="export-cancel-btn inline-flex shrink-0 whitespace-nowrap rounded border border-amber-200 bg-white px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50" data-export-id="${escapeHtml(jobId)}" data-action-label="${escapeHtml(actionLabel)}">${escapeHtml(t('recordingExports.cancel'))}</button>`

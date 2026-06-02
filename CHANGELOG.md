@@ -8,6 +8,30 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
 
 ## [Unreleased]
 
+### Security
+
+- Fix: `force_password_change` now blocks `/ws/*` handshakes as well as
+  `/api/*`, so initial-password rotation cannot be bypassed via terminal
+  / RDP / VNC WebSockets (CWE-1188).
+- Fix: CLI SSH gateway (`sshd`) shares the HTTP login rate limiter
+  (`internal/ratelimit`) for per-IP and per-username brute-force throttling.
+- Fix: invitation `RecordUse` uses a conditional UPDATE so concurrent joins
+  cannot exceed `max_uses`.
+- Fix: per-target `SSHHostKeyInsecureSkipVerify` is wired into SSH bridge
+  / SFTP connections via `WithTargetInsecureSkipVerify`.
+- Fix: target host validation blocks loopback, link-local, and cloud
+  metadata IPs by default (`VANTYX_ALLOW_RESTRICTED_HOSTS=1` to override).
+- Fix: WebSocket credential errors return localized messages instead of raw
+  `err.Error()` (ASVS V8.1).
+- Fix: CSRF middleware requires same-origin Origin/Referer on cookie-less
+  unsafe `/api/*` requests (except `/api/login`).
+- Fix: command-log redaction covers additional password-bearing CLI patterns
+  (`curl -u`, `-P`, `--pass`, etc.).
+- Fix: production `docker-compose.yml` adds container hardening
+  (`no-new-privileges`, `cap_drop`, `read_only`, `tmpfs`).
+- Fix: BroadcastChannel credential hand-off checks `event.origin`; invite
+  join URLs are cached in memory instead of `sessionStorage`.
+
 ### Removed
 
 - Playwright end-to-end test suite (`e2e/`), `docker-compose.e2e.yml`,

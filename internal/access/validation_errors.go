@@ -28,9 +28,10 @@ var (
 	ErrNameInvalid = errors.New("name contains invalid characters")
 
 	// Host validation.
-	ErrHostEmpty   = errors.New("host must not be empty")
-	ErrHostTooLong = errors.New("host too long")
-	ErrHostInvalid = errors.New("host must be a valid hostname or IP address")
+	ErrHostEmpty      = errors.New("host must not be empty")
+	ErrHostTooLong    = errors.New("host too long")
+	ErrHostInvalid    = errors.New("host must be a valid hostname or IP address")
+	ErrHostRestricted = errors.New("host is restricted (loopback, link-local, or cloud metadata); set VANTYX_ALLOW_RESTRICTED_HOSTS=1 to override")
 
 	// Protocol whitelist.
 	ErrProtocolInvalid = errors.New("protocol must be ssh, telnet, vnc, tftp, ftp, or rdp")

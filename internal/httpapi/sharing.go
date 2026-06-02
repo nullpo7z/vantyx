@@ -824,6 +824,10 @@ func (a *App) handleJoinSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.SharingStore.RecordUse(r.Context(), inv.ID, userID, now); err != nil {
+		if errors.Is(err, sharing.ErrInvitationConsumed) {
+			writeJSONErrorKey(w, r, "sharing.invitationInactive", http.StatusForbidden)
+			return
+		}
 		writeInternalError(w, err)
 		return
 	}

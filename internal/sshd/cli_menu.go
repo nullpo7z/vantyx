@@ -663,7 +663,11 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 			bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, endMsg, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, streamAttach, touch, tee, telStdin, sessionCols, sessionRows, bridgeResize, nil)
 		default:
 			endMsg := "session_ended: SSH session closed"
-			bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, endMsg, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, sessionCols, sessionRows, bridgeResize, sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint))
+			opts := []sshproxy.BridgeOption{sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint)}
+			if target.SSHHostKeyInsecureSkipVerify {
+				opts = append(opts, sshproxy.WithTargetInsecureSkipVerify())
+			}
+			bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, endMsg, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, sessionCols, sessionRows, bridgeResize, opts...)
 		}
 	})
 	if err != nil {

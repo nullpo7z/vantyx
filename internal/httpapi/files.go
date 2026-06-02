@@ -18,7 +18,6 @@ import (
 	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/secret"
 	"github.com/nullpo7z/vantyx/internal/sftp"
-	"github.com/nullpo7z/vantyx/internal/sshproxy"
 	"github.com/nullpo7z/vantyx/internal/tftp"
 )
 
@@ -157,7 +156,7 @@ func (a *App) openFileTransferClient(w http.ResponseWriter, r *http.Request, use
 			}
 			return client, true
 		}
-		client, err := sftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint))
+		client, err := sftp.NewClient(r.Context(), target.Host, target.Port, target.SSHUsername, target.SSHPassword, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sshBridgeOptions(target)...)
 		if err != nil {
 			audit("files_sftp_connect_failed", auditFields{
 				"user_id":   userID,

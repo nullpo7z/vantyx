@@ -48,6 +48,7 @@ var Messages = map[string]string{
 	"auth.sshKeyAuthorizedKeyReq": "authorized_key は必須です",
 	"auth.sshKeyIDInvalid":        "key_id が不正です",
 	"auth.unsupportedLocale":      "サポートされていない言語コードです",
+	"auth.passwordChangeRequired": "この機能を利用する前にパスワードを変更してください",
 
 	// Users (admin management).
 	"users.idRequired":       "user_id は必須です",
@@ -101,6 +102,11 @@ var Messages = map[string]string{
 	"sessions.notFoundOrAccessDenied": "セッションが見つからないかアクセスが許可されていません",
 	"sessions.onlySSHTelnet":          "SSH と Telnet のターゲットのみ対応しています",
 	"sessions.eventsUnavailable":      "セッションイベントを利用できません",
+
+	"terminal.invalidCredentials":      "認証情報が無効または不足しています",
+	"terminal.noStoredCredentials":     "このターゲットに保存済み認証情報がありません",
+	"terminal.credentialsNotDecrypted": "保存された認証情報を復号できません。VANTYX_SSH_PASSWORD_ENCRYPTION_KEY を確認してください",
+	"terminal.credentialsReadFailed":   "クライアントから認証情報を読み取れませんでした",
 
 	// Collaborative session sharing (Phase A).
 	"sharing.unavailable":            "共有機能を利用できません",
@@ -198,6 +204,7 @@ var Messages = map[string]string{
 	"validation.hostEmpty":       "host は必須です",
 	"validation.hostTooLong":     "host が長すぎます",
 	"validation.hostInvalid":     "host は有効なホスト名または IP アドレスである必要があります",
+	"validation.hostRestricted":  "host は制限されています（ループバック・リンクローカル・クラウドメタデータ）。VANTYX_ALLOW_RESTRICTED_HOSTS=1 で上書き可能",
 	"validation.idUsernameEmpty": "id と username は必須です",
 
 	// Tag validation (group / target / user tags share these keys).

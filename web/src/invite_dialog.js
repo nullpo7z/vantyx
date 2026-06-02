@@ -10,44 +10,30 @@ import { createRealtimeWatcher, POLL_MS, shouldRefreshInviteList } from './shari
 
 let openDialogEl = null
 
-const INVITE_URL_CACHE_KEY = 'vantyx_invite_url_cache'
+/** In-memory invite URL cache (session lifetime only; no sessionStorage). */
+const inviteUrlCache = new Map()
 
 function readInviteUrlCache(sessionId) {
-  try {
-    const raw = sessionStorage.getItem(INVITE_URL_CACHE_KEY)
-    if (!raw) return {}
-    const all = JSON.parse(raw)
-    return all[sessionId] && typeof all[sessionId] === 'object' ? all[sessionId] : {}
-  } catch {
-    return {}
-  }
+  const inner = inviteUrlCache.get(sessionId)
+  if (!inner) return {}
+  return Object.fromEntries(inner)
 }
 
 function writeInviteUrlCache(sessionId, invitationId, url) {
   if (!sessionId || !invitationId || !url) return
-  try {
-    const raw = sessionStorage.getItem(INVITE_URL_CACHE_KEY)
-    const all = raw ? JSON.parse(raw) : {}
-    if (!all[sessionId] || typeof all[sessionId] !== 'object') all[sessionId] = {}
-    all[sessionId][invitationId] = url
-    sessionStorage.setItem(INVITE_URL_CACHE_KEY, JSON.stringify(all))
-  } catch {
-    /* ignore */
-  }
+  if (!inviteUrlCache.has(sessionId)) inviteUrlCache.set(sessionId, new Map())
+  inviteUrlCache.get(sessionId).set(invitationId, url)
 }
 
 function removeInviteUrlCache(sessionId, invitationId) {
-  try {
-    const raw = sessionStorage.getItem(INVITE_URL_CACHE_KEY)
-    if (!raw) return
-    const all = JSON.parse(raw)
-    if (all[sessionId] && typeof all[sessionId] === 'object') {
-      delete all[sessionId][invitationId]
-      sessionStorage.setItem(INVITE_URL_CACHE_KEY, JSON.stringify(all))
-    }
-  } catch {
-    /* ignore */
-  }
+  const inner = inviteUrlCache.get(sessionId)
+  if (!inner) return
+  inner.delete(invitationId)
+  if (inner.size === 0) inviteUrlCache.delete(sessionId)
+}
+
+function clearInviteUrlCache(sessionId) {
+  inviteUrlCache.delete(sessionId)
 }
 
 function getCachedInviteUrl(sessionId, invitationId) {
@@ -481,6 +467,7 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
     }
     try { wrap.remove() } catch { /* ignore */ }
     if (openDialogEl === wrap) openDialogEl = null
+    clearInviteUrlCache(sessionId)
   }
 
   const status = wrap.querySelector('[data-status="1"]')

@@ -19,11 +19,16 @@ import (
 var secretArgPatterns = []*regexp.Regexp{
 	// -psecret  /  -pSECRET (mysql/mysqldump short flag).
 	regexp.MustCompile(`(\B-p)\S+`),
+	// -Psecret (capital P, some tools).
+	regexp.MustCompile(`(\B-P)\S+`),
 	// --password=secret  /  --password secret
 	regexp.MustCompile(`(?i)(--password[=\s])\S+`),
+	regexp.MustCompile(`(?i)(--pass[=\s])\S+`),
 	regexp.MustCompile(`(?i)(--token[=\s])\S+`),
 	regexp.MustCompile(`(?i)(--api[-_]?key[=\s])\S+`),
 	regexp.MustCompile(`(?i)(--secret[=\s])\S+`),
+	// curl -u user:pass
+	regexp.MustCompile(`(?i)(-u\s+\S+:)\S+`),
 	// `Authorization: Bearer XYZ` typed at the shell (e.g. curl -H).
 	regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._\-]+`),
 	// FOO_PASSWORD=secret env-var preambles.

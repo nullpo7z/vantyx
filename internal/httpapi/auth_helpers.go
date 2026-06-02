@@ -42,16 +42,19 @@ func (a *App) currentUserID(r *http.Request) string {
 	return userID
 }
 
-// forcePasswordChangeMiddleware blocks all non-bootstrap requests
-// while the caller's account is flagged for forced rotation. Without
-// this guard the SPA's UI hint alone would leave the API reachable
-// (CWE-1188 / ASVS V2.10.4). The whitelist below covers the calls the
-// rotation flow itself needs:
+// forcePasswordChangeMiddleware blocks authenticated API and WebSocket
+// requests while the caller's account is flagged for forced rotation.
+// Without this guard the SPA's UI hint alone would leave sensitive
+// endpoints reachable (CWE-1188 / ASVS V2.10.4). The whitelist covers
+// the calls the rotation flow itself needs:
 //
 //   - GET /api/me               – display the "you must change" banner
 //   - POST /api/me/password     – the rotation itself
 //   - POST /api/logout          – escape hatch
-//   - GET /healthz, /api/spec   – infra / docs (no user data)
+//   - GET /healthz              – infra probe (no user data)
+//
+// GET /api/spec is intentionally *not* whitelisted: admins must rotate
+// before reading the OpenAPI document.
 func (a *App) forcePasswordChangeMiddleware(next http.Handler) http.Handler {
 	whitelist := map[string]struct{}{
 		"/api/me":          {},
@@ -61,13 +64,12 @@ func (a *App) forcePasswordChangeMiddleware(next http.Handler) http.Handler {
 		"/healthz":         {},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Static assets and SSE / WS handshakes are gated by their own
-		// auth checks; only consult the flag for /api/*.
-		if !strings.HasPrefix(r.URL.Path, "/api/") {
+		path := r.URL.Path
+		if !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/ws/") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if _, ok := whitelist[r.URL.Path]; ok {
+		if _, ok := whitelist[path]; ok {
 			next.ServeHTTP(w, r)
 			return
 		}

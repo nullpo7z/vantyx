@@ -93,6 +93,9 @@ func validateHost(host string) error {
 		return ErrHostTooLong
 	}
 	if ip := net.ParseIP(host); ip != nil {
+		if err := checkRestrictedHostIP(ip); err != nil {
+			return err
+		}
 		return nil
 	}
 	if !hostnamePattern.MatchString(host) {

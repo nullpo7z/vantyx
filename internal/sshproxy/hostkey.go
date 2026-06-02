@@ -21,8 +21,9 @@ import (
 type BridgeOption func(*bridgeOptions)
 
 type bridgeOptions struct {
-	hostKeyFingerprint string
-	insecureSkipVerify bool
+	hostKeyFingerprint       string
+	insecureSkipVerify       bool
+	targetInsecureSkipVerify bool
 	// captured is populated by the host-key callback when a connection
 	// is rejected because no fingerprint was configured; callers may
 	// surface it via TOFU flows.
@@ -46,12 +47,19 @@ func WithHostKeyFingerprint(fp string) BridgeOption {
 	}
 }
 
-// WithInsecureSkipHostKeyVerify disables host-key verification. It is
-// honored only when VANTYX_SSH_INSECURE_IGNORE_HOST_KEY=1 (so it cannot
-// be enabled by a target record alone). Intended for tests and emergency
-// break-glass; production deployments must record a fingerprint instead.
+// WithInsecureSkipHostKeyVerify disables host-key verification for all
+// targets when combined with VANTYX_SSH_INSECURE_IGNORE_HOST_KEY=1 or
+// when used alone in tests. Prefer [WithTargetInsecureSkipVerify] for
+// per-target break-glass scoped to one bastion destination.
 func WithInsecureSkipHostKeyVerify() BridgeOption {
 	return func(o *bridgeOptions) { o.insecureSkipVerify = true }
+}
+
+// WithTargetInsecureSkipVerify disables host-key verification for a
+// single target connection. Equivalent to setting
+// target.SSHHostKeyInsecureSkipVerify in the access layer (CWE-295).
+func WithTargetInsecureSkipVerify() BridgeOption {
+	return func(o *bridgeOptions) { o.targetInsecureSkipVerify = true }
 }
 
 // WithBridgeControlSink registers a sink that receives the live
@@ -167,7 +175,7 @@ func hostKeyCallback(opts *bridgeOptions) ssh.HostKeyCallback {
 			return &HostKeyMismatchError{Host: hostname, Expected: fp, Got: got}
 		}
 	}
-	insecure := opts.insecureSkipVerify || os.Getenv("VANTYX_SSH_INSECURE_IGNORE_HOST_KEY") == "1"
+	insecure := opts.targetInsecureSkipVerify || opts.insecureSkipVerify || os.Getenv("VANTYX_SSH_INSECURE_IGNORE_HOST_KEY") == "1"
 	if insecure {
 		return func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			if opts.captured != nil {

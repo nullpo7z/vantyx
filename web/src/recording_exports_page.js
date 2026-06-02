@@ -1,6 +1,6 @@
 import API from './api.js'
 import { t } from './i18n.js'
-import { escapeHtml, safeUrl } from './dom_helpers.js'
+import { safeUrl } from './dom_helpers.js'
 import { targetFullPathForDisplay } from './session_list_shared.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
 

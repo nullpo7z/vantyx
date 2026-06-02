@@ -117,46 +117,46 @@ func (s *SQLiteStore) ListBySession(ctx context.Context, sessionID string) ([]In
 }
 
 // RecordUse increments use_count and sets used_at when the invitation
-// is fully consumed.
+// is fully consumed. The UPDATE is conditional so concurrent joins
+// cannot exceed max_uses (TOCTOU safe).
 func (s *SQLiteStore) RecordUse(ctx context.Context, id, consumerUserID string, when time.Time) error {
 	if s == nil || s.db == nil {
 		return errors.New("invitation store not configured")
 	}
-	inv, _, err := s.GetByID(ctx, id)
-	if err != nil {
-		return err
-	}
-	newCount := inv.UseCount + 1
-	exhausted := false
-	switch {
-	case !inv.IsLink():
-		exhausted = true
-	case inv.LinkUnlimited():
-		exhausted = false
-	case inv.MaxUses != nil:
-		exhausted = newCount >= *inv.MaxUses
-	default:
-		exhausted = true
-	}
-	var usedAt interface{}
-	if exhausted {
-		usedAt = when.Unix()
-	}
-	_, err = s.db.ExecContext(ctx,
+	whenUnix := when.Unix()
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE session_invitations
 		 SET use_count = use_count + 1,
 		     invitee_user_id = COALESCE(invitee_user_id, ?),
-		     used_at = CASE WHEN ? IS NOT NULL THEN ? ELSE used_at END
-		 WHERE id = ?`,
-		nullableUser(consumerUserID), usedAt, usedAt, id,
+		     used_at = CASE
+		         WHEN COALESCE(invitee_user_id, '') != '' THEN ?
+		         WHEN max_uses IS NOT NULL AND use_count + 1 >= max_uses THEN ?
+		         ELSE used_at
+		     END
+		 WHERE id = ?
+		   AND revoked_at IS NULL
+		   AND expires_at > ?
+		   AND (
+		     (COALESCE(invitee_user_id, '') != '' AND (used_at IS NULL OR used_at = 0))
+		     OR
+		     (COALESCE(invitee_user_id, '') = '' AND (max_uses IS NULL OR use_count < max_uses))
+		   )`,
+		nullableUser(consumerUserID), whenUnix, whenUnix, id, whenUnix,
 	)
 	if err != nil {
 		return err
 	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrInvitationConsumed
+	}
 	if strings.TrimSpace(consumerUserID) != "" {
 		_, err = s.db.ExecContext(ctx,
 			`INSERT OR IGNORE INTO session_invitation_consumers (invitation_id, user_id, consumed_at) VALUES (?, ?, ?)`,
-			id, consumerUserID, when.Unix(),
+			id, consumerUserID, whenUnix,
 		)
 	}
 	return err

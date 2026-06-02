@@ -55,6 +55,11 @@ export function safeUrl(url) {
   return escapeHtml(trimmed)
 }
 
+/** Reject BroadcastChannel messages from unexpected origins. */
+export function isSameOriginBroadcast(ev) {
+  return Boolean(ev && ev.origin === window.location.origin)
+}
+
 /**
  * Render Proxmox-style tag pills (rounded, bordered, with an inline
  * tag glyph) for the supplied tag list.

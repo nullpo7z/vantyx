@@ -120,7 +120,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 			"target_id": targetID,
 			"error":     err.Error(),
 		})
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+err.Error()))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+terminalCredentialErrorMessage(r, err)))
 		_ = conn.Close()
 		return
 	}
@@ -484,10 +484,7 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 	default:
 		endReason = "ssh_session_closed"
 		endMsg = "session_ended: SSH session closed"
-		opts := []sshproxy.BridgeOption{sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint)}
-		if a.SharingBridges != nil {
-			opts = append(opts, sshproxy.WithBridgeControlSink(sshBridgeSink{id: id, br: a.SharingBridges}))
-		}
+		opts := sshBridgeOptions(target, sshproxy.WithBridgeControlSink(sshBridgeSink{id: id, br: a.SharingBridges}))
 		bridgeErr = sshproxy.RunBridgeDetachable(ctx, endMsg, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, ownerAttach, touch, tee, stdinRecorder, cols, rows, nil, opts...)
 	}
 	if bridgeErr != nil {

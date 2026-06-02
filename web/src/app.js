@@ -22,7 +22,7 @@ import {
   SFTP_DISABLED_TAG,
   TREE_MAIN_CLASS,
 } from './constants.js'
-import { escapeHtml, renderTagPills, fillExistingTagsPicker, authMethodLabel } from './dom_helpers.js'
+import { escapeHtml, renderTagPills, fillExistingTagsPicker, authMethodLabel, isSameOriginBroadcast } from './dom_helpers.js'
 import {
   randomToken,
   openPopup,
@@ -878,6 +878,7 @@ export function renderApp(container) {
         delete pendingTerminalCreds[token]
       }, 15_000)
       bc.onmessage = (ev) => {
+        if (!isSameOriginBroadcast(ev)) return
         if (ev?.data?.type !== 'ready') return
         if (ev?.data?.target_id !== channelTargetId) return
         const creds = pendingTerminalCreds[token]
@@ -990,6 +991,7 @@ export function renderApp(container) {
         delete pendingTerminalCreds[token]
       }, 15_000)
       bc.onmessage = (ev) => {
+        if (!isSameOriginBroadcast(ev)) return
         if (ev?.data?.type !== 'ready') return
         if (ev?.data?.target_id !== channelTargetId) return
         const creds = pendingTerminalCreds[token]
@@ -2924,9 +2926,8 @@ export function renderApp(container) {
     try {
       await API.logout()
     } catch {
-      /* サーバーが応答しなくてもクライアント側のCookieは消す */
+      /* サーバー不通時も renderLogin で UI はログイン画面へ戻す（HttpOnly Cookie は JS から削除不可） */
     }
-    document.cookie = 'vantyx_session=; path=/; max-age=0'
     renderLogin(container)
   })
 

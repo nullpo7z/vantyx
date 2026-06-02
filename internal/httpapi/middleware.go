@@ -54,6 +54,15 @@ func csrfOriginMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if c, err := r.Cookie("vantyx_session"); err != nil || c.Value == "" {
+			// Cookie-less unsafe /api/* calls (except /api/login) still
+			// require a same-origin Origin/Referer so future auth modes
+			// cannot bypass CSRF checks silently.
+			if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/login" {
+				if !sameOriginRequest(r) {
+					writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
+					return
+				}
+			}
 			next.ServeHTTP(w, r)
 			return
 		}

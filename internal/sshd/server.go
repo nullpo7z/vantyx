@@ -2,8 +2,6 @@ package sshd
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"fmt"
 	"log/slog"
 	"net"
@@ -14,6 +12,7 @@ import (
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
+	"github.com/nullpo7z/vantyx/internal/ratelimit"
 	"github.com/nullpo7z/vantyx/internal/session"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
@@ -62,6 +61,7 @@ type Server struct {
 	shutdown       bool
 	recordingDir   string
 	recordingStore RecordingStore
+	loginLimiter   *ratelimit.LoginLimiter
 }
 
 // Config holds the dependencies needed to build a [Server].
@@ -70,9 +70,14 @@ type Config struct {
 	TargetStore    access.TargetStore
 	GroupStore     access.AccessGroupStore
 	SessionManager SessionStarter
-	// HostKey is the SSH host private key. If nil, a fresh 2048-bit RSA
-	// key is generated (not persisted across restarts).
-	HostKey ssh.Signer
+	// HostKey is the SSH host private key. When nil, [loadOrGenerateHostKey]
+	// reads HostKeyPath or VANTYX_SSH_HOST_KEY_PATH and persists a new key
+	// there; when neither is set a fresh ephemeral 2048-bit RSA key is used.
+	HostKey     ssh.Signer
+	HostKeyPath string
+	// LoginLimiter throttles failed CLI SSH logins. When nil,
+	// [ratelimit.NewLoginLimiter] is used.
+	LoginLimiter *ratelimit.LoginLimiter
 	// RecordingsDir enables asciinema recording for CLI connect sessions
 	// when set (typically from VANTYX_RECORDINGS_DIR). RecordingStore
 	// must also be set to persist metadata.
@@ -88,30 +93,47 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	hostKey := cfg.HostKey
 	if hostKey == nil {
-		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		var err error
+		hostKey, err = loadOrGenerateHostKey(cfg.HostKeyPath)
 		if err != nil {
-			return nil, fmt.Errorf("sshd: generate host key: %w", err)
+			return nil, err
 		}
-		hostKey, err = ssh.NewSignerFromKey(key)
-		if err != nil {
-			return nil, fmt.Errorf("sshd: signer from key: %w", err)
-		}
+	}
+	limiter := cfg.LoginLimiter
+	if limiter == nil {
+		limiter = ratelimit.NewLoginLimiter()
 	}
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			user, err := cfg.UserStore.AuthenticateByPublicKey(c.User(), key)
+			ip := ratelimit.ClientIPFromAddr(c.RemoteAddr())
+			username := c.User()
+			if !limiter.AllowIP(ip) || !limiter.AllowUser(username) {
+				return nil, fmt.Errorf("too many failed attempts")
+			}
+			user, err := cfg.UserStore.AuthenticateByPublicKey(username, key)
 			if err != nil {
+				limiter.RecordFailureIP(ip)
+				limiter.RecordFailureUser(username)
 				return nil, err
 			}
+			limiter.RecordSuccess(ip, username)
 			return &ssh.Permissions{
 				Extensions: map[string]string{"user_id": user.ID},
 			}, nil
 		},
 		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			user, err := cfg.UserStore.Authenticate(c.User(), string(pass))
+			ip := ratelimit.ClientIPFromAddr(c.RemoteAddr())
+			username := c.User()
+			if !limiter.AllowIP(ip) || !limiter.AllowUser(username) {
+				return nil, fmt.Errorf("too many failed attempts")
+			}
+			user, err := cfg.UserStore.Authenticate(username, string(pass))
 			if err != nil {
+				limiter.RecordFailureIP(ip)
+				limiter.RecordFailureUser(username)
 				return nil, err
 			}
+			limiter.RecordSuccess(ip, username)
 			return &ssh.Permissions{
 				Extensions: map[string]string{"user_id": user.ID},
 			}, nil
@@ -126,6 +148,7 @@ func NewServer(cfg Config) (*Server, error) {
 		config:         config,
 		recordingDir:   cfg.RecordingsDir,
 		recordingStore: cfg.RecordingStore,
+		loginLimiter:   limiter,
 	}, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -145,5 +146,20 @@ var (
 	// errCredentialsNotDecrypted is shown to the user in Japanese; the
 	// HTTP layer never logs the raw error string, so leaking sensitive
 	// detail through it is not a concern.
-	errCredentialsNotDecrypted = errors.New("保存された認証情報の復号に失敗しています。VANTYX_SSH_PASSWORD_ENCRYPTION_KEY を確認してください")
+	errCredentialsNotDecrypted = errors.New("stored credentials could not be decrypted")
 )
+
+// terminalCredentialErrorMessage maps credential read failures onto a
+// localized user-facing string (ASVS V8.1).
+func terminalCredentialErrorMessage(r *http.Request, err error) string {
+	switch {
+	case errors.Is(err, errInvalidCredentials):
+		return localizedMessage(r, "terminal.invalidCredentials")
+	case errors.Is(err, errNoStoredCredentials):
+		return localizedMessage(r, "terminal.noStoredCredentials")
+	case errors.Is(err, errCredentialsNotDecrypted):
+		return localizedMessage(r, "terminal.credentialsNotDecrypted")
+	default:
+		return localizedMessage(r, "terminal.credentialsReadFailed")
+	}
+}

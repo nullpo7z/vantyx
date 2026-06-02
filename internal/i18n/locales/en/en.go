@@ -56,6 +56,7 @@ var Messages = map[string]string{
 	"auth.sshKeyAuthorizedKeyReq": "authorized_key is required",
 	"auth.sshKeyIDInvalid":        "invalid key_id",
 	"auth.unsupportedLocale":      "unsupported locale",
+	"auth.passwordChangeRequired": "password change required before using this feature",
 
 	// Users (admin management).
 	"users.idRequired":       "user_id required",
@@ -93,6 +94,11 @@ var Messages = map[string]string{
 	"sessions.notFoundOrAccessDenied": "session not found or access denied",
 	"sessions.onlySSHTelnet":          "only SSH and Telnet targets supported",
 	"sessions.eventsUnavailable":      "session events not available",
+
+	"terminal.invalidCredentials":      "invalid or missing credentials",
+	"terminal.noStoredCredentials":     "stored credentials not configured for this target",
+	"terminal.credentialsNotDecrypted": "stored credentials could not be decrypted; check VANTYX_SSH_PASSWORD_ENCRYPTION_KEY",
+	"terminal.credentialsReadFailed":   "failed to read credentials from the client",
 
 	// Collaborative session sharing (Phase A).
 	"sharing.unavailable":            "collaborative sessions are not available",
@@ -206,6 +212,7 @@ var Messages = map[string]string{
 	"validation.hostEmpty":       "host must not be empty",
 	"validation.hostTooLong":     "host too long",
 	"validation.hostInvalid":     "host must be a valid hostname or IP address",
+	"validation.hostRestricted":  "host is restricted (loopback, link-local, or cloud metadata); set VANTYX_ALLOW_RESTRICTED_HOSTS=1 to override",
 	"validation.idUsernameEmpty": "id and username must not be empty",
 
 	// Tag validation (group / target / user tags share these keys).

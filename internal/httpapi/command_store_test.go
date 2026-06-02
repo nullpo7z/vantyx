@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -117,6 +118,16 @@ func TestCommandLogRecorder_SkipsPasswordWithoutEcho(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("expected password input to be skipped, got %d rows", count)
+	}
+}
+
+func TestRedactSecrets_CurlUserPass(t *testing.T) {
+	got := redactSecrets("curl -u admin:Secret123 https://example.com")
+	if got == "curl -u admin:Secret123 https://example.com" {
+		t.Fatalf("expected redaction, got %q", got)
+	}
+	if !strings.Contains(got, "***") {
+		t.Fatalf("expected *** in %q", got)
 	}
 }
 

@@ -34,6 +34,7 @@ func TestWriteAccessValidationError(t *testing.T) {
 		{"host empty", access.ErrHostEmpty, "host"},
 		{"host too long", access.ErrHostTooLong, "host"},
 		{"host invalid", access.ErrHostInvalid, "host"},
+		{"host restricted", access.ErrHostRestricted, "制限"},
 		{"protocol invalid", access.ErrProtocolInvalid, "ssh"},
 		{"tag length", access.ErrTagLength, "タグ"},
 		{"tag chars", access.ErrTagChars, "タグ"},

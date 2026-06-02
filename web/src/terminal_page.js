@@ -13,6 +13,7 @@ import { classifyTerminalWsFrameSync } from './terminal_ws_protocol.js'
 import { createHostKeyDialogController } from './host_key_dialog.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
 import { setupTerminalKeyboard } from './xterm_input.js'
+import { isSameOriginBroadcast } from './dom_helpers.js'
 
 function escapeHtml(s) {
   const div = document.createElement('div')
@@ -845,6 +846,7 @@ export function renderTerminalPage(container) {
     }, 10_000)
 
     bc.onmessage = (ev) => {
+      if (!isSameOriginBroadcast(ev)) return
       const typ = ev?.data?.type
       if (typ !== 'credentials' && typ !== 'stored_credentials') return
       window.clearTimeout(timeoutId)

@@ -129,4 +129,3 @@ func (a *App) handleRDPCreateInvitation(w http.ResponseWriter, r *http.Request) 
 		return a.createRDPInvitationRecord(ctx, rdpSess, owner, invitee, groupID, inviteTag, mode, ttl, linkMaxUses)
 	})
 }
-

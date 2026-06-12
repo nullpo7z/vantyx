@@ -28,8 +28,8 @@ var DefaultCSP = strings.TrimSpace(
 )
 
 const (
-	hstsMaxAge            = "31536000"
-	hstsIncludeSubdomains = "includeSubDomains"
+	hstsMaxAge             = "31536000"
+	hstsIncludeSubdomains  = "includeSubDomains"
 	permissionsPolicyValue = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), " +
 		"magnetometer=(), microphone=(), payment=(), usb=()"
 )

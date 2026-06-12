@@ -52,17 +52,17 @@ type RecordingStore interface {
 // Server is the CLI SSH gateway: users log in with Vantyx credentials,
 // then choose a target to proxy to via the text menu in [Server.runMenu].
 type Server struct {
-	userStore      auth.UserStore
-	targetStore    access.TargetStore
-	groupStore     access.AccessGroupStore
-	sessionManager SessionStarter
-	config         *ssh.ServerConfig
-	listener       net.Listener
-	mu             sync.Mutex
-	shutdown       bool
-	recordingDir   string
-	recordingStore RecordingStore
-	loginLimiter   *ratelimit.LoginLimiter
+	userStore       auth.UserStore
+	targetStore     access.TargetStore
+	groupStore      access.AccessGroupStore
+	sessionManager  SessionStarter
+	config          *ssh.ServerConfig
+	listener        net.Listener
+	mu              sync.Mutex
+	shutdown        bool
+	recordingDir    string
+	recordingStore  RecordingStore
+	loginLimiter    *ratelimit.LoginLimiter
 	sharingRegistry *sharing.Registry
 	sharingStore    sharing.Store
 	sharingBridges  sharingBridgeRegistry
@@ -85,8 +85,8 @@ type Config struct {
 	// RecordingsDir enables asciinema recording for CLI connect sessions
 	// when set (typically from VANTYX_RECORDINGS_DIR). RecordingStore
 	// must also be set to persist metadata.
-	RecordingsDir  string
-	RecordingStore RecordingStore
+	RecordingsDir   string
+	RecordingStore  RecordingStore
 	SharingRegistry *sharing.Registry
 	SharingStore    sharing.Store
 	SharingBridges  sharingBridgeRegistry
@@ -148,14 +148,14 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	config.AddHostKey(hostKey)
 	return &Server{
-		userStore:      cfg.UserStore,
-		targetStore:    cfg.TargetStore,
-		groupStore:     cfg.GroupStore,
-		sessionManager: cfg.SessionManager,
-		config:         config,
-		recordingDir:   cfg.RecordingsDir,
-		recordingStore: cfg.RecordingStore,
-		loginLimiter:   limiter,
+		userStore:       cfg.UserStore,
+		targetStore:     cfg.TargetStore,
+		groupStore:      cfg.GroupStore,
+		sessionManager:  cfg.SessionManager,
+		config:          config,
+		recordingDir:    cfg.RecordingsDir,
+		recordingStore:  cfg.RecordingStore,
+		loginLimiter:    limiter,
 		sharingRegistry: cfg.SharingRegistry,
 		sharingStore:    cfg.SharingStore,
 		sharingBridges:  cfg.SharingBridges,

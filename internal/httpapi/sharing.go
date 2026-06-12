@@ -410,9 +410,9 @@ func (a *App) handleCreateGroupInvitations(w http.ResponseWriter, r *http.Reques
 }
 
 var (
-	errInviteTagInvalid       = errors.New("invite tag invalid")
-	errInviteTagNotForTarget  = errors.New("tag does not grant access to target")
-	errInviteGroupInvalid     = errors.New("invite group invalid")
+	errInviteTagInvalid        = errors.New("invite tag invalid")
+	errInviteTagNotForTarget   = errors.New("tag does not grant access to target")
+	errInviteGroupInvalid      = errors.New("invite group invalid")
 	errInviteGroupNotForTarget = errors.New("group does not contain target")
 )
 

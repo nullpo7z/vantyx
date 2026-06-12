@@ -1276,7 +1276,7 @@ export function renderTerminalPage(container) {
 
   function showKickedSessionEnded() {
     try {
-      if (ws && ws.readyState === WebSocket.OPEN) ws.close()
+      if (currentWs && currentWs.readyState === WebSocket.OPEN) currentWs.close()
     } catch { /* ignore */ }
     const root = container.querySelector('.terminal-page-root')
     if (!root) return

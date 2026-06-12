@@ -206,4 +206,3 @@ func (a *App) handleSharingCreateGroupInvitations(w http.ResponseWriter, r *http
 	})
 	writeJSON(w, map[string]interface{}{"items": items, "created": len(items)})
 }
-

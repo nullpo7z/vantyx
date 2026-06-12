@@ -508,4 +508,3 @@ func (a *App) handleRDPListParticipants(w http.ResponseWriter, r *http.Request) 
 func (a *App) handleRDPKickParticipant(w http.ResponseWriter, r *http.Request) {
 	a.handleKindKickParticipant(w, r, sharing.KindRDP)
 }
-

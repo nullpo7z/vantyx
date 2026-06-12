@@ -148,4 +148,3 @@ func (a *App) handleVNCAttach(w http.ResponseWriter, r *http.Request, userID, se
 		writeJSONErrorKey(w, r, "sessions.attachBusy", http.StatusServiceUnavailable)
 	}
 }
-

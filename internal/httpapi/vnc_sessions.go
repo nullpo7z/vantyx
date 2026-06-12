@@ -198,4 +198,3 @@ func (a *App) sharingService() *sharing.Service {
 		},
 	}
 }
-

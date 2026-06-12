@@ -14,6 +14,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/auth"
 	"github.com/nullpo7z/vantyx/internal/ratelimit"
 	"github.com/nullpo7z/vantyx/internal/session"
+	"github.com/nullpo7z/vantyx/internal/sharing"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
 
@@ -62,6 +63,9 @@ type Server struct {
 	recordingDir   string
 	recordingStore RecordingStore
 	loginLimiter   *ratelimit.LoginLimiter
+	sharingRegistry *sharing.Registry
+	sharingStore    sharing.Store
+	sharingBridges  sharingBridgeRegistry
 }
 
 // Config holds the dependencies needed to build a [Server].
@@ -83,6 +87,9 @@ type Config struct {
 	// must also be set to persist metadata.
 	RecordingsDir  string
 	RecordingStore RecordingStore
+	SharingRegistry *sharing.Registry
+	SharingStore    sharing.Store
+	SharingBridges  sharingBridgeRegistry
 }
 
 // NewServer builds an SSH server that authenticates with cfg.UserStore
@@ -149,6 +156,9 @@ func NewServer(cfg Config) (*Server, error) {
 		recordingDir:   cfg.RecordingsDir,
 		recordingStore: cfg.RecordingStore,
 		loginLimiter:   limiter,
+		sharingRegistry: cfg.SharingRegistry,
+		sharingStore:    cfg.SharingStore,
+		sharingBridges:  cfg.SharingBridges,
 	}, nil
 }
 

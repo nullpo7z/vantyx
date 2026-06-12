@@ -33,6 +33,8 @@ type Kind string
 
 const (
 	KindTerminal Kind = "terminal"
+	KindVNC      Kind = "vnc"
+	KindRDP      Kind = "rdp"
 )
 
 // Invitation is the on-disk shape of an invitation row.
@@ -183,6 +185,10 @@ func NormaliseKind(raw string) (Kind, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", string(KindTerminal):
 		return KindTerminal, nil
+	case string(KindVNC):
+		return KindVNC, nil
+	case string(KindRDP):
+		return KindRDP, nil
 	default:
 		return "", ErrInvitationKindInvalid
 	}

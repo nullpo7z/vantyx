@@ -186,6 +186,27 @@ func (b *sshDetachableBridge) SetWriter(userID string) {
 	}
 }
 
+// DetachUser closes every attached client owned by userID.
+func (b *sshDetachableBridge) DetachUser(userID string) {
+	if userID == "" {
+		return
+	}
+	b.clientMu.Lock()
+	toClose := make([]*clientEntry, 0)
+	for c := range b.clients {
+		if c.userID == userID {
+			toClose = append(toClose, c)
+		}
+	}
+	for _, c := range toClose {
+		delete(b.clients, c)
+	}
+	b.clientMu.Unlock()
+	for _, c := range toClose {
+		_ = c.w.Close()
+	}
+}
+
 func (b *sshDetachableBridge) runExternalResize() {
 	if b.externalResize == nil || b.windowChange == nil {
 		return

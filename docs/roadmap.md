@@ -6,30 +6,13 @@ topic guides under `docs/` (for example
 [collaborative-sessions.md](collaborative-sessions.md),
 [credentials.md](credentials.md)). This file only lists **open** work.
 
-## Remote desktop
+## Collaborative sessions (follow-ups)
 
-- **Collaborative RDP (Phase C).** Browser RDP via FreeRDP → Xvfb → x11vnc
-  is implemented for single-user sessions; multi-viewer attach (like SSH Phase A)
-  is still open — see Collaborative sessions below.
+Multi-user attach for SSH/Telnet, VNC, browser RDP, and CLI view-only
+participation is documented in [collaborative-sessions.md](collaborative-sessions.md).
+Remaining polish:
 
-## Collaborative sessions
-
-Phase A (SSH/Telnet) shipped: invitation-based read-only viewer
-attach, single-writer model with request/transfer of the write
-token, named and link invitations, and an in-process bridge that
-fans output out to every viewer. The remaining phases are open:
-
-- **Phase B — VNC.** Multi-client viewer attach for the VNC proxy
-  (likely via `x11vnc -shared` and per-client TCP fan-out in the
-  WebSocket layer).
-- **Phase C — RDP.** Once the VNC fan-out lands, the
-  `xfreerdp + Xvfb + x11vnc` chain reuses it automatically.
-- **Phase D — CLI viewer.** Add a "view-only attach" entry to the
-  `internal/sshd` interactive menu so operators on the SSH CLI can
-  participate as viewers too.
-- **Mandatory recording when viewers are present.** Optional
-  `VANTYX_REQUIRE_RECORDING_WITH_VIEWERS` flag to refuse new
-  invitations on sessions that are not being recorded.
+- **Direct RDP proxy** (`/ws/rdp`) multi-viewer — out of scope for browser RDP sharing.
 
 ## External authentication
 

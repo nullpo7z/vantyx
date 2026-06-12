@@ -105,8 +105,12 @@ var Messages = map[string]string{
 	"sharing.modeInvalid":            "invitation mode is invalid",
 	"sharing.inviteeNotFound":        "invited user not found",
 	"sharing.inviteeOrTagOnly":       "cannot specify both a user and a tag",
+	"sharing.inviteeOrGroupOnly":     "cannot specify both a user and a group",
+	"sharing.tagOrGroupOnly":         "cannot specify both a tag and a group",
 	"sharing.inviteTagInvalid":       "tag is invalid",
 	"sharing.inviteTagNotForTarget":  "this tag does not grant access to the target",
+	"sharing.inviteGroupInvalid":     "group is invalid",
+	"sharing.inviteGroupNotForTarget": "this group does not include the target",
 	"sharing.inviteeNoTargetAccess":  "invited user cannot access this target",
 	"sharing.linkMaxUsesInvalid":     "invalid link usage limit",
 	"sharing.cannotInviteSelf":       "you cannot invite yourself",
@@ -124,7 +128,8 @@ var Messages = map[string]string{
 	"sharing.requestIDRequired":      "request_id required",
 	"sharing.writeRequestNotFound":   "write request not found",
 	"sharing.writeRequestNotPending": "write request has already been decided",
-	"sharing.notWriter":              "only the current writer can do this",
+	"sharing.notWriter":                      "only the current writer can do this",
+	"sharing.recordingRequiredWithViewers": "session recording must be enabled before viewers can join (set VANTYX_RECORDINGS_DIR)",
 
 	// Command logs.
 	"command.queryFailed": "failed to query command logs",

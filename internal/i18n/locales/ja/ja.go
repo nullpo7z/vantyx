@@ -113,8 +113,12 @@ var Messages = map[string]string{
 	"sharing.modeInvalid":            "招待モードが不正です",
 	"sharing.inviteeNotFound":        "招待先のユーザーが見つかりません",
 	"sharing.inviteeOrTagOnly":       "指名招待とタグ招待は同時に指定できません",
+	"sharing.inviteeOrGroupOnly":     "指名招待とグループ招待は同時に指定できません",
+	"sharing.tagOrGroupOnly":         "タグ招待とグループ招待は同時に指定できません",
 	"sharing.inviteTagInvalid":       "タグが不正です",
 	"sharing.inviteTagNotForTarget":  "このタグは対象ホストへのアクセス権がありません",
+	"sharing.inviteGroupInvalid":       "グループが不正です",
+	"sharing.inviteGroupNotForTarget": "このグループは対象ホストを含みません",
 	"sharing.inviteeNoTargetAccess":  "招待先ユーザーはこのホストにアクセスできません",
 	"sharing.linkMaxUsesInvalid":     "リンクの利用回数が不正です",
 	"sharing.cannotInviteSelf":       "自分自身を招待することはできません",
@@ -132,7 +136,8 @@ var Messages = map[string]string{
 	"sharing.requestIDRequired":      "request_id は必須です",
 	"sharing.writeRequestNotFound":   "操作権リクエストが見つかりません",
 	"sharing.writeRequestNotPending": "対象のリクエストはすでに処理済みです",
-	"sharing.notWriter":              "現在の操作権保持者のみ実行できます",
+	"sharing.notWriter":                      "現在の操作権保持者のみ実行できます",
+	"sharing.recordingRequiredWithViewers": "ビューア参加にはセッション録画が必要です（VANTYX_RECORDINGS_DIR を設定してください）",
 
 	// Command logs.
 	"command.queryFailed": "コマンドログの取得に失敗しました",

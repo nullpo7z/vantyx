@@ -425,6 +425,9 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	a.TerminalSessionManager.Stop(id)
+	if a.SharingRegistry != nil {
+		a.SharingRegistry.Remove(sessionID)
+	}
 	audit("terminal_session_stop", auditFields{
 		"session_id": sessionID,
 		"user_id":    userID,
@@ -463,6 +466,10 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 	// Initial WebSocket attach is the session owner. Pass user metadata
 	// down so the bridge knows who to consider as the writer.
 	ownerAttach := session.AttachReq{Conn: conn, UserID: termSess.UserID, Mode: session.AttachModeWriter}
+	if a.SharingRegistry != nil {
+		a.ensureRoomFor(termSess)
+		defer a.SharingRegistry.Remove(string(id))
+	}
 	if a.SharingBridges != nil {
 		defer a.SharingBridges.Unregister(id)
 	}

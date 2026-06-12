@@ -28,8 +28,8 @@ func TestRoom_AddViewerAndRemove(t *testing.T) {
 	reg := NewRegistry()
 	room := reg.EnsureRoom("s1", "t1", "alice", "Alice")
 	now := time.Now().UTC()
-	room.AddViewer("bob", "Bob", now)
-	room.AddViewer("carol", "Carol", now.Add(time.Second))
+	room.AddViewer("bob", "Bob", "", now)
+	room.AddViewer("carol", "Carol", "", now.Add(time.Second))
 	if !room.IsParticipant("bob") || !room.IsParticipant("carol") {
 		t.Fatalf("viewers not attached")
 	}
@@ -51,7 +51,7 @@ func TestRoom_WriteRequestGrant(t *testing.T) {
 	reg := NewRegistry()
 	room := reg.EnsureRoom("s1", "t1", "alice", "Alice")
 	now := time.Now().UTC()
-	room.AddViewer("bob", "Bob", now)
+	room.AddViewer("bob", "Bob", "", now)
 
 	if _, err := room.RequestWrite("req-alice", "alice", "Alice", now); err != ErrAlreadyWriter {
 		t.Fatalf("alice already holds the token; want ErrAlreadyWriter, got %v", err)
@@ -86,7 +86,7 @@ func TestRoom_WriteRequestDeny(t *testing.T) {
 	reg := NewRegistry()
 	room := reg.EnsureRoom("s1", "t1", "alice", "Alice")
 	now := time.Now().UTC()
-	room.AddViewer("bob", "Bob", now)
+	room.AddViewer("bob", "Bob", "", now)
 	wr, err := room.RequestWrite("req1", "bob", "Bob", now)
 	if err != nil {
 		t.Fatalf("RequestWrite: %v", err)
@@ -106,7 +106,7 @@ func TestRoom_ReleaseWrite(t *testing.T) {
 	reg := NewRegistry()
 	room := reg.EnsureRoom("s1", "t1", "alice", "Alice")
 	now := time.Now().UTC()
-	room.AddViewer("bob", "Bob", now)
+	room.AddViewer("bob", "Bob", "", now)
 	wr, _ := room.RequestWrite("req1", "bob", "Bob", now)
 	if _, _, err := room.GrantWrite(wr.ID, "alice", now); err != nil {
 		t.Fatalf("GrantWrite: %v", err)
@@ -127,7 +127,7 @@ func TestRoom_KickReclaimsWriteToken(t *testing.T) {
 	reg := NewRegistry()
 	room := reg.EnsureRoom("s1", "t1", "alice", "Alice")
 	now := time.Now().UTC()
-	room.AddViewer("bob", "Bob", now)
+	room.AddViewer("bob", "Bob", "", now)
 	wr, _ := room.RequestWrite("req1", "bob", "Bob", now)
 	if _, _, err := room.GrantWrite(wr.ID, "alice", now); err != nil {
 		t.Fatalf("GrantWrite: %v", err)
@@ -144,11 +144,11 @@ func TestRoom_KickedUserCannotRejoin(t *testing.T) {
 	reg := NewRegistry()
 	room := reg.EnsureRoom("s1", "t1", "alice", "Alice")
 	now := time.Now().UTC()
-	_ = room.AddViewer("bob", "Bob", now)
+	_ = room.AddViewer("bob", "Bob", "", now)
 	if err := room.RemoveParticipant("bob"); err != nil {
 		t.Fatalf("RemoveParticipant: %v", err)
 	}
-	if err := room.AddViewer("bob", "Bob", now); !errors.Is(err, ErrUserKicked) {
+	if err := room.AddViewer("bob", "Bob", "", now); !errors.Is(err, ErrUserKicked) {
 		t.Fatalf("expected ErrUserKicked, got %v", err)
 	}
 }
@@ -157,7 +157,7 @@ func TestRegistry_RoomsForUser(t *testing.T) {
 	reg := NewRegistry()
 	r1 := reg.EnsureRoom("s1", "t1", "alice", "Alice")
 	r2 := reg.EnsureRoom("s2", "t2", "alice", "Alice")
-	r1.AddViewer("bob", "Bob", time.Now().UTC())
+	r1.AddViewer("bob", "Bob", "", time.Now().UTC())
 	rooms := reg.RoomsForUser("bob")
 	if len(rooms) != 1 || rooms[0] != "s1" {
 		t.Fatalf("unexpected rooms for bob: %v", rooms)
@@ -167,4 +167,25 @@ func TestRegistry_RoomsForUser(t *testing.T) {
 		t.Fatalf("alice owns two rooms, got %v", rooms)
 	}
 	_ = r2
+}
+
+func TestRegistry_Remove(t *testing.T) {
+	reg := NewRegistry()
+	reg.EnsureRoom("s1", "t1", "alice", "Alice")
+	reg.Remove("s1")
+	if _, ok := reg.Get("s1"); ok {
+		t.Fatalf("room should be removed after Registry.Remove")
+	}
+}
+
+func TestRoom_ParticipantUserIDsForInvitation(t *testing.T) {
+	reg := NewRegistry()
+	room := reg.EnsureRoom("s1", "t1", "alice", "Alice")
+	now := time.Now().UTC()
+	room.AddViewer("bob", "Bob", "inv-a", now)
+	room.AddViewer("carol", "Carol", "inv-b", now)
+	got := room.ParticipantUserIDsForInvitation("inv-a")
+	if len(got) != 1 || got[0] != "bob" {
+		t.Fatalf("unexpected users for inv-a: %v", got)
+	}
 }

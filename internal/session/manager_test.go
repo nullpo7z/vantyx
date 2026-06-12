@@ -42,6 +42,14 @@ func TestManager_StartAndStopSession(t *testing.T) {
 	if got := len(m.ActiveIDs()); got != 1 {
 		t.Fatalf("expected 1 active session, got %d", got)
 	}
+	active := m.ActiveSessionsForUser("")
+	if len(active) != 1 {
+		t.Fatalf("ActiveSessionsForUser(\"\") = %d, want 1", len(active))
+	}
+	active = m.ActiveSessionsForUser("alice")
+	if len(active) != 0 {
+		t.Fatalf("ActiveSessionsForUser(alice) = %d, want 0", len(active))
+	}
 
 	m.Stop("s1")
 

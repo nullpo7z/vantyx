@@ -59,6 +59,7 @@ export function renderTerminalPage(container) {
   /** Pending write request awaiting owner review (banner → modal on click). */
   let pendingWriteRequestApproval = null
   let myPendingWriteRequest = false
+  let cachedParticipants = []
   let stopSharingWatch = null
   let sharingEventsSessionId = ''
 
@@ -1178,13 +1179,19 @@ export function renderTerminalPage(container) {
         return
       case 'session_change':
       case 'participant_joined':
+        void refreshParticipants(payload.session_id || currentSessionId || sharingEventsSessionId)
+        return
       case 'participant_left':
-        if (payload.type === 'participant_left' && payload.extra?.reason === 'kicked' && payload.user_id) {
-          // If we were the kicked participant, hand-roll the
-          // session-ended UI so the user knows why their connection
-          // was cut.
-          // The bridge has dropped our WebSocket already.
+        if (
+          payload.extra?.reason === 'kicked' &&
+          payload.user_id &&
+          myUserId &&
+          payload.user_id === myUserId
+        ) {
+          showKickedSessionEnded()
+          return
         }
+        void refreshParticipants(payload.session_id || currentSessionId || sharingEventsSessionId)
         return
       case 'invitation_revoked':
       case 'invitation_updated':
@@ -1243,6 +1250,7 @@ export function renderTerminalPage(container) {
       const writer = (res?.items || []).find((p) => p.is_writer)
       writerDisplayName = res?.writer_username || writer?.username || writer?.user_id || ''
 
+      cachedParticipants = Array.isArray(res?.items) ? res.items : []
       const pending = Array.isArray(res?.pending_requests) ? res.pending_requests : []
       myPendingWriteRequest = pending.some(
         (wr) => wr && wr.status === 'pending' && myUserId && wr.requester_id === myUserId,
@@ -1262,7 +1270,91 @@ export function renderTerminalPage(container) {
       /* ignore */
     } finally {
       renderSharingBanner()
+      renderParticipantsPanel(sessionId)
     }
+  }
+
+  function showKickedSessionEnded() {
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.close()
+    } catch { /* ignore */ }
+    const root = container.querySelector('.terminal-page-root')
+    if (!root) return
+    root.innerHTML = `
+      <div class="flex flex-1 items-center justify-center p-8 text-center">
+        <div class="max-w-md space-y-3">
+          <h2 class="text-lg font-semibold text-slate-800">${escapeHtml(t('sharing.youWereKicked'))}</h2>
+          <p class="text-sm text-slate-600">${escapeHtml(t('sharing.youWereKickedHint'))}</p>
+        </div>
+      </div>
+    `
+  }
+
+  async function kickParticipant(sessionId, userId, displayName) {
+    if (!sessionId || !userId) return
+    const ok = await uiConfirm(t('sharing.kickConfirm', { name: displayName || userId }))
+    if (!ok) return
+    try {
+      await API.kickSessionParticipant(sessionId, userId)
+      await refreshParticipants(sessionId)
+    } catch (err) {
+      await uiAlert(t('sharing.kickFailed') + (err?.message ? `: ${err.message}` : ''))
+    }
+  }
+
+  function renderParticipantsPanel(sessionId) {
+    const root = container.querySelector('.terminal-page-root')
+    if (!root || !sessionId) return
+    const isOwner = !!(sessionOwnerId && myUserId && myUserId === sessionOwnerId)
+    let panel = root.querySelector('#sharing-participants-panel')
+    if (!isOwner) {
+      panel?.remove()
+      return
+    }
+    const viewers = cachedParticipants.filter((p) => p && p.role === 'viewer')
+    if (!panel) {
+      panel = document.createElement('div')
+      panel.id = 'sharing-participants-panel'
+      panel.className = 'shrink-0 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs'
+      const banner = root.querySelector('#sharing-status-banner')
+      if (banner) banner.insertAdjacentElement('afterend', panel)
+      else {
+        const header = root.querySelector('header')
+        if (header) header.insertAdjacentElement('afterend', panel)
+      }
+    }
+    if (viewers.length === 0) {
+      panel.innerHTML = `<div class="text-slate-600"><span class="font-semibold text-slate-800">${escapeHtml(t('sharing.participantsTitle'))}</span> — ${escapeHtml(t('sharing.participantsEmpty'))}</div>`
+      return
+    }
+    const rows = viewers
+      .map((p) => {
+        const label = escapeHtml(p.username || p.user_id || '')
+        const status = p.is_writer ? t('sharing.roleWriter') : t('sharing.roleViewer')
+        return `<tr>
+          <td class="py-1 pr-3">${label}</td>
+          <td class="py-1 pr-3 text-slate-600">${escapeHtml(status)}</td>
+          <td class="py-1 text-right">
+            <button type="button" class="sharing-kick-btn rounded border border-red-300 bg-white px-2 py-0.5 text-red-700 hover:bg-red-50" data-user-id="${escapeHtml(p.user_id)}">${escapeHtml(t('sharing.kick'))}</button>
+          </td>
+        </tr>`
+      })
+      .join('')
+    panel.innerHTML = `
+      <div class="font-semibold text-slate-800 mb-1">${escapeHtml(t('sharing.participantsTitle'))}</div>
+      <table class="w-full max-w-lg"><thead><tr class="text-left text-slate-500">
+        <th class="pb-1 pr-3">${escapeHtml(t('sharing.headerUsername'))}</th>
+        <th class="pb-1 pr-3">${escapeHtml(t('sharing.headerStatus'))}</th>
+        <th class="pb-1 text-right">${escapeHtml(t('sharing.headerActions'))}</th>
+      </tr></thead><tbody>${rows}</tbody></table>
+    `
+    panel.querySelectorAll('.sharing-kick-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const uid = btn.getAttribute('data-user-id')
+        const p = viewers.find((v) => v.user_id === uid)
+        void kickParticipant(sessionId, uid, p?.username || uid)
+      })
+    })
   }
 
   function clearWriteRequestApproval() {

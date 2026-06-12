@@ -92,6 +92,12 @@ function inviteTargetLabel(inv) {
       user: inv.invitee_username || inv.invitee_user_id || '',
     })
   }
+  if (inv.invite_group_id) {
+    return t('sharing.inviteGroupBatchLabel', {
+      group: inv.invite_group_id,
+      user: inv.invitee_username || inv.invitee_user_id || '',
+    })
+  }
   return inv.invitee_username || inv.invitee_user_id || '—'
 }
 
@@ -108,7 +114,7 @@ function statusLabel(inv) {
 /** Normalize POST /invitations response into invitation rows for the table. */
 function invitationsFromCreateResponse(res, method) {
   if (!res || typeof res !== 'object') return []
-  if (method === 'tag' && Array.isArray(res.items)) return res.items
+  if ((method === 'tag' || method === 'group') && Array.isArray(res.items)) return res.items
   if (res.id) return [res]
   return []
 }
@@ -276,6 +282,85 @@ function mountUserPicker(root, { users, tags, escapeHtml }) {
   }
 }
 
+function filterGroups(groups, query = '') {
+  const q = query.trim().toLowerCase()
+  return (Array.isArray(groups) ? groups : []).filter((item) => {
+    if (!q) return true
+    const id = (item.id || '').toLowerCase()
+    const name = (item.name || '').toLowerCase()
+    return id.includes(q) || name.includes(q)
+  })
+}
+
+/** @param {HTMLElement} root */
+function mountGroupPicker(root, { groups, escapeHtml }) {
+  const hidden = root.querySelector('[data-group-value]')
+  const searchInput = root.querySelector('[data-group-search]')
+  const listEl = root.querySelector('[data-group-list]')
+  const selectedLabel = root.querySelector('[data-group-selected-label]')
+  const clearBtn = root.querySelector('[data-group-clear]')
+  let selectedId = ''
+
+  const clearSelection = () => {
+    selectedId = ''
+    if (hidden) hidden.value = ''
+    if (selectedLabel) selectedLabel.textContent = ''
+    if (clearBtn) clearBtn.classList.add('hidden')
+    renderList()
+  }
+
+  const applySelection = (id) => {
+    selectedId = id || ''
+    if (hidden) hidden.value = selectedId
+    const g = groups.find((x) => x.id === selectedId)
+    const label = g ? (g.name ? `${g.name} (${g.id})` : g.id) : selectedId
+    if (selectedLabel) {
+      selectedLabel.textContent = selectedId
+        ? t('sharing.inviteGroupSelected', { label })
+        : ''
+    }
+    if (clearBtn) clearBtn.classList.toggle('hidden', !selectedId)
+    renderList()
+  }
+
+  const renderList = () => {
+    const filtered = filterGroups(groups, searchInput?.value || '')
+    if (filtered.length === 0) {
+      listEl.innerHTML = `<p class="px-3 py-4 text-xs text-slate-500 text-center">${escapeHtml(t('sharing.inviteUserEmpty'))}</p>`
+      return
+    }
+    listEl.innerHTML = filtered
+      .map((item) => {
+        const id = escapeHtml(item.id || '')
+        const n = item.user_count ?? 0
+        const name = escapeHtml(item.name || item.id || '')
+        const label = escapeHtml(`${name} (${n})`)
+        const active = id === selectedId
+        return `<button type="button" data-pick-group="${id}" class="${pickerItemClass(active)}">${label}</button>`
+      })
+      .join('')
+    listEl.querySelectorAll('[data-pick-group]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-pick-group') || ''
+        if (id && id === selectedId) {
+          clearSelection()
+        } else {
+          applySelection(id)
+        }
+      })
+    })
+  }
+
+  searchInput?.addEventListener('input', renderList)
+  clearBtn?.addEventListener('click', clearSelection)
+  renderList()
+
+  return {
+    getValue: () => selectedId || (hidden?.value || '').trim(),
+    clear: clearSelection,
+  }
+}
+
 /** @param {HTMLElement} root */
 function mountTagPicker(root, { tags, escapeHtml }) {
   const hidden = root.querySelector('[data-tag-value]')
@@ -342,7 +427,7 @@ function mountTagPicker(root, { tags, escapeHtml }) {
   }
 }
 
-export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
+export function openInviteDialog({ sessionId, sessionKind = 'terminal', targetName, escapeHtml }) {
   if (!sessionId) return
   if (openDialogEl) {
     try { openDialogEl.remove() } catch { /* ignore */ }
@@ -370,6 +455,10 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
           <label class="flex items-center gap-1.5">
             <input type="radio" name="invite-method" value="tag" />
             <span>${t('sharing.inviteMethodTag')}</span>
+          </label>
+          <label class="flex items-center gap-1.5">
+            <input type="radio" name="invite-method" value="group" />
+            <span>${t('sharing.inviteMethodGroup')}</span>
           </label>
           <label class="flex items-center gap-1.5">
             <input type="radio" name="invite-method" value="link" />
@@ -405,6 +494,19 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
             <p class="text-xs text-slate-500 px-3 py-4 text-center">${t('common.loading')}</p>
           </div>
           <p class="text-xs text-slate-500">${t('sharing.inviteTagHint')}</p>
+        </div>
+        <div data-group="1" class="hidden space-y-2" data-group-picker-root="1">
+          <label class="block text-xs font-medium text-slate-600">${t('sharing.inviteGroupLabel')}</label>
+          <input type="hidden" data-group-value="1" value="" />
+          <input type="search" data-group-search="1" placeholder="${t('sharing.inviteGroupSearchPlaceholder')}" class="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" autocomplete="off" />
+          <div class="flex flex-wrap items-center gap-2 min-h-[1.25rem]">
+            <p data-group-selected-label="1" class="text-xs text-sky-800 flex-1 min-w-0"></p>
+            <button type="button" data-group-clear="1" class="hidden shrink-0 text-xs text-slate-600 hover:text-slate-800 underline">${t('sharing.inviteClearSelection')}</button>
+          </div>
+          <div data-group-list="1" class="max-h-40 overflow-y-auto rounded border border-slate-200 bg-white">
+            <p class="text-xs text-slate-500 px-3 py-4 text-center">${t('common.loading')}</p>
+          </div>
+          <p class="text-xs text-slate-500">${t('sharing.inviteGroupHint')}</p>
         </div>
         <div data-link="1" class="hidden space-y-2">
           <span class="block text-xs font-medium text-slate-600">${t('sharing.inviteLinkUsageLabel')}</span>
@@ -473,12 +575,15 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
   const status = wrap.querySelector('[data-status="1"]')
   const namedBox = wrap.querySelector('[data-named="1"]')
   const tagBox = wrap.querySelector('[data-tag="1"]')
+  const groupBox = wrap.querySelector('[data-group="1"]')
   const linkBox = wrap.querySelector('[data-link="1"]')
   const linkMaxWrap = wrap.querySelector('[data-link-max-wrap="1"]')
   const userPickerRoot = wrap.querySelector('[data-user-picker-root="1"]')
   const tagPickerRoot = wrap.querySelector('[data-tag-picker-root="1"]')
+  const groupPickerRoot = wrap.querySelector('[data-group-picker-root="1"]')
   let userPicker = null
   let tagPicker = null
+  let groupPicker = null
   const linkMaxInput = wrap.querySelector('[data-link-max="1"]')
   const ttlSelect = wrap.querySelector('[data-ttl="1"]')
   const issueBtn = wrap.querySelector('[data-issue="1"]')
@@ -490,6 +595,7 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
     const method = wrap.querySelector('input[name="invite-method"]:checked')?.value || 'named'
     namedBox.classList.toggle('hidden', method !== 'named')
     tagBox.classList.toggle('hidden', method !== 'tag')
+    groupBox.classList.toggle('hidden', method !== 'group')
     linkBox.classList.toggle('hidden', method !== 'link')
   }
 
@@ -507,16 +613,19 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
     })
   })
 
-  void API.sessionInvitationOptions(sessionId)
+  void API.sessionInvitationOptions(sessionId, { kind: sessionKind })
     .then((opts) => {
       const users = Array.isArray(opts?.users) ? opts.users : []
       const tags = Array.isArray(opts?.tags) ? opts.tags : []
+      const groups = Array.isArray(opts?.groups) ? opts.groups : []
       userPicker = mountUserPicker(userPickerRoot, { users, tags, escapeHtml })
       tagPicker = mountTagPicker(tagPickerRoot, { tags, escapeHtml })
+      groupPicker = mountGroupPicker(groupPickerRoot, { groups, escapeHtml })
     })
     .catch(() => {
       userPicker = mountUserPicker(userPickerRoot, { users: [], tags: [], escapeHtml })
       tagPicker = mountTagPicker(tagPickerRoot, { tags: [], escapeHtml })
+      groupPicker = mountGroupPicker(groupPickerRoot, { groups: [], escapeHtml })
     })
 
   function revealJoinUrl(fullUrl, { regenerated = false } = {}) {
@@ -536,7 +645,7 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
       const cached = getCachedInviteUrl(sessionId, invitationId)
       if (cached) return { url: cached, regenerated: false }
     }
-    const res = await API.regenerateSessionInvitationJoinUrl(sessionId, invitationId)
+    const res = await API.regenerateSessionInvitationJoinUrl(sessionId, invitationId, { kind: sessionKind })
     const path = res?.join_url || ''
     const fullUrl = path ? new URL(path, window.location.origin).toString() : ''
     if (fullUrl) writeInviteUrlCache(sessionId, invitationId, fullUrl)
@@ -547,7 +656,7 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
 
   async function refreshList({ mergeItems } = {}) {
     try {
-      const res = await API.listSessionInvitations(sessionId)
+      const res = await API.listSessionInvitations(sessionId, { kind: sessionKind })
       let items = Array.isArray(res?.items) ? res.items : []
       if (mergeItems?.length) {
         items = mergeInvitationLists(items, mergeItems)
@@ -591,7 +700,7 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
           if (!id) return
           if (!(await uiConfirm(t('sharing.inviteDeleteConfirm'), { danger: true }))) return
           try {
-            await API.revokeSessionInvitation(sessionId, id)
+            await API.revokeSessionInvitation(sessionId, id, { kind: sessionKind })
             removeInviteUrlCache(sessionId, id)
             await refreshList()
           } catch (err) {
@@ -623,6 +732,13 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
         return
       }
       payload.invite_tag = tag
+    } else if (method === 'group') {
+      const group = (groupPicker?.getValue() || '').trim()
+      if (!group) {
+        status.textContent = t('sharing.inviteGroupRequired')
+        return
+      }
+      payload.invite_group_id = group
     } else {
       const usage = wrap.querySelector('input[name="link-usage"]:checked')?.value || 'single'
       if (usage === 'unlimited') {
@@ -642,7 +758,7 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
     issueBtn.disabled = true
     status.textContent = ''
     try {
-      const res = await API.createSessionInvitation(sessionId, payload)
+      const res = await API.createSessionInvitation(sessionId, payload, { kind: sessionKind })
       if (method === 'link') {
         const url = res?.join_url || ''
         const fullUrl = url ? new URL(url, window.location.origin).toString() : ''
@@ -652,13 +768,16 @@ export function openInviteDialog({ sessionId, targetName, escapeHtml }) {
       } else {
         tokenRow.classList.add('hidden')
       }
-      if (method === 'tag' && res?.created != null) {
-        status.textContent = t('sharing.inviteTagCreated', { n: res.created })
+      if ((method === 'tag' || method === 'group') && res?.created != null) {
+        status.textContent = method === 'group'
+          ? t('sharing.inviteGroupCreated', { n: res.created })
+          : t('sharing.inviteTagCreated', { n: res.created })
       } else {
         status.textContent = t('sharing.inviteCreated')
       }
       userPicker?.clear()
       tagPicker?.clear()
+      groupPicker?.clear()
       const createdItems = invitationsFromCreateResponse(res, method)
       if (createdItems.length > 0) {
         cachedInvitations = mergeInvitationLists(cachedInvitations, createdItems)

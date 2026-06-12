@@ -47,10 +47,11 @@ const (
 
 // Participant captures a single user's presence inside a Room.
 type Participant struct {
-	UserID   string
-	Username string
-	Role     Role
-	JoinedAt time.Time
+	UserID       string
+	Username     string
+	Role         Role
+	JoinedAt     time.Time
+	InvitationID string // invitation used to join; empty for owner
 }
 
 // WriteRequest tracks one pending or recently-decided handoff.
@@ -154,7 +155,7 @@ func (r *Room) IsKicked(userID string) bool {
 
 // AddViewer records that userID has joined the room as a viewer.
 // Re-adding an existing participant updates the username only.
-func (r *Room) AddViewer(userID, username string, now time.Time) error {
+func (r *Room) AddViewer(userID, username, invitationID string, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, blocked := r.kicked[userID]; blocked {
@@ -164,15 +165,37 @@ func (r *Room) AddViewer(userID, username string, now time.Time) error {
 		if username != "" {
 			existing.Username = username
 		}
+		if invitationID != "" {
+			existing.InvitationID = invitationID
+		}
 		return nil
 	}
 	r.memberByID[userID] = &Participant{
-		UserID:   userID,
-		Username: username,
-		Role:     RoleViewer,
-		JoinedAt: now,
+		UserID:       userID,
+		Username:     username,
+		Role:         RoleViewer,
+		JoinedAt:     now,
+		InvitationID: invitationID,
 	}
 	return nil
+}
+
+// ParticipantUserIDsForInvitation returns user IDs of viewers who joined
+// via invitationID. The owner is never included.
+func (r *Room) ParticipantUserIDsForInvitation(invitationID string) []string {
+	if invitationID == "" {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0)
+	for uid, p := range r.memberByID {
+		if p.Role == RoleViewer && p.InvitationID == invitationID {
+			out = append(out, uid)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // RemoveParticipant detaches userID from the room. The owner cannot be

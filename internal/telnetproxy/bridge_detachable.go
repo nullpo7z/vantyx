@@ -171,6 +171,27 @@ func (b *detachableBridge) SetWriter(userID string) {
 	}
 }
 
+// DetachUser closes every attached client owned by userID.
+func (b *detachableBridge) DetachUser(userID string) {
+	if userID == "" {
+		return
+	}
+	b.clientMu.Lock()
+	toClose := make([]*clientEntry, 0)
+	for c := range b.clients {
+		if c.userID == userID {
+			toClose = append(toClose, c)
+		}
+	}
+	for _, c := range toClose {
+		delete(b.clients, c)
+	}
+	b.clientMu.Unlock()
+	for _, c := range toClose {
+		_ = c.w.Close()
+	}
+}
+
 func (b *detachableBridge) runOutputPump() {
 	defer b.signalBridgeDone()
 	buf := make([]byte, 4096)

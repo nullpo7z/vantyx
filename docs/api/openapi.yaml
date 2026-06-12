@@ -627,6 +627,41 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RDPSessionItem'
+    VNCSessionItem:
+      type: object
+      description: 直接 VNC 接続の共有セッション（GET /api/vnc/sessions）。
+      properties:
+        session_id:
+          type: string
+        target_id:
+          type: string
+        target_name:
+          type: string
+        target_path:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+        idle:
+          type: boolean
+        idle_seconds:
+          type: integer
+      required:
+        - session_id
+        - target_id
+        - target_name
+        - created_at
+        - last_seen
+    VNCSessionListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/VNCSessionItem'
     TerminalSessionListResponse:
       type: object
       properties:
@@ -3175,6 +3210,14 @@ paths:
                   enum: [viewer, writer_eligible]
                   default: viewer
                 invitee_user_id: { type: string }
+                invite_tag:
+                  type: string
+                  description: タグに紐づく全ユーザーへ指名招待を一括発行（オーナー以外）。
+                invite_group_id:
+                  type: string
+                  description: オーナーが所属するアクセスグループの全メンバーへ指名招待を一括発行。
+                link_unlimited: { type: boolean }
+                link_max_uses: { type: integer }
                 ttl_seconds:
                   type: integer
                   description: 0 または未指定でデフォルト TTL。`VANTYX_INVITATION_MAX_TTL_SECONDS` が上限。
@@ -3295,6 +3338,173 @@ paths:
         '401': { description: 未認証 }
         '403': { description: オーナーでない }
         '404': { description: セッションまたは参加者が存在しない }
+
+  /api/vnc/sessions:
+    get:
+      summary: アクティブな直接 VNC セッション一覧
+      description: |
+        ログイン中のユーザーがオーナーの稼働中 VNC セッション一覧。
+        `target_id` のみで接続したあと共有 UI が `session_id` を解決するために使用します。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: セッション一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VNCSessionListResponse'
+        '401':
+          description: 未認証
+
+  /api/vnc/sessions/{session_id}/invitation-options:
+    get:
+      summary: VNC 招待候補（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: ユーザー・タグ・グループ候補 }
+
+  /api/vnc/sessions/{session_id}/invitations:
+    get:
+      summary: VNC 招待一覧（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 招待一覧 }
+    post:
+      summary: VNC 招待を発行（オーナー専用）
+      description: terminal と同様（指名・タグ・グループ・リンク）。`mode` は viewer のみ。
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 発行された招待 }
+
+  /api/vnc/sessions/{session_id}/join:
+    post:
+      summary: VNC 共有セッションに参加
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 参加完了 }
+
+  /api/vnc/sessions/{session_id}/participants:
+    get:
+      summary: VNC 参加者一覧
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 参加者一覧 }
+
+  /api/vnc/sessions/{session_id}/participants/{user_id}:
+    delete:
+      summary: VNC 参加者をキック（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: キック完了 }
+
+  /api/rdp/sessions/{session_id}/invitation-options:
+    get:
+      summary: ブラウザ RDP 招待候補（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: ユーザー・タグ・グループ候補 }
+
+  /api/rdp/sessions/{session_id}/invitations:
+    get:
+      summary: ブラウザ RDP 招待一覧（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 招待一覧 }
+    post:
+      summary: ブラウザ RDP 招待を発行（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 発行された招待 }
+
+  /api/rdp/sessions/{session_id}/join:
+    post:
+      summary: ブラウザ RDP 共有セッションに参加
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 参加完了 }
+
+  /api/rdp/sessions/{session_id}/participants:
+    get:
+      summary: ブラウザ RDP 参加者一覧
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 参加者一覧 }
+
+  /api/rdp/sessions/{session_id}/participants/{user_id}:
+    delete:
+      summary: ブラウザ RDP 参加者をキック（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: キック完了 }
 
   /api/terminal/sessions/{session_id}/write-requests:
     post:

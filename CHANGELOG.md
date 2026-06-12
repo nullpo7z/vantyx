@@ -10,6 +10,13 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
 
 ### Security
 
+- Add: centralized `SecurityHeadersMiddleware` on all HTTP routes — CSP,
+  Permissions-Policy, COOP, CORP, COEP (`unsafe-none` for noVNC/wasm),
+  Referrer-Policy, `Cache-Control: no-store`, and HSTS on HTTPS
+  (`internal/httpapi/security_headers.go`; replaces ad-hoc headers in
+  `cmd/vantyx-server/main.go`).
+- Add: OWASP ZAP wrapper scripts under `scripts/zap/` (baseline, authenticated
+  baseline, OpenAPI, full scan, session cookie login helper, rule overrides).
 - Fix: `force_password_change` now blocks `/ws/*` handshakes as well as
   `/api/*`, so initial-password rotation cannot be bypassed via terminal
   / RDP / VNC WebSockets (CWE-1188).
@@ -39,6 +46,9 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
 
 ### Added
 
+- Feature: collaborative session sharing for VNC and RDP — session list/join
+  APIs, invitation options, SSH CLI sharing commands, and web UI
+  (`sharing_ui.js`, terminal/VNC/RDP page integration).
 - Feature: each row in the issued-invitations table now offers
   **Show link** (reuses the URL from this browser when still valid),
   **Reissue** (POST `.../invitations/{id}/join-url` rotates the token),

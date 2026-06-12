@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+
+	"github.com/nullpo7z/vantyx/internal/session"
 )
 
 // Bridge holds the three child processes that form a single RDP-to-VNC session.
@@ -363,6 +365,7 @@ type Session struct {
 	CreatedAt  time.Time
 	lastSeen   time.Time
 	Bridge     *Bridge
+	AttachCh   chan session.AttachReq
 }
 
 // Manager tracks active RDP-to-VNC bridges for cleanup and session management.
@@ -434,6 +437,7 @@ func (m *Manager) RegisterSession(key string, sessionID string, userID, targetID
 		CreatedAt:  now,
 		lastSeen:   now,
 		Bridge:     b,
+		AttachCh:   make(chan session.AttachReq, 16),
 	}
 	m.bridges[key] = b
 	m.sessionsByID[sessionID] = s

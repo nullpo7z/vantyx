@@ -211,6 +211,70 @@ func TestBridgeSetWriterTransfersControl(t *testing.T) {
 	}
 }
 
+// TestBridgeDetachUser closes only the targeted user's connection.
+func TestBridgeDetachUser(t *testing.T) {
+	server, err := mock.NewSSHEchoServer("test", "test")
+	if err != nil {
+		t.Fatalf("NewSSHEchoServer: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Close()
+
+	output := session.NewRingBuffer(8192)
+	attachCh := make(chan session.AttachReq, 4)
+	owner := newRecordingStreamAttach("owner")
+	viewer := newRecordingStreamAttach("viewer")
+
+	resultCh := make(chan BridgeController, 1)
+	sink := bridgeControlFunc(func(c BridgeController) { resultCh <- c })
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = RunBridgeDetachable(ctx, "session_ended: SSH session closed",
+			"127.0.0.1", server.Port(), "test", "test", "", "",
+			output, attachCh,
+			session.AttachReq{Conn: owner.toStreamAttach(), UserID: "alice", Mode: session.AttachModeWriter},
+			nil, nil, nil, 0, 0, nil,
+			WithBridgeControlSink(sink),
+		)
+	}()
+
+	select {
+	case <-owner.starter:
+	case <-time.After(2 * time.Second):
+		t.Fatal("owner attach not started")
+	}
+	attachCh <- session.AttachReq{Conn: viewer.toStreamAttach(), UserID: "bob", Mode: session.AttachModeViewer}
+	select {
+	case <-viewer.starter:
+	case <-time.After(2 * time.Second):
+		t.Fatal("viewer attach not started")
+	}
+
+	var ctrl BridgeController
+	select {
+	case ctrl = <-resultCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bridge controller not registered")
+	}
+
+	ctrl.DetachUser("bob")
+	deadline := time.After(2 * time.Second)
+	for !viewer.closed.Load() {
+		select {
+		case <-deadline:
+			t.Fatal("viewer connection not closed after DetachUser")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if owner.closed.Load() {
+		t.Fatal("owner connection must remain open")
+	}
+}
+
 // bridgeControlFunc is a tiny adapter that implements the
 // BridgeControlSink interface with a closure.
 type bridgeControlFunc func(BridgeController)

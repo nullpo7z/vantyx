@@ -226,3 +226,16 @@ func (m *Manager) ActiveIDs() []ID {
 	}
 	return ids
 }
+
+// ActiveSessionsForUser returns active sessions owned by userID (snapshot).
+func (m *Manager) ActiveSessionsForUser(userID string) []*Session {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]*Session, 0)
+	for _, s := range m.sessions {
+		if s.UserID == userID {
+			out = append(out, s)
+		}
+	}
+	return out
+}

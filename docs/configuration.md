@@ -26,6 +26,7 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 | `VANTYX_ALLOWED_HOSTS` | — | Comma-separated host allowlist for the HTTP redirector. Either this or `VANTYX_EXTERNAL_HOST` must be set. |
 | `VANTYX_CORS_ALLOWED_ORIGINS` | — | Comma-separated origins to mirror in CORS headers. When empty, no CORS headers are emitted. |
 | `VANTYX_DISABLE_ORIGIN_CHECK` | `0` | Set to `1` to skip the same-origin Origin/Referer check on cookie-authenticated mutations. **Never enable on production.** Automation / tests only. |
+| `VANTYX_DISABLE_SECURITY_HEADERS` | `0` | Set to `1` to omit CSP / X-Frame-Options / HSTS and related headers. **Tests only.** |
 | `VANTYX_TRUST_X_FORWARDED_FOR` | `0` | Set to `1` to honour `X-Forwarded-For` for the login rate limiter. |
 | `VANTYX_WS_ALLOWED_ORIGINS` | — | Comma-separated origins allowed to open WebSockets. Defaults to the request's own origin. |
 | `VANTYX_ALLOW_WS_NO_ORIGIN` | `0` | Set to `1` to permit WebSocket upgrades without an `Origin` header. Useful for local CLI tooling. |
@@ -37,6 +38,7 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 | `VANTYX_LOGIN_RATE_LIMIT_N` | `5` | Maximum failed logins per IP within a 15-minute window before `429` is returned. |
 | `VANTYX_TERMINAL_SESSION_IDLE_WARN_AFTER` | `30m` | Duration (Go duration syntax) before an idle terminal session is flagged. `0` disables idle warnings. |
 | `VANTYX_INVITATION_MAX_TTL_SECONDS` | `14400` | Maximum validity (`ttl_seconds`) for collaborative session invitations. Default TTL when omitted is 15 minutes. See [collaborative-sessions.md](collaborative-sessions.md). |
+| `VANTYX_REQUIRE_RECORDING_WITH_VIEWERS` | unset | When enabled (`1`, `true`, or `yes`), refuse collaborative invitations and joins unless `VANTYX_RECORDINGS_DIR` is set. |
 
 ## Storage
 

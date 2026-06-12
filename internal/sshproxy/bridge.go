@@ -505,6 +505,8 @@ type BridgeController interface {
 	// SetWriter promotes attached clients owned by userID to writer
 	// and demotes the rest. An empty userID demotes every client.
 	SetWriter(userID string)
+	// DetachUser closes every attached client owned by userID.
+	DetachUser(userID string)
 }
 
 // BridgeControlSink receives the controller exactly once when the

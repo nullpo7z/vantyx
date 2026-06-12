@@ -94,6 +94,9 @@ type App struct {
 	// participant at runtime.
 	SharingBridges *bridgeRegistry
 
+	// VNCSessionManager holds detachable VNC sessions for sharing.
+	VNCSessionManager *session.Manager
+
 	// videoRecordings tracks active RDP/VNC ffmpeg screen captures.
 	videoRecordings *videoRecordingRegistry
 
@@ -216,6 +219,7 @@ func NewApp() *App {
 	sshKeyStore := access.NewSQLiteSSHKeyStore(db, storeCfg, encKey)
 	credIdentityStore := access.NewSQLiteCredentialIdentityStore(db, sshKeyStore, storeCfg, encKey)
 	terminalSessions := session.NewManager()
+	vncSessions := session.NewManager()
 	applyTerminalSessionIdleWarn(terminalSessions)
 	rdpSessions := rdpvnc.NewManager()
 	applyRDPSessionIdleWarn(rdpSessions)
@@ -260,6 +264,7 @@ func NewApp() *App {
 		SSHKeyStore:             sshKeyStore,
 		CredentialIdentityStore: credIdentityStore,
 		TerminalSessionManager:  terminalSessions,
+		VNCSessionManager:       vncSessions,
 		LoginRateLimiter:        newLoginRateLimiter(),
 		DB:                      db,
 		RDPVNCManager:           rdpSessions,
@@ -316,6 +321,7 @@ func (a *App) NewRouter() http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(a.requestLog)
+	r.Use(SecurityHeadersMiddleware)
 	r.Use(maxBodyBytesMiddleware(2 << 20))
 	r.Use(csrfOriginMiddleware)
 	r.Use(a.sessionMiddleware)
@@ -414,9 +420,28 @@ func (a *App) NewRouter() http.Handler {
 	})
 	r.Get("/ws/ssh", a.handleSSHWebSocket)
 	r.Get("/ws/vnc", a.handleVNCWebSocket)
+	r.Route("/api/vnc/sessions", func(r chi.Router) {
+		r.Get("/", a.handleVNCSessions)
+		r.Get("/{session_id}/invitation-options", a.handleVNCInvitationOptions)
+		r.Post("/{session_id}/invitations", a.handleVNCCreateInvitation)
+		r.Get("/{session_id}/invitations", a.handleVNCListInvitations)
+		r.Delete("/{session_id}/invitations/{invitation_id}", a.handleVNCRevokeInvitation)
+		r.Post("/{session_id}/invitations/{invitation_id}/join-url", a.handleVNCRegenerateInvitationJoinURL)
+		r.Post("/{session_id}/join", a.handleVNCJoinSession)
+		r.Get("/{session_id}/participants", a.handleVNCListParticipants)
+		r.Delete("/{session_id}/participants/{user_id}", a.handleVNCKickParticipant)
+	})
 	r.Route("/api/rdp/sessions", func(r chi.Router) {
 		r.Get("/", a.handleRDPSessions)
 		r.Delete("/{session_id}", a.handleRDPSessionDelete)
+		r.Get("/{session_id}/invitation-options", a.handleRDPInvitationOptions)
+		r.Post("/{session_id}/invitations", a.handleRDPCreateInvitation)
+		r.Get("/{session_id}/invitations", a.handleRDPListInvitations)
+		r.Delete("/{session_id}/invitations/{invitation_id}", a.handleRDPRevokeInvitation)
+		r.Post("/{session_id}/invitations/{invitation_id}/join-url", a.handleRDPRegenerateInvitationJoinURL)
+		r.Post("/{session_id}/join", a.handleRDPJoinSession)
+		r.Get("/{session_id}/participants", a.handleRDPListParticipants)
+		r.Delete("/{session_id}/participants/{user_id}", a.handleRDPKickParticipant)
 	})
 	r.Get("/ws/rdp", a.handleRDPWebSocket)
 	r.Get("/ws/rdp/browser", a.handleRDPBrowserWebSocket)

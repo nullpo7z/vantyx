@@ -675,6 +675,16 @@ const API = {
     return res.json()
   },
 
+  /** 稼働中の直接 VNC セッション一覧（共有 UI の session_id 解決用）。 */
+  async vncSessions() {
+    const res = await fetch('/api/vnc/sessions', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load VNC sessions')
+    }
+    return res.json()
+  },
+
   /** RDP ブラウザセッションを終了する（再接続候補からも消す）。 */
   async rdpSessionDelete(sessionId) {
     const res = await fetch(`/api/rdp/sessions/${encodeURIComponent(sessionId)}`, {
@@ -1034,10 +1044,17 @@ const API = {
    * @param {string} sessionId
    * @param {{mode?: string, invitee_user_id?: string, ttl_seconds?: number}} options
    */
+  /** @param {'terminal'|'vnc'|'rdp'} kind */
+  sessionApiBase(kind = 'terminal') {
+    const k = (kind || 'terminal').toLowerCase()
+    if (k === 'vnc' || k === 'rdp') return `/api/${k}/sessions`
+    return '/api/terminal/sessions'
+  },
+
   /** 招待先のユーザー・グループ候補（セッションオーナー向け） */
-  async sessionInvitationOptions(sessionId) {
+  async sessionInvitationOptions(sessionId, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitation-options`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/invitation-options`,
       { credentials: 'include' },
     )
     if (!res.ok) {
@@ -1047,9 +1064,9 @@ const API = {
     return res.json()
   },
 
-  async createSessionInvitation(sessionId, options = {}) {
+  async createSessionInvitation(sessionId, options = {}, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitations`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/invitations`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1075,9 +1092,9 @@ const API = {
   },
 
   /** 共有セッションの招待一覧 */
-  async listSessionInvitations(sessionId) {
+  async listSessionInvitations(sessionId, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitations`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/invitations`,
       { credentials: 'include', cache: 'no-store' },
     )
     if (!res.ok) {
@@ -1088,9 +1105,9 @@ const API = {
   },
 
   /** 招待を取消する */
-  async revokeSessionInvitation(sessionId, invitationId) {
+  async revokeSessionInvitation(sessionId, invitationId, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitations/${encodeURIComponent(invitationId)}`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/invitations/${encodeURIComponent(invitationId)}`,
       { method: 'DELETE', credentials: 'include' },
     )
     if (!res.ok) {
@@ -1103,9 +1120,9 @@ const API = {
    * 有効な招待の参加 URL を再発行する（以前のリンクは無効）。
    * @returns {Promise<{ join_url: string, token?: string }>}
    */
-  async regenerateSessionInvitationJoinUrl(sessionId, invitationId) {
+  async regenerateSessionInvitationJoinUrl(sessionId, invitationId, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitations/${encodeURIComponent(invitationId)}/join-url`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/invitations/${encodeURIComponent(invitationId)}/join-url`,
       { method: 'POST', credentials: 'include' },
     )
     if (!res.ok) {
@@ -1115,20 +1132,29 @@ const API = {
     return res.json()
   },
 
-  /** 招待トークンまたは招待 ID で参加する */
+  /** 招待トークンまたは招待 ID で参加する（SSH/Telnet） */
   async joinSession(sessionId, { invitationToken, invitationId } = {}) {
+    return API._joinSession(`/api/terminal/sessions/${encodeURIComponent(sessionId)}/join`, { invitationToken, invitationId })
+  },
+
+  async joinVNCSession(sessionId, { invitationToken, invitationId } = {}) {
+    return API._joinSession(`/api/vnc/sessions/${encodeURIComponent(sessionId)}/join`, { invitationToken, invitationId })
+  },
+
+  async joinRDPSession(sessionId, { invitationToken, invitationId } = {}) {
+    return API._joinSession(`/api/rdp/sessions/${encodeURIComponent(sessionId)}/join`, { invitationToken, invitationId })
+  },
+
+  async _joinSession(url, { invitationToken, invitationId } = {}) {
     const body = {}
     if (invitationToken) body.invitation_token = invitationToken
     if (invitationId) body.invitation_id = invitationId
-    const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/join`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(body),
-      },
-    )
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
       throw new Error(err.message || 'Failed to join session')
@@ -1137,9 +1163,9 @@ const API = {
   },
 
   /** 参加者一覧と書込権限リクエスト一覧 */
-  async listSessionParticipants(sessionId) {
+  async listSessionParticipants(sessionId, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/participants`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/participants`,
       { credentials: 'include' },
     )
     if (!res.ok) {
@@ -1150,9 +1176,9 @@ const API = {
   },
 
   /** 参加者をキックする（オーナー専用） */
-  async kickSessionParticipant(sessionId, userId) {
+  async kickSessionParticipant(sessionId, userId, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/participants/${encodeURIComponent(userId)}`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/participants/${encodeURIComponent(userId)}`,
       { method: 'DELETE', credentials: 'include' },
     )
     if (!res.ok) {

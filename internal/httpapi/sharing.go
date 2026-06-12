@@ -46,6 +46,23 @@ func getEnv(k string) string {
 	return strings.TrimSpace(envLookup(k))
 }
 
+func requireRecordingWithViewers() bool {
+	v := strings.TrimSpace(os.Getenv("VANTYX_REQUIRE_RECORDING_WITH_VIEWERS"))
+	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+}
+
+func terminalSessionRecordingEnabled() bool {
+	return strings.TrimSpace(os.Getenv("VANTYX_RECORDINGS_DIR")) != ""
+}
+
+func sharingRecordingRequired(w http.ResponseWriter, r *http.Request) bool {
+	if !requireRecordingWithViewers() || terminalSessionRecordingEnabled() {
+		return false
+	}
+	writeJSONErrorKey(w, r, "sharing.recordingRequiredWithViewers", http.StatusForbidden)
+	return true
+}
+
 // sharingResponseInvitation is the JSON shape for an invitation row.
 // The plain token is only ever returned in [createSharingInvitation]'s
 // response body; subsequent reads expose just the metadata.
@@ -160,10 +177,26 @@ func (a *App) ensureRoomFor(termSess *session.Session) *sharing.Room {
 	return a.SharingRegistry.EnsureRoom(string(termSess.ID()), termSess.TargetID, owner, ownerName)
 }
 
+// disconnectSessionUser removes userID from the sharing room (if present),
+// detaches their live bridge connection, and syncs the write token.
+func (a *App) disconnectSessionUser(termSess *session.Session, room *sharing.Room, userID string) {
+	if room == nil || userID == "" {
+		return
+	}
+	_ = room.RemoveParticipant(userID)
+	if a.SharingBridges != nil {
+		if controller, ok := a.SharingBridges.Get(termSess.ID()); ok {
+			controller.DetachUser(userID)
+			controller.SetWriter(room.WriterID())
+		}
+	}
+}
+
 // handleCreateInvitation issues a new invitation. Body fields:
 //   - mode: "viewer" | "writer_eligible" (default viewer)
 //   - invitee_user_id: named invitation (select one user)
 //   - invite_tag: create one named invite per user with the tag who can access the target
+//   - invite_group_id: create one named invite per group member who can access the target
 //   - link_unlimited + link_max_uses: link invitation usage cap
 //     (single = 1, limited = N>1, unlimited = link_unlimited true)
 //   - ttl_seconds: optional; must fit the configured ceiling
@@ -177,10 +210,14 @@ func (a *App) handleCreateInvitation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if sharingRecordingRequired(w, r) {
+		return
+	}
 	var req struct {
 		Mode          string `json:"mode"`
 		InviteeUserID string `json:"invitee_user_id"`
 		InviteTag     string `json:"invite_tag"`
+		InviteGroupID string `json:"invite_group_id"`
 		TTLSeconds    int    `json:"ttl_seconds"`
 		LinkMaxUses   *int   `json:"link_max_uses"`
 		LinkUnlimited bool   `json:"link_unlimited"`
@@ -203,8 +240,21 @@ func (a *App) handleCreateInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 	invitee := strings.TrimSpace(req.InviteeUserID)
 	inviteTag := strings.TrimSpace(req.InviteTag)
+	inviteGroup := strings.TrimSpace(req.InviteGroupID)
 	if invitee != "" && inviteTag != "" {
 		writeJSONErrorKey(w, r, "sharing.inviteeOrTagOnly", http.StatusBadRequest)
+		return
+	}
+	if invitee != "" && inviteGroup != "" {
+		writeJSONErrorKey(w, r, "sharing.inviteeOrGroupOnly", http.StatusBadRequest)
+		return
+	}
+	if inviteTag != "" && inviteGroup != "" {
+		writeJSONErrorKey(w, r, "sharing.tagOrGroupOnly", http.StatusBadRequest)
+		return
+	}
+	if inviteGroup != "" {
+		a.handleCreateGroupInvitations(w, r, termSess, ownerID, inviteGroup, mode, ttl)
 		return
 	}
 	if inviteTag != "" {
@@ -311,9 +361,59 @@ func (a *App) handleCreateTagInvitations(w http.ResponseWriter, r *http.Request,
 	writeJSON(w, map[string]interface{}{"items": items, "created": len(items)})
 }
 
+func (a *App) handleCreateGroupInvitations(w http.ResponseWriter, r *http.Request, termSess *session.Session, ownerID, groupID string, mode sharing.Mode, ttl time.Duration) {
+	memberIDs, err := a.invitableUserIDsForGroup(r.Context(), ownerID, termSess.TargetID, groupID)
+	if err != nil {
+		if errors.Is(err, errInviteGroupInvalid) {
+			writeJSONErrorKey(w, r, "sharing.inviteGroupInvalid", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, errInviteGroupNotForTarget) {
+			writeJSONErrorKey(w, r, "sharing.inviteGroupNotForTarget", http.StatusBadRequest)
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	if len(memberIDs) == 0 {
+		writeJSON(w, map[string]interface{}{"items": []sharingResponseInvitation{}, "created": 0})
+		return
+	}
+	a.ensureRoomFor(termSess)
+	items := make([]sharingResponseInvitation, 0, len(memberIDs))
+	for _, uid := range memberIDs {
+		if uid == ownerID {
+			continue
+		}
+		inv, _, err := a.createInvitationRecord(r.Context(), termSess, ownerID, uid, groupID, "", mode, ttl, nil)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		audit("session_invitation_created", auditFields{
+			"user_id":    ownerID,
+			"session_id": string(termSess.ID()),
+			"inv_id":     inv.ID,
+			"mode":       string(inv.Mode),
+			"is_link":    false,
+			"invitee":    uid,
+			"group":      groupID,
+		})
+		a.publishInvitationEventToInvitee(uid, sharing.EventInvitationReceived, inv)
+		out := encodeInvitation(inv, a.usernameFor(r.Context(), uid))
+		items = append(items, out)
+	}
+	a.publishSharingEvent(termSess, sharing.EventInvitationCreated, ownerID, "", map[string]interface{}{
+		"created": len(items),
+	})
+	writeJSON(w, map[string]interface{}{"items": items, "created": len(items)})
+}
+
 var (
-	errInviteTagInvalid      = errors.New("invite tag invalid")
-	errInviteTagNotForTarget = errors.New("tag does not grant access to target")
+	errInviteTagInvalid       = errors.New("invite tag invalid")
+	errInviteTagNotForTarget  = errors.New("tag does not grant access to target")
+	errInviteGroupInvalid     = errors.New("invite group invalid")
+	errInviteGroupNotForTarget = errors.New("group does not contain target")
 )
 
 func parseLinkMaxUses(linkUnlimited bool, maxUses *int) (*int, error) {
@@ -420,6 +520,70 @@ func (a *App) invitableUserIDsForTag(ctx context.Context, targetID, tag string) 
 	return out, nil
 }
 
+func (a *App) ownerBelongsToGroup(ctx context.Context, ownerID, groupID string) bool {
+	if a.AccessGroupStore == nil || ownerID == "" || groupID == "" {
+		return false
+	}
+	gids, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(ownerID), nil)
+	if err != nil {
+		return false
+	}
+	for _, g := range gids {
+		if string(g) == groupID {
+			return true
+		}
+	}
+	return false
+}
+
+// invitableUserIDsForGroup returns group members who can access targetID.
+// ownerID must belong to the group (same rule as invitation-options UI).
+func (a *App) invitableUserIDsForGroup(ctx context.Context, ownerID, targetID, groupID string) ([]string, error) {
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" {
+		return nil, errInviteGroupInvalid
+	}
+	if a.AccessGroupStore == nil {
+		return nil, errInviteGroupInvalid
+	}
+	gid := access.GroupID(groupID)
+	if _, err := a.AccessGroupStore.Get(ctx, gid); err != nil {
+		return nil, errInviteGroupInvalid
+	}
+	if !a.ownerBelongsToGroup(ctx, ownerID, groupID) {
+		return nil, errInviteGroupInvalid
+	}
+	targetIDs, err := a.AccessGroupStore.TargetIDsForGroup(ctx, gid, nil)
+	if err != nil {
+		return nil, err
+	}
+	targetOK := false
+	for _, tid := range targetIDs {
+		if string(tid) == targetID {
+			targetOK = true
+			break
+		}
+	}
+	if !targetOK {
+		return nil, errInviteGroupNotForTarget
+	}
+	userIDs, err := a.AccessGroupStore.UserIDsForGroup(ctx, gid, &access.ListOpts{Limit: 1000})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(userIDs))
+	for _, uid := range userIDs {
+		ok, err := a.userCanAccessTarget(ctx, string(uid), access.TargetID(targetID))
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out = append(out, string(uid))
+		}
+	}
+	return out, nil
+}
+
 func (a *App) tagsGrantingTargetAccess(ctx context.Context, targetID string) ([]string, error) {
 	if a.AccessGroupStore == nil || targetID == "" {
 		return nil, nil
@@ -430,6 +594,12 @@ func (a *App) tagsGrantingTargetAccess(ctx context.Context, targetID string) ([]
 // invitationOptionsTag is a tag that grants access to the session target.
 type invitationOptionsTag struct {
 	Tag       string `json:"tag"`
+	UserCount int    `json:"user_count"`
+}
+
+type invitationOptionsGroup struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
 	UserCount int    `json:"user_count"`
 }
 
@@ -518,6 +688,60 @@ func (a *App) invitationMember(ctx context.Context, uid string, seen map[string]
 	return m
 }
 
+// collectInvitationGroups lists access groups containing the target with invitable member counts.
+func (a *App) collectInvitationGroups(ctx context.Context, ownerID, targetID string) ([]invitationOptionsGroup, error) {
+	if a.AccessGroupStore == nil || targetID == "" {
+		return nil, nil
+	}
+	groupIDs, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(ownerID), &access.ListOpts{Limit: 1000})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]invitationOptionsGroup, 0)
+	for _, gid := range groupIDs {
+		targetIDs, err := a.AccessGroupStore.TargetIDsForGroup(ctx, gid, nil)
+		if err != nil {
+			continue
+		}
+		found := false
+		for _, tid := range targetIDs {
+			if string(tid) == targetID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			continue
+		}
+		members, err := a.invitableUserIDsForGroup(ctx, ownerID, targetID, string(gid))
+		if err != nil {
+			continue
+		}
+		count := 0
+		for _, uid := range members {
+			if uid != ownerID {
+				count++
+			}
+		}
+		name := string(gid)
+		if g, err := a.AccessGroupStore.Get(ctx, gid); err == nil && g != nil && g.Name != "" {
+			name = g.Name
+		}
+		out = append(out, invitationOptionsGroup{
+			ID:        string(gid),
+			Name:      name,
+			UserCount: count,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name == out[j].Name {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
 // handleInvitationOptions lists groups and users the session owner can invite.
 func (a *App) handleInvitationOptions(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "session_id")
@@ -530,15 +754,24 @@ func (a *App) handleInvitationOptions(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, err)
 		return
 	}
+	groups, err := a.collectInvitationGroups(r.Context(), ownerID, termSess.TargetID)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
 	if tags == nil {
 		tags = []invitationOptionsTag{}
 	}
 	if users == nil {
 		users = []invitationOptionsMember{}
 	}
+	if groups == nil {
+		groups = []invitationOptionsGroup{}
+	}
 	writeJSON(w, map[string]interface{}{
-		"tags":  tags,
-		"users": users,
+		"tags":   tags,
+		"users":  users,
+		"groups": groups,
 	})
 }
 
@@ -654,6 +887,16 @@ func (a *App) handleRevokeInvitation(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, err)
 		return
 	}
+	room, _ := a.SharingRegistry.Get(string(termSess.ID()))
+	if room != nil {
+		for _, uid := range room.ParticipantUserIDsForInvitation(invID) {
+			a.disconnectSessionUser(termSess, room, uid)
+			a.publishSharingEvent(termSess, sharing.EventParticipantLeft, uid, "", map[string]interface{}{
+				"reason":        "invitation_revoked",
+				"invitation_id": invID,
+			})
+		}
+	}
 	audit("session_invitation_revoked", auditFields{
 		"user_id":    ownerID,
 		"session_id": string(termSess.ID()),
@@ -751,32 +994,24 @@ func (a *App) handleJoinSession(w http.ResponseWriter, r *http.Request) {
 		writeJSONErrorKey(w, r, "sessions.notFoundOrAccessDenied", http.StatusNotFound)
 		return
 	}
-	var body struct {
-		InvitationID    string `json:"invitation_id"`
-		InvitationToken string `json:"invitation_token"`
+	if sharingRecordingRequired(w, r) {
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	body, err := decodeJoinInvitationBody(r)
+	if err != nil {
 		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
 		return
 	}
-	body.InvitationID = strings.TrimSpace(body.InvitationID)
-	body.InvitationToken = strings.TrimSpace(body.InvitationToken)
 	if body.InvitationID == "" && body.InvitationToken == "" {
 		writeJSONErrorKey(w, r, "sharing.tokenOrIDRequired", http.StatusBadRequest)
 		return
 	}
-	var inv sharing.Invitation
-	var lookupErr error
-	if body.InvitationToken != "" {
-		inv, lookupErr = a.SharingStore.GetByTokenHash(r.Context(), sharing.HashToken(body.InvitationToken))
-	} else if body.InvitationID != "" {
-		inv, _, lookupErr = a.SharingStore.GetByID(r.Context(), body.InvitationID)
-		if lookupErr == nil && inv.IsLink() {
+	inv, lookupErr := a.lookupJoinInvitation(r.Context(), body)
+	if lookupErr != nil {
+		if errors.Is(lookupErr, errSharingLinkTokenRequired) {
 			writeJSONErrorKey(w, r, "sharing.linkTokenRequired", http.StatusBadRequest)
 			return
 		}
-	}
-	if lookupErr != nil {
 		if errors.Is(lookupErr, sharing.ErrInvitationNotFound) {
 			writeJSONErrorKey(w, r, "sharing.invitationNotFound", http.StatusNotFound)
 			return
@@ -784,45 +1019,10 @@ func (a *App) handleJoinSession(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, lookupErr)
 		return
 	}
-	if inv.SessionID != string(termSess.ID()) {
-		writeJSONErrorKey(w, r, "sharing.invitationNotFound", http.StatusNotFound)
+	if !a.validateJoinInvitation(w, r, inv, userID, string(termSess.ID()), sharing.KindTerminal) {
 		return
 	}
 	now := time.Now().UTC()
-	if !inv.Active(now) {
-		writeJSONErrorKey(w, r, "sharing.invitationInactive", http.StatusForbidden)
-		return
-	}
-	// Named invitations bind to a specific user.
-	if !inv.IsLink() && !strings.EqualFold(inv.InviteeUserID, userID) {
-		writeJSONErrorKey(w, r, "sharing.invitationOtherUser", http.StatusForbidden)
-		return
-	}
-	// Owners cannot consume their own invitation; they are already in.
-	if userID == inv.OwnerUserID {
-		writeJSONErrorKey(w, r, "sharing.cannotInviteSelf", http.StatusBadRequest)
-		return
-	}
-	// Re-confirm the inviter is still allowed to share that target;
-	// if access was revoked between issue and consumption the
-	// invitation must fail closed.
-	if ok, err := a.userCanAccessTarget(r.Context(), inv.OwnerUserID, access.TargetID(inv.TargetID)); err != nil {
-		writeInternalError(w, err)
-		return
-	} else if !ok {
-		writeJSONErrorKey(w, r, "sharing.invitationStaleAccess", http.StatusForbidden)
-		return
-	}
-	// Also confirm the *joining* user still has access to the target.
-	// Without this check, a link invitation can be shared outside the
-	// target's ACL and grant unintended read access to sensitive output.
-	if ok, err := a.userCanAccessTarget(r.Context(), userID, access.TargetID(inv.TargetID)); err != nil {
-		writeInternalError(w, err)
-		return
-	} else if !ok {
-		writeJSONErrorKey(w, r, "sharing.inviteeNoTargetAccess", http.StatusForbidden)
-		return
-	}
 	if err := a.SharingStore.RecordUse(r.Context(), inv.ID, userID, now); err != nil {
 		if errors.Is(err, sharing.ErrInvitationConsumed) {
 			writeJSONErrorKey(w, r, "sharing.invitationInactive", http.StatusForbidden)
@@ -850,7 +1050,7 @@ func (a *App) handleJoinSession(w http.ResponseWriter, r *http.Request) {
 			writeJSONErrorKey(w, r, "sharing.userKicked", http.StatusForbidden)
 			return
 		}
-		if err := room.AddViewer(userID, username, now); err != nil {
+		if err := room.AddViewer(userID, username, inv.ID, now); err != nil {
 			if errors.Is(err, sharing.ErrUserKicked) {
 				writeJSONErrorKey(w, r, "sharing.userKicked", http.StatusForbidden)
 				return
@@ -979,6 +1179,7 @@ func (a *App) handleKickParticipant(w http.ResponseWriter, r *http.Request) {
 	}
 	if a.SharingBridges != nil {
 		if controller, ok := a.SharingBridges.Get(termSess.ID()); ok {
+			controller.DetachUser(target)
 			controller.SetWriter(room.WriterID())
 		}
 	}
@@ -1316,10 +1517,6 @@ func timestamp(t time.Time) int64 {
 		return 0
 	}
 	return t.Unix()
-}
-
-func invitationJoinURL(sessionID, plainToken string) string {
-	return "/terminal?session_id=" + sessionID + "&mode=viewer&invite=" + plainToken
 }
 
 // newSharingID returns a short, URL-safe random ID used for

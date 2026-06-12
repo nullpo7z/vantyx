@@ -27,6 +27,7 @@ type resizeMsg struct {
 // participants the same way for Telnet sessions.
 type BridgeController interface {
 	SetWriter(userID string)
+	DetachUser(userID string)
 }
 
 // BridgeControlSink receives the controller exactly once when the

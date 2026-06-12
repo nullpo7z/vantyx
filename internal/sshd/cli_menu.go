@@ -27,7 +27,7 @@ import (
 
 // cliCommands is the list of recognised top-level commands at the
 // vantyx:/ prompt. It powers Tab completion in [runMenu].
-var cliCommands = []string{"list", "ls", "cd", "pwd", "connect", "resume", "sessions", "help", "exit", "quit"}
+var cliCommands = []string{"list", "ls", "cd", "pwd", "connect", "resume", "sessions", "join", "watch", "help", "exit", "quit"}
 
 // helpLines returns the help text shown when the user types "help".
 func helpLines() []string {
@@ -44,6 +44,8 @@ func helpLines() []string {
 		"  ls                 Reload and refresh header",
 		"  list               Show active sessions below header",
 		"  resume [n]         Attach to background session",
+		"  join [token]       Join shared session (invitation token)",
+		"  watch [n]          View-only attach to joined session",
 		"  sessions           Same as list (active sessions)",
 		"  In a session: Ctrl+] detach to menu; Ctrl+D end (connect only)",
 		"  help | exit",
@@ -257,7 +259,14 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 			continue
 		case "resume":
 			drainResize()
-			pendingExtra = s.handleResumeCommand(ctx, wr, inputCh, args, activeSessionsForScope(), cliSessionMgr, screenCols, screenRows, resizeChan)
+			pendingExtra = s.handleResumeCommand(ctx, wr, inputCh, args, activeSessionsForScope(), cliSessionMgr, userID, screenCols, screenRows, resizeChan)
+			continue
+		case "join":
+			pendingExtra = s.handleJoinCommand(wr, inputCh, args, userID, readLine, prompt)
+			continue
+		case "watch":
+			drainResize()
+			pendingExtra = s.handleWatchCommand(wr, inputCh, args, userID, screenCols, screenRows, resizeChan)
 			continue
 		case "connect":
 			drainResize()
@@ -378,7 +387,7 @@ func newCLILineReader(wr io.Writer, inputCh <-chan byte) func(echo bool, promptF
 // screenCols and screenRows are the latest known terminal dimensions
 // from runMenu (updated from window-change). prepareCLIFrame uses both
 // so the resumed session honors the user's real terminal size.
-func (s *Server) handleResumeCommand(ctx context.Context, wr io.Writer, inputCh <-chan byte, args []string, activeSessions []*session.Session, cliSessionMgr *session.Manager, screenCols, screenRows int, resizeChan <-chan sshproxy.TerminalSize) []string {
+func (s *Server) handleResumeCommand(ctx context.Context, wr io.Writer, inputCh <-chan byte, args []string, activeSessions []*session.Session, cliSessionMgr *session.Manager, userID string, screenCols, screenRows int, resizeChan <-chan sshproxy.TerminalSize) []string {
 	var status []string
 	add := func(s string) { status = append(status, s) }
 
@@ -419,7 +428,7 @@ func (s *Server) handleResumeCommand(ctx context.Context, wr io.Writer, inputCh 
 	defer func() { _ = frame.Leave() }()
 	streamAttach := s.newCLIStreamAttach(resumeProto, frame.SessionWriter(), inputCh, resumeStopCh, &resumeReadStarted, resumeDone, nil, cliStreamAttachOpts{detachOnCtrlBracket: true}, nil)
 	select {
-	case termSess.AttachCh <- session.AttachReq{Conn: streamAttach}:
+	case termSess.AttachCh <- session.AttachReq{Conn: streamAttach, UserID: userID, Mode: session.AttachModeWriter}:
 		select {
 		case bridgeResize <- sshproxy.TerminalSize{Cols: frame.SessionCols(), Rows: frame.SessionRows()}:
 		default:
@@ -653,6 +662,10 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 				}()
 			}
 		}
+		if s.sharingRegistry != nil {
+			s.sharingRegistry.EnsureRoom(string(sessionID), string(target.ID), userID, userID)
+		}
+		ownerAttach := session.AttachReq{Conn: streamAttach, UserID: userID, Mode: session.AttachModeWriter}
 		switch target.Protocol {
 		case access.ProtocolTelnet:
 			endMsg := "session_ended: Telnet session closed"
@@ -660,14 +673,21 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 			if stdinRecorder != nil {
 				telStdin = telnetproxy.StdinRecorderFunc(stdinRecorder.RecordInput)
 			}
-			bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, endMsg, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, streamAttach, touch, tee, telStdin, sessionCols, sessionRows, bridgeResize, nil)
+			var sink telnetproxy.BridgeControlSink
+			if s.sharingBridges != nil {
+				sink = telnetBridgeSinkCLI{id: sessionID, reg: s.sharingBridges}
+			}
+			bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, endMsg, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, ownerAttach, touch, tee, telStdin, sessionCols, sessionRows, bridgeResize, sink)
 		default:
 			endMsg := "session_ended: SSH session closed"
 			opts := []sshproxy.BridgeOption{sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint)}
 			if target.SSHHostKeyInsecureSkipVerify {
 				opts = append(opts, sshproxy.WithTargetInsecureSkipVerify())
 			}
-			bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, endMsg, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, streamAttach, touch, tee, stdinRecorder, sessionCols, sessionRows, bridgeResize, opts...)
+			if s.sharingBridges != nil {
+				opts = append(opts, sshproxy.WithBridgeControlSink(sshBridgeSink{id: sessionID, reg: s.sharingBridges}))
+			}
+			bridgeErr = sshproxy.RunBridgeDetachable(bridgeCtx, endMsg, target.Host, target.Port, targetUser, targetPass, target.SSHPrivateKey, target.SSHPrivateKeyPassphrase, sess.Output, sess.AttachCh, ownerAttach, touch, tee, stdinRecorder, sessionCols, sessionRows, bridgeResize, opts...)
 		}
 	})
 	if err != nil {

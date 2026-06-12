@@ -26,13 +26,9 @@ func (m *mockBridgeController) DetachUser(userID string) {
 func setupSharingTerminalFixtures(t *testing.T) (*App, session.ID, string, string) {
 	t.Helper()
 	app := newTestAppForTerminal(t)
-	ctx := context.Background()
-	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	seedAdminDemoSSHTarget(t, app)
 	_, _ = app.UserStore.CreateUser("bob", "bob", "Bob12345!", "")
-	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("bob"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
-	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
+	_ = app.AccessGroupStore.AddUserToGroup(context.Background(), access.UserID("bob"), access.GroupID("g1"))
 
 	mgr, ok := app.TerminalSessionManager.(*session.Manager)
 	if !ok {

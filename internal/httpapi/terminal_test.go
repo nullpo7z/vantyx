@@ -500,22 +500,17 @@ func TestHandleSSHWebSocket_StartFailsReturns500(t *testing.T) {
 	app.TerminalSessionManager = startFailingStub{}
 	router := app.NewRouter()
 
-	ctx := context.Background()
-	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
-	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
+	seedAdminDemoSSHTarget(t, app)
 
-	httpSess, _ := app.SessionStore.Create("admin")
+	httpSess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
 
-	srv := httptest.NewServer(router)
-	defer srv.Close()
-	defer srv.CloseClientConnections()
+	srv := startTestWSServer(t, router)
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
-	header := http.Header{}
-	header.Set("Origin", "http://"+srv.Listener.Addr().String())
-	header.Add("Cookie", (&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"}).String())
+	header := wsDialHeaders(t, srv, httpSess.ID)
 
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)
 	if err != nil {
@@ -528,8 +523,6 @@ func TestHandleSSHWebSocket_StartFailsReturns500(t *testing.T) {
 	// After Start fails, server closes connection
 	_ = conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 	_, _, _ = conn.ReadMessage()
-	_ = conn.Close()
-	srv.CloseClientConnections()
 
 	// Allow server-side goroutines to unwind before TempDir cleanup.
 	time.Sleep(50 * time.Millisecond)
@@ -539,11 +532,7 @@ func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {
 	app := newTestAppForTerminal(t)
 	router := app.NewRouter()
 
-	ctx := context.Background()
-	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
-	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
-	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
+	seedAdminDemoSSHTarget(t, app)
 
 	httpSess, err := app.SessionStore.Create("admin")
 	if err != nil {
@@ -552,17 +541,12 @@ func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {
 
 	// Force same session ID for both connections so second Start returns ErrSessionExists
 	const fixedID = "test-fixed-id"
-	terminalSessionIDGen = func() session.ID { return fixedID }
-	defer func() { terminalSessionIDGen = nil }()
+	withTerminalSessionIDGen(t, func() session.ID { return fixedID })
 
-	srv := httptest.NewServer(router)
-	defer srv.Close()
-	defer srv.CloseClientConnections()
+	srv := startTestWSServer(t, router)
 
 	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
-	header := http.Header{}
-	header.Set("Origin", "http://"+srv.Listener.Addr().String())
-	header.Add("Cookie", (&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"}).String())
+	header := wsDialHeaders(t, srv, httpSess.ID)
 
 	// First connection: start and block in RunBridge
 	conn1, _, err := websocket.DefaultDialer.Dial(u.String(), header)
@@ -605,7 +589,6 @@ func TestHandleSSHWebSocket_StartFailsDuplicateID(t *testing.T) {
 	_ = conn2.Close()
 	// Ensure background session/bridge goroutines are stopped before DB/tempdir cleanup.
 	app.TerminalSessionManager.Stop(session.ID(fixedID))
-	srv.CloseClientConnections()
 }
 
 // TestHandleTerminalSessions_ListEmpty covers handleTerminalSessions and writeJSON (empty list).

@@ -1151,6 +1151,7 @@ func (a *App) handleListParticipants(w http.ResponseWriter, r *http.Request) {
 		"writer_username":  writerName,
 		"owner_id":         termSess.UserID,
 		"pending_requests": pending,
+		"kicked":           kickedUserIDs(room),
 	}
 	writeJSON(w, resp)
 }

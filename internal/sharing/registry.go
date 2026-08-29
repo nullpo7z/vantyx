@@ -175,6 +175,20 @@ func (r *Room) Unkick(userID string) bool {
 	return true
 }
 
+// KickedUserIDs returns the users currently blocked from rejoining,
+// sorted for stable output. Used by the owner's participants UI to offer
+// "allow rejoin".
+func (r *Room) KickedUserIDs() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.kicked))
+	for id := range r.kicked {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // AddViewer records that userID has joined the room as a viewer.
 // Re-adding an existing participant updates the username only.
 func (r *Room) AddViewer(userID, username, invitationID string, now time.Time) error {

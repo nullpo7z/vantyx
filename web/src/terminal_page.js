@@ -13,6 +13,7 @@ import { classifyTerminalWsFrameSync } from './terminal_ws_protocol.js'
 import { createHostKeyDialogController } from './host_key_dialog.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
 import { setupTerminalKeyboard } from './xterm_input.js'
+import { refreshParticipantsDialog } from './participants_dialog.js'
 import { isSameOriginBroadcast } from './dom_helpers.js'
 
 function escapeHtml(s) {
@@ -65,6 +66,9 @@ export function renderTerminalPage(container) {
   let pendingWriteRequestApproval = null
   let myPendingWriteRequest = false
   let cachedParticipants = []
+  // User IDs the owner removed and who are blocked from rejoining until
+  // "Allow rejoin" (or a new named invitation) lifts the block.
+  let cachedKicked = []
   let stopSharingWatch = null
   let sharingEventsSessionId = ''
 
@@ -83,6 +87,7 @@ export function renderTerminalPage(container) {
             </div>
           </div>
           <div class="vantyx-header-end">
+            <button id="term-participants-manage" type="button" class="vantyx-page-btn hidden" title="${escapeHtml(t('sharing.participantsTitle'))}">${t('terminal.actionParticipants')} (0)</button>
             <button id="term-invite-manage" type="button" class="vantyx-page-btn hidden" title="${escapeHtml(t('sharing.inviteTitle'))}">${t('terminal.inviteManage')}</button>
             <button id="term-back" type="button" class="vantyx-page-btn">${t('terminal.back')}</button>
             <button id="term-close" type="button" class="vantyx-page-btn">${t('terminal.endSessionBtn')}</button>
@@ -152,6 +157,7 @@ export function renderTerminalPage(container) {
   const closeBtn = container.querySelector('#term-close')
   const backBtn = container.querySelector('#term-back')
   const inviteManageBtn = container.querySelector('#term-invite-manage')
+  const participantsManageBtn = container.querySelector('#term-participants-manage')
   const cancelBtn = container.querySelector('#term-cancel')
   const connectBtn = container.querySelector('#term-connect')
   const errorEl = container.querySelector('#term-error')
@@ -397,6 +403,10 @@ export function renderTerminalPage(container) {
     const show = !!currentSessionId && sharingMode !== 'viewer'
     inviteManageBtn.classList.toggle('hidden', !show)
     inviteManageBtn.disabled = !show
+    if (participantsManageBtn) {
+      participantsManageBtn.classList.toggle('hidden', !show)
+      participantsManageBtn.disabled = !show
+    }
   }
 
   function setCurrentSessionId(v) {
@@ -510,6 +520,21 @@ export function renderTerminalPage(container) {
       if (!sid || sharingMode === 'viewer') return
       const { openInviteDialog } = await import('./invite_dialog.js')
       openInviteDialog({ sessionId: sid, targetName, escapeHtml })
+    })
+  }
+  if (participantsManageBtn) {
+    participantsManageBtn.addEventListener('click', async () => {
+      const sid = currentSessionId
+      if (!sid || sharingMode === 'viewer') return
+      const { openParticipantsDialog } = await import('./participants_dialog.js')
+      openParticipantsDialog({
+        sessionId: sid,
+        targetName,
+        escapeHtml,
+        getState: () => ({ participants: cachedParticipants, kicked: cachedKicked }),
+        onKick: (uid, name) => kickParticipant(sid, uid, name),
+        onAllowRejoin: (uid) => allowRejoin(sid, uid),
+      })
     })
   }
   syncInviteManageButton()
@@ -1414,6 +1439,7 @@ export function renderTerminalPage(container) {
       writerDisplayName = res?.writer_username || writer?.username || writer?.user_id || ''
 
       cachedParticipants = Array.isArray(res?.items) ? res.items : []
+      cachedKicked = Array.isArray(res?.kicked) ? res.kicked : []
       const pending = Array.isArray(res?.pending_requests) ? res.pending_requests : []
       myPendingWriteRequest = pending.some(
         (wr) => wr && wr.status === 'pending' && myUserId && wr.requester_id === myUserId,
@@ -1482,59 +1508,34 @@ export function renderTerminalPage(container) {
     }
   }
 
+  // The participants list lives in a modal (participants_dialog.js) opened
+  // from the "Participants (N)" header button, so the terminal area no
+  // longer shrinks as viewers join (F-1). This just keeps the button's
+  // count current and re-renders the dialog if it is open.
   function renderParticipantsPanel(sessionId) {
     const root = container.querySelector('.terminal-page-root')
     if (!root || !sessionId) return
+    // Drop any legacy inline panel left over from an older bundle.
+    root.querySelector('#sharing-participants-panel')?.remove()
     const isOwner = !!(sessionOwnerId && myUserId && myUserId === sessionOwnerId)
-    let panel = root.querySelector('#sharing-participants-panel')
-    if (!isOwner) {
-      panel?.remove()
-      return
+    if (participantsManageBtn) {
+      const viewers = cachedParticipants.filter((p) => p && p.role === 'viewer')
+      participantsManageBtn.textContent = `${t('terminal.actionParticipants')} (${viewers.length})`
+      const show = isOwner && !!currentSessionId && sharingMode !== 'viewer'
+      participantsManageBtn.classList.toggle('hidden', !show)
+      participantsManageBtn.disabled = !show
     }
-    const viewers = cachedParticipants.filter((p) => p && p.role === 'viewer')
-    if (!panel) {
-      panel = document.createElement('div')
-      panel.id = 'sharing-participants-panel'
-      panel.className = 'shrink-0 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs'
-      const banner = root.querySelector('#sharing-status-banner')
-      if (banner) banner.insertAdjacentElement('afterend', panel)
-      else {
-        const header = root.querySelector('header')
-        if (header) header.insertAdjacentElement('afterend', panel)
-      }
+    refreshParticipantsDialog()
+  }
+
+  async function allowRejoin(sessionId, userId) {
+    if (!sessionId || !userId) return
+    try {
+      await API.allowSessionRejoin(sessionId, userId)
+      await refreshParticipants(sessionId)
+    } catch (err) {
+      await uiAlert(t('sharing.allowRejoinFailed', { error: err?.message || String(err) }))
     }
-    if (viewers.length === 0) {
-      panel.innerHTML = `<div class="text-slate-600"><span class="font-semibold text-slate-800">${escapeHtml(t('sharing.participantsTitle'))}</span> — ${escapeHtml(t('sharing.participantsEmpty'))}</div>`
-      return
-    }
-    const rows = viewers
-      .map((p) => {
-        const label = escapeHtml(p.username || p.user_id || '')
-        const status = p.is_writer ? t('sharing.roleWriter') : t('sharing.roleViewer')
-        return `<tr>
-          <td class="py-1 pr-3">${label}</td>
-          <td class="py-1 pr-3 text-slate-600">${escapeHtml(status)}</td>
-          <td class="py-1 text-right">
-            <button type="button" class="sharing-kick-btn rounded border border-red-300 bg-white px-2 py-0.5 text-red-700 hover:bg-red-50" data-user-id="${escapeHtml(p.user_id)}">${escapeHtml(t('sharing.kick'))}</button>
-          </td>
-        </tr>`
-      })
-      .join('')
-    panel.innerHTML = `
-      <div class="font-semibold text-slate-800 mb-1">${escapeHtml(t('sharing.participantsTitle'))}</div>
-      <table class="w-full max-w-lg"><thead><tr class="text-left text-slate-500">
-        <th class="pb-1 pr-3">${escapeHtml(t('sharing.headerUsername'))}</th>
-        <th class="pb-1 pr-3">${escapeHtml(t('sharing.headerStatus'))}</th>
-        <th class="pb-1 text-right">${escapeHtml(t('sharing.headerActions'))}</th>
-      </tr></thead><tbody>${rows}</tbody></table>
-    `
-    panel.querySelectorAll('.sharing-kick-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const uid = btn.getAttribute('data-user-id')
-        const p = viewers.find((v) => v.user_id === uid)
-        void kickParticipant(sessionId, uid, p?.username || uid)
-      })
-    })
   }
 
   function clearWriteRequestApproval() {

@@ -256,6 +256,7 @@ func (a *App) writeListParticipants(w http.ResponseWriter, meta *sharingSessionM
 		"writer_username":  writerName,
 		"owner_id":         meta.OwnerID,
 		"pending_requests": []sharingResponseWriteRequest{},
+		"kicked":           kickedUserIDs(room),
 	})
 }
 

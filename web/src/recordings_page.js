@@ -104,6 +104,11 @@ export async function renderRecordingsPage({
     // null = auto-fit (asciinema-player's default "fit" scaling); once the
     // user zooms in/out we switch to a fixed pixel size they control.
     let zoomPx = null
+    // Tracks whether the asciinema player is currently playing, so a
+    // zoom change (which has to dispose and re-create the player) can
+    // resume playback instead of dropping the user back to a paused
+    // poster every time they press +/−.
+    let playing = false
 
     function disposePlayer() {
       if (player && typeof player.dispose === 'function') {
@@ -116,17 +121,30 @@ export async function renderRecordingsPage({
       player = null
     }
 
-    function createPlayer(startAt) {
+    function createPlayer(startAt, autoPlay = false) {
       container.innerHTML = ''
       const opts = startAt ? { startAt } : {}
+      if (autoPlay) opts.autoPlay = true
       if (zoomPx != null) {
         opts.fit = false
         opts.terminalFontSize = `${zoomPx}px`
       }
+      playing = false
       try {
         player = AsciinemaPlayer.create(fileUrl, container, opts)
       } catch (err) {
         container.innerHTML = `<p class="text-sm text-red-400">${escapeHtml(t('recordings.loadingPlayer', { error: err.message || String(err) }))}</p>`
+        return
+      }
+      try {
+        // asciinema-player v3 event names: 'play' / 'playing' fire when
+        // playback (re)starts, 'pause' and 'ended' when it stops.
+        player.addEventListener('play', () => { playing = true })
+        player.addEventListener('playing', () => { playing = true })
+        player.addEventListener('pause', () => { playing = false })
+        player.addEventListener('ended', () => { playing = false })
+      } catch {
+        /* older player build without addEventListener — zoom just won't auto-resume */
       }
     }
 
@@ -142,6 +160,7 @@ export async function renderRecordingsPage({
         updateZoomLabel()
         return
       }
+      const resume = playing
       let startAt = 0
       try {
         startAt = (await player.getCurrentTime()) || 0
@@ -150,7 +169,7 @@ export async function renderRecordingsPage({
       }
       zoomPx = nextZoomPx
       disposePlayer()
-      createPlayer(startAt)
+      createPlayer(startAt, resume)
       updateZoomLabel()
     }
 

@@ -8,6 +8,7 @@ import {
 } from './file_transfer_manager.js'
 import { openTerminalForTarget } from './terminal_launch.js'
 import { t as tr } from './i18n.js'
+import { formatDateTime } from './datetime.js'
 import { uiConfirm } from './ui_dialog.js'
 
 function escapeHtml(s) {
@@ -232,7 +233,10 @@ export function renderFilesPage(container) {
       .map((e) => {
         const isDir = e.is_dir
         const size = isDir ? '—' : formatSize(e.size || 0)
-        const modTime = e.mod_time || '—'
+        // mod_time is an RFC3339 UTC timestamp from the server; render it
+        // in the viewer's configured timezone/locale like every other
+        // timestamp in the SPA instead of the raw ISO string.
+        const modTime = formatDateTime(e.mod_time, undefined, e.mod_time || '—')
         const pathNext = currentPath === '/' ? '/' + e.name : currentPath + '/' + e.name
         const icon = isDir ? iconFolder : iconFile
         const meta = isDir ? modTime : `${size} · ${modTime}`

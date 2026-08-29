@@ -4,6 +4,7 @@
  */
 
 import API from './api.js'
+import { formatDateTime } from './datetime.js'
 import { t } from './i18n.js'
 import { setActiveNav } from './nav.js'
 
@@ -24,6 +25,14 @@ export async function renderSystemSettingsPage(container) {
     <div class="w-full flex-1 flex flex-col">
       <h2 class="text-lg font-semibold text-slate-800">${t('settings.title')}</h2>
       <p class="mt-1 text-xs text-slate-500">${t('settings.intro')}</p>
+
+      <section class="mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div class="px-5 pt-4 pb-3 border-b border-slate-100">
+          <h3 class="text-sm font-semibold text-slate-800">${t('settings.sectionRetention')}</h3>
+          <p class="mt-0.5 text-xs text-slate-500">${t('settings.retentionHint')}</p>
+        </div>
+        <div id="retention-body" class="px-5 py-4 text-sm text-slate-500">${t('common.loading')}</div>
+      </section>
 
       <section class="mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="px-5 pt-4 pb-3 border-b border-slate-100">
@@ -67,6 +76,8 @@ export async function renderSystemSettingsPage(container) {
       </section>
     </div>
   `
+
+  renderRetention(container.querySelector('#retention-body'))
 
   const enabledEl = container.querySelector('#audit-fwd-enabled')
   const protoEl = container.querySelector('#audit-fwd-proto')
@@ -113,4 +124,61 @@ export async function renderSystemSettingsPage(container) {
   })
 
   await load()
+}
+
+function humanDuration(goDuration) {
+  if (!goDuration) return t('settings.retentionDisabled')
+  const m = /^(\d+)h/.exec(goDuration)
+  if (m) {
+    const h = Number(m[1])
+    if (h % 24 === 0) return t('settings.retentionDays', { n: h / 24 })
+    return t('settings.retentionHours', { n: h })
+  }
+  return goDuration
+}
+
+async function renderRetention(body) {
+  if (!body) return
+  let p
+  try {
+    p = await API.retentionGet()
+  } catch (e) {
+    body.innerHTML = `<p class="text-sm text-red-600">${esc(e?.message || e)}</p>`
+    return
+  }
+  const row = (label, val) => `<dt class="text-slate-500">${label}</dt><dd class="text-slate-800">${esc(humanDuration(val))}</dd>`
+  const last = p.last_run
+  body.innerHTML = `
+    <dl class="grid grid-cols-1 sm:grid-cols-[14rem_1fr] gap-x-4 gap-y-2 text-sm">
+      ${row(t('settings.retentionRecordings'), p.recordings)}
+      ${row(t('settings.retentionAudit'), p.audit)}
+      ${row(t('settings.retentionCommands'), p.command_logs)}
+      ${row(t('settings.retentionMemberships'), p.memberships_expired)}
+    </dl>
+    <p class="mt-3 text-xs text-slate-500">${t('settings.retentionEnvHint')}</p>
+    <div class="mt-3 flex flex-wrap items-center gap-3">
+      <button type="button" id="retention-run" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors disabled:opacity-50"${p.enabled ? '' : ' disabled'}>${t('settings.retentionRunNow')}</button>
+      <span id="retention-status" class="text-xs text-slate-600">${
+        last
+          ? t('settings.retentionLastRun', {
+              at: esc(formatDateTime(last.ran_at)),
+              rec: last.recordings_deleted,
+              audit: last.audit_rows_deleted,
+              cmd: last.command_rows_deleted,
+              mem: last.memberships_purged,
+            }) + (last.errors && last.errors.length ? ` · ${esc(last.errors.join('; '))}` : '')
+          : t('settings.retentionNeverRun')
+      }</span>
+    </div>`
+  body.querySelector('#retention-run')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget
+    btn.disabled = true
+    try {
+      await API.retentionRun()
+      await renderRetention(body)
+    } catch (err) {
+      body.querySelector('#retention-status').textContent = err?.message || String(err)
+      btn.disabled = false
+    }
+  })
 }

@@ -47,11 +47,13 @@ const initialAdminPasswordEnv = "VANTYX_INITIAL_ADMIN_PASSWORD"
 // without touching the real database; production callers go through
 // [NewApp] which wires SQLite-backed implementations.
 type App struct {
-	UserStore               auth.UserStore
-	SessionStore            auth.SessionStore
-	TargetStore             access.TargetStore
-	AccessGroupStore        access.AccessGroupStore
-	AccessRequests          access.AccessRequestStore
+	UserStore        auth.UserStore
+	SessionStore     auth.SessionStore
+	TargetStore      access.TargetStore
+	AccessGroupStore access.AccessGroupStore
+	AccessRequests   access.AccessRequestStore
+	// retention holds the age-based purge policy and its last report.
+	retention               *retentionState
 	SSHKeyStore             access.SSHKeyStore
 	CredentialIdentityStore access.CredentialIdentityStore
 
@@ -310,6 +312,8 @@ func NewApp() *App {
 	// Convert pre-existing fragmented RDP/VNC recordings to faststart MP4
 	// in the background (B-1); new recordings are converted on stop.
 	app.startRecordingRemuxBackfill()
+	// Age-based purge of recordings / audit / command logs (opt-in via env).
+	app.startRetentionLoop()
 	return app
 }
 
@@ -393,6 +397,9 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/api/groups/{group_id}/members", a.handleGroupMembers)
 	r.Post("/api/groups/{group_id}/members", a.handleAddGroupMember)
 	r.Delete("/api/groups/{group_id}/members/{user_id}", a.handleRemoveGroupMember)
+	// Retention policy (admin): inspect and run the purge job.
+	r.Get("/api/settings/retention", a.handleGetRetention)
+	r.Post("/api/settings/retention/run", a.handleRunRetention)
 	// Admin session oversight: list / watch / terminate any live session.
 	r.Get("/api/admin/sessions", a.handleAdminListSessions)
 	r.Post("/api/admin/sessions/{kind}/{session_id}/watch", a.handleAdminWatchSession)

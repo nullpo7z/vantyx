@@ -153,6 +153,23 @@ Audit events: `oidc_login_started`, `oidc_login_ok`, `oidc_login_failed`
 | `VANTYX_RECORDING_EXPORT_CONVERT_TIMEOUT` | `45m` | Maximum wall time for a single GIF/MP4 export conversion job. |
 | `VANTYX_RECORDING_EXPORT_COMPLETED_TTL` | `168h` | How long completed, failed, or cancelled export jobs (and their output files) are retained in memory and on disk before automatic cleanup. |
 
+## Retention
+
+Age-based purge, all opt-in (empty or `0` = keep forever). The job runs a
+minute after start-up and then hourly; every run that removes something is
+audited as `retention_purge`, and admins can inspect the policy / trigger a
+run under **System settings → Retention policy** (`GET
+/api/settings/retention`, `POST /api/settings/retention/run`).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_RECORDING_RETENTION` | — | Delete recordings whose session ended longer ago than this (Go duration, e.g. `2160h` = 90 days): the row, the `.cast` / `.mp4` file and any export artefacts. Recordings still in progress are never touched. |
+| `VANTYX_AUDIT_RETENTION` | — | Delete `audit_logs` rows older than this. The audit log *file* / syslog forward are unaffected. |
+| `VANTYX_COMMAND_LOG_RETENTION` | = audit | Delete `command_logs` rows older than this. |
+| `VANTYX_MEMBERSHIP_EXPIRED_RETENTION` | `720h` | How long expired group memberships stay listed (greyed out) before the row is removed. |
+
+Values below one hour are raised to one hour.
+
 ## Access store performance tuning
 
 | Variable | Default | Description |

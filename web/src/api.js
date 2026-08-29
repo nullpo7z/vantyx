@@ -1051,6 +1051,26 @@ const API = {
     return res.json()
   },
 
+  /** Admin: retention policy and last purge report. */
+  async retentionGet() {
+    const res = await fetch('/api/settings/retention', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load retention policy')
+    }
+    return res.json()
+  },
+
+  /** Admin: run the retention purge now. */
+  async retentionRun() {
+    const res = await fetch('/api/settings/retention/run', { method: 'POST', credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to run retention')
+    }
+    return res.json()
+  },
+
   /** Admin: every live session (terminal / VNC / RDP). */
   async adminSessions() {
     const res = await fetch('/api/admin/sessions', { credentials: 'include' })

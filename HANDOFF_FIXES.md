@@ -27,6 +27,70 @@ git status に差分として現れます。内容は §1 の通りで、サー�
 
 ---
 
+## 0.4 再検証結果サマリー(2026-08-29 夜、Windows 側 Chrome、本番 7 回目デプロイ後)
+
+| 項目 | 結果 |
+|---|---|
+| A-1 / B-1 | ✅ Range 206 + Accept-Ranges、開いた直後に duration 1077 秒、シーク即時反映 |
+| A-2 / A-3 / A-4 / A-5 | ✅ UTC 先頭 / ズーム中も再生継続 / SFTP 日時整形 / To=当日 |
+| E-1 / E-2 / E-3(E-5)/ E-4 / E-6 / E-7 | ✅ |
+| E-9 | ✅ 「アクセスが許可されていません」を表示 |
+| E-10 | ✅ 一覧・Server management 全件、POST/DELETE 可 — ⚠️ PUT だけ 403(**R-3**) |
+| E-11 | ✅ Delete ボタン → 確認 → 削除、監査 `user_delete`(テストユーザー 2 名を UI で削除済み) |
+| E-12 / E-13 | ✅ 監査 `session_invitation_created/revoked`、録画削除 + `recording_deleted` |
+| F-1 | ✅ Participants ボタン → モーダル(ただし文言が **R-1**) |
+| E-8 | ⚠️ ナビに Settings は出るがクリックで遷移しない(**R-4**) |
+| E-14 | ⚠️ hidden クラスは正しく付くが CSS 上書きで表示される(**R-2**) |
+| E-15 | ❌ キック後も通常の切断画面(**R-5**) |
+| E-16 | 未再検証(参加側タブが閉じられたため。F-2 の受け入れ条件で確認すること) |
+| 後片付け | テストユーザー `uitest-admin2` / `uitest-viewer`、テスト録画 `uitest-retest`、SFTP テストファイル、エクスポート、テストターゲット `uitest-admin2-target` はすべて削除済み |
+
+**次回 Linux 側で対応する項目**: R-1, R-2(= E-14 / ユーザー要望「権限の無いボタンを出さない」), R-3, R-4, R-5(= E-15), F-2(Allow rejoin ボタン廃止・再招待で自動解除)。
+→ ✅ **すべて対応済み(2026-08-29、コミット d6d9d6e / dc76fff / 878ce9d / f036c76 / 2ba142c / 7e3f01d、8 回目デプロイ)**。各項目の詳細は §0.5 の「✅ 修正済み」を参照。Windows 側での再検証ポイント: (a) viewer 画面に Participants / Invitations / End session が出ず Leave のみ、オーナー画面に Leave が出ない(R-2)、(b) 2 人目の admin で Edit → Update 成功(R-3)、(c) 一般ユーザーで Settings に遷移しタイムゾーンを変更できる(R-4)、(d) Remove 直後に参加者側が「削除されました」+ ホームに戻る のみ(R-5)、(e) Remove → 同ユーザーへ Named user で Issue → 参加者ホームにバナー → Join 成功(F-2/E-16)。
+
+## 0.5 再検証(2026-08-29 夜、Windows 側 Chrome)で見つかった退行 — 要修正
+
+### R-1. 端末ヘッダーのボタン文言が翻訳キーのまま表示される — `web/src/locales/en.js:537-538`, `web/src/locales/ja.js:513-514`, `web/src/terminal_page.js:90, 93, 1527`
+- ✅ 修正済み(コミット d6d9d6e、2026-08-29 デプロイ済み)— 原因分析どおり。`terminal:` ブロックに `actionParticipants` / `actionLeave` を追加(en/ja)。
+- **症状**: 本番の端末画面(オーナー)でヘッダーに `terminal.actionParticipants (0)` / `terminal.actionLeave` と表示される(英語 UI)。
+- **原因**: `actionParticipants` / `actionLeave` が `sessions:` ブロック(`fieldName`…`actionInvite` の並び、en.js 520-539)に追加されているが、`terminal_page.js` は `t('terminal.actionParticipants')` / `t('terminal.actionLeave')` で参照している。
+- **修正案**: 両キーを `terminal:` ブロックへ移動(または複製)。ja.js も同様。
+
+### R-2. オーナーの端末画面にも「Leave」ボタンが表示される(E-14 の修正が効いていない) — `web/src/terminal_page.js:93`, `web/src/*.css`(`.vantyx-page-btn`)
+- ✅ 修正済み(コミット dc76fff、2026-08-29 デプロイ済み)— 原因分析どおり CSS の詳細度(`#app header .vantyx-page-btn` = id+要素+class が `.hidden` に勝つ)。`style.css` に `#app header .vantyx-page-btn.hidden { display: none !important; }` を追加。これで viewer 画面の Participants / Invitations / End session、オーナー画面の Leave が消える(E-14 と「権限の無いボタンを出さない」要望の両方)。
+- **症状**: `#term-leave` は `class="vantyx-page-btn hidden"` だが computed `display: flex` で表示されている(オーナー画面で End session と Leave が両方見える)。
+- **原因**: `.vantyx-page-btn { display: flex }` が Tailwind の `.hidden { display: none }` より後に(または高い詳細度で)定義されており、`hidden` クラスが効かない。`#term-participants-manage` も同じクラス構成(初期 `hidden`)なので、viewer 側で Participants ボタンが見えてしまう可能性が高い(要確認)。
+- **修正案**: `.vantyx-page-btn.hidden { display: none !important }` を追加するか、表示切替を `hidden` クラスではなく `el.hidden = true`(`[hidden]{display:none!important}`)や `style.display` で行う。F-1 / E-14 の viewer 表示も併せて再確認。
+- **viewer 側でも再現(2026-08-29 再検証)**: `uitest-viewer` の参加画面で `#term-participants-manage`(class に hidden あり)/ `#term-close`(End session、class に hidden あり)/ `#term-invite-manage` がすべて computed `display:flex` で表示されている。つまり E-14 のクラス切替ロジック自体は正しく動いており、**原因は CSS の上書きのみ**。この 1 箇所を直せば R-2 と E-14 の両方が解決する。
+
+### R-3. 追加 admin によるターゲット**更新**(PUT)だけが 403 のまま(E-10 の取りこぼし) — `internal/httpapi/targets_handler.go`(update ハンドラ)
+- ✅ 修正済み(コミット 878ce9d、2026-08-29 デプロイ済み)— 原因: update ハンドラが対象ターゲットの読み込みに `getSessionAndTargetWithAccess`(ユーザー単位 ACL)を使っていた(E-10 で外したのは移動先グループのチェックのみ)。admin 専用ハンドラなので `TargetStore.Get` で直接読み込むよう変更。旧方針を固定していた `TestApp_UpdateTarget_Forbidden` を反転し、`admin_visibility_test.go` に PUT ケースを追加。
+- **症状**: `uitest-admin2`(グループ未配属の admin)で `POST /api/targets`(home/proxmox に作成)→ 201、`DELETE /api/targets/{id}` → 204 は通るが、`PUT /api/targets/{id}` → **403「アクセスが許可されていません」**。Server management の Edit → Update が 2 人目の admin では失敗する。
+- **原因(推定)**: E-10 で create/delete からは撤廃した「操作する admin が対象グループのメンバーであること」の再チェック(または `userCanAccessTarget` 系の ACL チェック)が update ハンドラに残っている。
+- **修正案**: update ハンドラの admin パスでもメンバーシップ再チェックを撤廃し、`admin_visibility_test.go` に PUT のケースを追加。
+- **再検証手順**: `uitest-admin2` でログイン → Server management → proxmox → 任意ターゲットの Edit → 名前変更 → Update が成功すること。
+
+### R-4. 一般ユーザーに Settings リンクは表示されるが、クリックしても遷移しない(E-8 の取りこぼし) — `web/src/nav.js`(`wireNav` / クリック配線), `web/src/app.js`
+- ✅ 修正済み(コミット f036c76、2026-08-29 デプロイ済み)— 原因分析どおり、`nav.js` の `navSettings` クリックハンドラが `me.role !== 'admin'` で return していた。サインイン済みなら遷移させ、監査転送セクションはページ側の出し分けに委ねる。
+- **症状**: `uitest-viewer`(role=user)でナビに「Settings」(`#nav-settings`, hidden なし)が表示されるが、クリックしてもホームのまま(main の h2 = root、`#settings-timezone` 不在)。admin では遷移する。
+- **原因(推定)**: E-8 で `isAdminOnlyNav` からの除外と `showAuthenticatedNav` の表示は直したが、クリックハンドラの登録(または `renderSettingsPage` 呼び出し前のロール判定)が admin 限定のまま。
+- **修正案**: nav-settings のクリック配線を全ユーザーに対して行い、`renderSettingsPage` 内で監査転送セクションのみ `meData.role === 'admin'` で出し分ける。回帰確認: 一般ユーザーで Settings → Timezone select が表示され、変更が `/api/me` に反映されること。
+
+### R-5. キックされた参加者の画面が依然「The session is still running on the backend.」+ Reconnect(E-15 が本番で効いていない) — `internal/httpapi/*`(キックハンドラの `alsoNotify` 配信)/ `web/src/terminal_page.js:1334-1343`
+- ✅ 修正済み(コミット 2ba142c、2026-08-29 デプロイ済み)— 調査結果: (1) 端末キックハンドラは E-15 で本人を `alsoNotify` に渡していた(漏れなし)、(2) `myUserId` はページ読込時に `/api/me` で解決済み、(3) **順序が問題**: `DetachUser`(WS 切断)が SSE 配信より先に実行され、`onclose` が先に走って通常の切断画面になっていた。対策は SSE の競合に依存しない方式に変更: SSH/Telnet ブリッジの `DetachUser` がクローズ直前に本人のソケットへ `session_ended: kicked` テキストフレームを送る(同一ソケット上のため必ず `onclose` より先に観測される)。フロントはこのフレームを「セッションから削除されました」+ ホームに戻る の専用画面にマッピングし、`onclose` 側の分岐を抑止(`sawSessionEnded`)。端末キックハンドラも SSE 配信→切断の順に変更。受け入れ条件(Remove 直後に専用画面のみ、Reconnect なし)を満たす。
+- **症状(ユーザー報告、2026-08-29 再検証)**: オーナーが Participants モーダルから Remove しても、参加者側は E-15 で追加した「You were removed from this session」画面にならず、通常の切断画面(Reconnect / Back to home)のまま。
+- **調査ポイント**: (1) 端末のキックハンドラで本人を `alsoNotify` に渡しているか(VNC/RDP だけ直して端末を漏らしていないか)、(2) `participant_left` の `extra.reason === 'kicked'` と `payload.user_id === myUserId` の一致(`myUserId` が `/api/me` 解決前だと不一致)、(3) `DetachUser` で WS を閉じる前にイベント配信が完了しているか(順序: 通知 → detach)。ブラウザ側は `onclose` が先に走ると `disconnectedWrap` を出してしまうので、`showKickedSessionEnded` を close 後でも上書きできるようにする(kicked フラグを立てて `onclose` 側で分岐)。
+- **受け入れ条件**: Remove 直後に参加者側が「セッションから削除されました」+ ホームに戻る のみを表示し、Reconnect を出さない。
+
+### F-2. 【仕様変更要望】「Allow rejoin」ボタンは不要。Remove 後に同じユーザーへ招待を作り直したら自動で再参加許可にする — `web/src/participants_dialog.js`, `internal/httpapi/*`(`allow-rejoin` エンドポイント), `internal/sharing/service.go`(招待作成時の `Unkick`)
+- ✅ 対応済み(コミット 7e3f01d、2026-08-29 デプロイ済み)— `POST …/participants/{user_id}/allow-rejoin`(terminal/VNC/RDP)と API クライアント、モーダルの「再参加を許可」ボタンを削除。モーダルには「退出させたユーザー」の一覧のみ残し、「戻したい場合は指名招待を新たに発行」と案内。解除経路は E-16 の「指名招待の新規発行時に `Room.Unkick`」のみ(タグ/グループ/共有リンク招待では解除しない — 現状維持)。受け入れテスト `sharing_reinvite_test.go`: Remove → 指名で Issue → ブロック解除(監査 `session_participant_unkicked`)→ 参加者が新しい招待で Join 成功(招待は成功時に消費)→ allow-rejoin エンドポイントが存在しないこと。
+- **要望(ユーザー、2026-08-29)**: 「Allow rejoin ボタンを押すのではなく、remove した後にもう一度当該ユーザーの招待を作成したら自動で Allow rejoin フラグを立てる形式にしてほしい」。
+- **対応**: E-16 で実装済みの「指名招待の新規発行時に `Room.Unkick`」を唯一の解除経路にする。Participants モーダルの「Removed users / Allow rejoin」UI と `POST …/participants/{user_id}/allow-rejoin` は削除(または非表示)。モーダルには「退出させたユーザー(再招待で復帰可)」の表示だけ残してもよい。タグ/グループ/共有リンク招待でも当該ユーザーが宛先に含まれるなら解除するかは要判断(現状: 指名招待のみ解除)。
+- **受け入れ条件**: Remove → 同ユーザーへ Named user で Issue → 参加者側のホームにバナーが出て Join できる(招待が消費されずに失敗しないこと)。
+
+### R-2 補足(ユーザー要望)
+- 「自分に使用する権限の無いボタン(Participants など)は表示しない」= viewer 画面で Participants / Invitations / End session を出さないこと。R-2 の CSS 修正で満たされるはずだが、修正後に viewer でログインして確認すること。
+
 ## 1. A: 修正済み・未デプロイ(5 件)
 
 ### A-1. RDP/VNC 録画(MP4)がブラウザでシークできない — `internal/httpapi/recordings.go`

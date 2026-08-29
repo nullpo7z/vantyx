@@ -229,6 +229,53 @@ func TestHandleSSHWebSocket_ForbiddenTarget(t *testing.T) {
 	}
 }
 
+// TestHandleSSHWebSocket_ForbiddenTarget_RealWSGetsErrorFrame is the E-9
+// regression guard: over a real WebSocket a user without access to the
+// target must receive an explicit "error: …" text frame (localized
+// common.forbidden) instead of an opaque handshake failure, so the SPA
+// can show "access denied" rather than "check network / credentials".
+func TestHandleSSHWebSocket_ForbiddenTarget_RealWSGetsErrorFrame(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
+	_, _ = app.UserStore.CreateUser("other", "other", "Other1!x", "")
+	httpSess, err := app.SessionStore.Create("other")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	srv := startTestWSServer(t, router)
+	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
+	header := http.Header{}
+	header.Set("Origin", "http://"+srv.Listener.Addr().String())
+	header.Set("Cookie", "vantyx_session="+httpSess.ID)
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)
+	if err != nil {
+		t.Fatalf("expected the handshake to succeed so an error frame can be delivered, got %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	mt, msg, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("ReadMessage: %v", err)
+	}
+	if mt != websocket.TextMessage || !strings.HasPrefix(string(msg), "error: ") {
+		t.Fatalf("expected an 'error: …' text frame, got type=%d msg=%q", mt, msg)
+	}
+	if strings.Contains(string(msg), "credential") || strings.Contains(string(msg), "network") {
+		t.Fatalf("forbidden frame must not read like a credentials/network problem: %q", msg)
+	}
+	e, ok := latestAuditEvent("terminal_ws_forbidden")
+	if !ok || e.Fields["user_id"] != "other" || e.Fields["target_id"] != "demo" {
+		t.Fatalf("expected terminal_ws_forbidden audit for other/demo, got ok=%v fields=%v", ok, e.Fields)
+	}
+}
+
 func TestHandleSSHWebSocket_NonTerminalTargetReturns501(t *testing.T) {
 	app := newTestAppForTerminal(t)
 	router := app.NewRouter()

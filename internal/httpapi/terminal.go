@@ -108,7 +108,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	targetID := r.URL.Query().Get("target_id")
-	userID, target, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
+	userID, target, ok := a.getSessionAndTargetForWS(w, r, targetID)
 	if !ok {
 		return
 	}
@@ -221,6 +221,64 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	if a.SessionEventBroker != nil {
 		a.SessionEventBroker.Broadcast()
 	}
+}
+
+// getSessionAndTargetForWS is getSessionAndTargetWithAccess for the
+// WebSocket handshake. A plain 403 on the handshake is invisible to the
+// browser (the WebSocket API only surfaces a generic close), so the SPA
+// showed "check the target, network and saved credentials" for a target
+// the user simply isn't allowed to reach (E-9). When access is denied we
+// complete the upgrade, send a localized "error: forbidden" frame the
+// page can display verbatim, audit terminal_ws_forbidden, and close.
+// Every other failure keeps the plain HTTP response.
+func (a *App) getSessionAndTargetForWS(w http.ResponseWriter, r *http.Request, targetID string) (string, *access.Target, bool) {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		writeJSONErrorKey(w, r, "common.targetIDRequired", http.StatusBadRequest)
+		return "", nil, false
+	}
+	userID := a.currentUserID(r)
+	if userID == "" {
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
+		return "", nil, false
+	}
+	ctx := r.Context()
+	target, err := a.TargetStore.Get(ctx, access.TargetID(targetID))
+	if err != nil {
+		audit("target_not_found", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+		})
+		writeJSONErrorKey(w, r, "common.targetNotFound", http.StatusNotFound)
+		return "", nil, false
+	}
+	allowed, err := a.userCanAccessTarget(ctx, userID, access.TargetID(targetID))
+	if err != nil {
+		writeInternalError(w, err)
+		return "", nil, false
+	}
+	if !allowed {
+		audit("terminal_ws_forbidden", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+		})
+		// Only attempt the upgrade on a real WebSocket handshake: on a
+		// plain HTTP request gorilla's Upgrade writes its own 400 before
+		// returning, which would mask the 403.
+		if !websocket.IsWebSocketUpgrade(r) {
+			writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
+			return "", nil, false
+		}
+		conn, upErr := wsUpgrader.Upgrade(w, r, nil)
+		if upErr != nil {
+			// Upgrade already wrote an HTTP error response.
+			return "", nil, false
+		}
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+localizedMessage(r, "common.forbidden")))
+		closeWSGracefully(conn)
+		return "", nil, false
+	}
+	return userID, target, true
 }
 
 // handleTerminalAttach handles the resume / viewer branch of /ws/ssh.

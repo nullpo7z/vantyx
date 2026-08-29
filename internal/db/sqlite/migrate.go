@@ -424,6 +424,8 @@ func applyAdditiveColumnPatches(ctx context.Context, db *sql.DB) error {
 		{"users", "role", `ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`},
 		{"users", "force_password_change", `ALTER TABLE users ADD COLUMN force_password_change INTEGER NOT NULL DEFAULT 0`},
 		{"users", "locale", `ALTER TABLE users ADD COLUMN locale TEXT NOT NULL DEFAULT ''`},
+		// Suspended accounts keep their rows but cannot authenticate.
+		{"users", "disabled", `ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`},
 		// Optional membership expiry (unix seconds, NULL = permanent). Expired
 		// rows grant nothing; they stay visible to admins until purged.
 		{"user_groups", "expires_at", `ALTER TABLE user_groups ADD COLUMN expires_at INTEGER`},

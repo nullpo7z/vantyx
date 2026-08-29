@@ -473,6 +473,12 @@ components:
         totp_enabled:
           type: boolean
           description: 一覧で返る。二要素認証（TOTP）が有効なら true。
+        passkeys:
+          type: integer
+          description: 登録済みパスキー数
+        disabled:
+          type: boolean
+          description: 無効化されたアカウントなら true
       required:
         - id
         - username
@@ -3049,10 +3055,11 @@ paths:
 
   /api/users/{user_id}:
     patch:
-      summary: ユーザーのロール変更（管理者のみ）
+      summary: ユーザーの更新（ロール・ユーザー名・無効化。管理者のみ）
       description: |
-        `role` を `admin` / `user` に変更します。自分自身の管理者ロールを外すこと、最後の管理者を降格することはできません。
-        変更は対象ユーザーの次のリクエストから有効です（管理者判定は毎回ストアのロールを参照）。監査イベント `user_role_update`。
+        省略したフィールドは変更しません。`role` は `admin` / `user`（自分自身の降格・最後の管理者の降格は不可、監査 `user_role_update`）。
+        `username` は 1〜64 文字で一意（重複は 409、監査 `user_renamed`）。`disabled: true` はアカウントを無効化し、全セッション・実行中セッションを終了、
+        以後 Web / API トークン / SSH 鍵 / SSO のいずれでもログインできません（自分自身・最後の管理者は不可、監査 `user_disabled` / `user_enabled`）。
       security:
         - cookieAuth: []
       parameters:
@@ -3071,6 +3078,10 @@ paths:
                 role:
                   type: string
                   enum: [admin, user]
+                username:
+                  type: string
+                disabled:
+                  type: boolean
       responses:
         '200':
           description: 更新後のユーザー

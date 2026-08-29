@@ -248,13 +248,17 @@ const API = {
     }
   },
 
-  /** Admin: update a user's role ('admin' | 'user'). */
-  async updateUser(userId, { role }) {
+  /** Admin: update a user's role / username / disabled flag (omit fields to leave them). */
+  async updateUser(userId, { role, username, disabled }) {
+    const body = {}
+    if (role !== undefined) body.role = role
+    if (username !== undefined) body.username = username
+    if (disabled !== undefined) body.disabled = disabled
     const res = await fetch(`/api/users/${encodeURIComponent(userId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ role }),
+      body: JSON.stringify(body),
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))

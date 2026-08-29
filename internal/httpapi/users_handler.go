@@ -23,6 +23,8 @@ type userResponse struct {
 	TOTPEnabled bool `json:"totp_enabled"`
 	// Passkeys counts registered WebAuthn credentials (second factor).
 	Passkeys int `json:"passkeys"`
+	// Disabled accounts cannot sign in until an admin re-enables them.
+	Disabled bool `json:"disabled"`
 }
 
 type createUserRequest struct {
@@ -73,7 +75,7 @@ func (a *App) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		if a.WebAuthn != nil {
 			passkeys, _ = a.WebAuthn.Count(r.Context(), u.ID)
 		}
-		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role, Locale: u.Locale, Tags: tags, TOTPEnabled: totpEnabled, Passkeys: passkeys})
+		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role, Locale: u.Locale, Tags: tags, TOTPEnabled: totpEnabled, Passkeys: passkeys, Disabled: u.Disabled})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -141,14 +143,16 @@ func (a *App) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateUserRequest struct {
-	Role *string `json:"role"`
+	Role     *string `json:"role"`
+	Username *string `json:"username"`
+	Disabled *bool   `json:"disabled"`
 }
 
-// handleUpdateUser: PATCH /api/users/{user_id} {role}. Admin only. An
-// admin may not demote themselves (they would lock themselves out of
-// this very screen) and the last remaining admin cannot be demoted.
-// Role changes take effect on the user's next request: every admin
-// check reads the role from the store, not from the session.
+// handleUpdateUser: PATCH /api/users/{user_id} {role, username, disabled}.
+// Admin only. An admin may not demote or disable themselves and the last
+// remaining (enabled) admin cannot be demoted or disabled. Disabling
+// revokes every session and API token use and stops live sessions;
+// role changes take effect on the user's next request.
 func (a *App) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
@@ -214,6 +218,61 @@ func (a *App) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			target.Role = role
 		}
 	}
+	if req.Username != nil {
+		name := strings.TrimSpace(*req.Username)
+		if name == "" || len(name) > 64 {
+			writeJSONErrorKey(w, r, "users.usernameInvalid", http.StatusBadRequest)
+			return
+		}
+		if name != target.Username {
+			if err := a.UserStore.UpdateUsername(userID, name); err != nil {
+				switch {
+				case errors.Is(err, auth.ErrUserExists):
+					writeJSONErrorKey(w, r, "users.alreadyExists", http.StatusConflict)
+				case errors.Is(err, auth.ErrUserNotFound):
+					writeJSONErrorKey(w, r, "users.userNotFound", http.StatusNotFound)
+				case errors.Is(err, auth.ErrIDOrUsernameEmpty):
+					writeJSONErrorKey(w, r, "users.usernameInvalid", http.StatusBadRequest)
+				default:
+					writeInternalError(w, err)
+				}
+				return
+			}
+			audit("user_renamed", auditFields{"user_id": a.currentUserID(r), "target_id": userID, "from": target.Username, "to": name})
+			target.Username = name
+		}
+	}
+	if req.Disabled != nil && *req.Disabled != target.Disabled {
+		if *req.Disabled {
+			if userID == a.currentUserID(r) {
+				writeJSONErrorKey(w, r, "users.cannotDisableSelf", http.StatusBadRequest)
+				return
+			}
+			if target.Role == auth.RoleAdmin {
+				n, err := a.countAdmins()
+				if err != nil {
+					writeInternalError(w, err)
+					return
+				}
+				if n <= 1 {
+					writeJSONErrorKey(w, r, "users.lastAdminDisable", http.StatusConflict)
+					return
+				}
+			}
+		}
+		if err := a.UserStore.SetDisabled(userID, *req.Disabled); err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		target.Disabled = *req.Disabled
+		if *req.Disabled {
+			stopped := a.stopSessionsOwnedBy(userID)
+			_ = a.SessionStore.DeleteAllForUser(userID, "")
+			audit("user_disabled", auditFields{"user_id": a.currentUserID(r), "target_id": userID, "sessions_stopped": stopped})
+		} else {
+			audit("user_enabled", auditFields{"user_id": a.currentUserID(r), "target_id": userID})
+		}
+	}
 	tags, _ := a.UserStore.TagsForUser(target.ID)
 	if tags == nil {
 		tags = []string{}
@@ -223,7 +282,11 @@ func (a *App) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		role = auth.RoleUser
 	}
 	totpEnabled := a.TOTPStore != nil && a.TOTPStore.Enabled(r.Context(), target.ID)
-	writeJSON(w, userResponse{ID: target.ID, Username: target.Username, Role: role, Locale: target.Locale, Tags: tags, TOTPEnabled: totpEnabled})
+	passkeys := 0
+	if a.WebAuthn != nil {
+		passkeys, _ = a.WebAuthn.Count(r.Context(), target.ID)
+	}
+	writeJSON(w, userResponse{ID: target.ID, Username: target.Username, Role: role, Locale: target.Locale, Tags: tags, TOTPEnabled: totpEnabled, Passkeys: passkeys, Disabled: target.Disabled})
 }
 
 // handleUserTags returns tags for the user. Admin only.

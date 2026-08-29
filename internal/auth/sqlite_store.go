@@ -78,12 +78,12 @@ func (s *SQLiteUserStore) Authenticate(username, plainPassword string) (*User, e
 	defer cancel()
 
 	var u User
-	var forcePW int
+	var forcePW, disabled int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(force_password_change, 0)
+		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(force_password_change, 0), COALESCE(disabled, 0)
 		FROM users
 		WHERE username = ?
-	`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &forcePW)
+	`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &forcePW, &disabled)
 	if err == sql.ErrNoRows {
 		// Run bcrypt against a dummy hash so the latency matches.
 		_ = VerifyPassword(dummyBcryptHash, plainPassword)
@@ -96,6 +96,10 @@ func (s *SQLiteUserStore) Authenticate(username, plainPassword string) (*User, e
 		return nil, ErrInvalidSecret
 	}
 	u.ForcePasswordChange = forcePW != 0
+	u.Disabled = disabled != 0
+	if u.Disabled {
+		return nil, ErrUserDisabled
+	}
 	return &u, nil
 }
 
@@ -105,12 +109,12 @@ func (s *SQLiteUserStore) GetByID(id string) (*User, error) {
 	defer cancel()
 
 	var u User
-	var forcePW int
+	var forcePW, disabled int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(force_password_change, 0)
+		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(force_password_change, 0), COALESCE(disabled, 0)
 		FROM users
 		WHERE id = ?
-	`, id).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &forcePW)
+	`, id).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &forcePW, &disabled)
 	if err == sql.ErrNoRows {
 		return nil, ErrUserNotFound
 	}
@@ -118,6 +122,7 @@ func (s *SQLiteUserStore) GetByID(id string) (*User, error) {
 		return nil, err
 	}
 	u.ForcePasswordChange = forcePW != 0
+	u.Disabled = disabled != 0
 	return &u, nil
 }
 
@@ -133,7 +138,7 @@ func (s *SQLiteUserStore) ListUsers(limit, offset int) ([]*User, error) {
 	defer cancel()
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(force_password_change, 0)
+		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(force_password_change, 0), COALESCE(disabled, 0)
 		FROM users
 		ORDER BY username
 		LIMIT ? OFFSET ?
@@ -146,11 +151,12 @@ func (s *SQLiteUserStore) ListUsers(limit, offset int) ([]*User, error) {
 	var out []*User
 	for rows.Next() {
 		var u User
-		var forcePW int
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &forcePW); err != nil {
+		var forcePW, disabled int
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &forcePW, &disabled); err != nil {
 			return nil, err
 		}
 		u.ForcePasswordChange = forcePW != 0
+		u.Disabled = disabled != 0
 		out = append(out, &u)
 	}
 	return out, rows.Err()
@@ -214,6 +220,56 @@ func NormalizeUILocale(locale string) (string, error) {
 		return "", ErrInvalidLocale
 	}
 	return loc, nil
+}
+
+// UpdateUsername renames the account.
+func (s *SQLiteUserStore) UpdateUsername(userID, username string) error {
+	userID = strings.TrimSpace(userID)
+	username = strings.TrimSpace(username)
+	if userID == "" || username == "" {
+		return ErrIDOrUsernameEmpty
+	}
+	if len(username) > 64 {
+		return ErrIDOrUsernameEmpty
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE username = ? AND id <> ?`, username, userID).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrUserExists
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET username = ? WHERE id = ?`, username, userID)
+	if err != nil {
+		return err
+	}
+	if rows, _ := res.RowsAffected(); rows != 1 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// SetDisabled suspends (true) or re-enables (false) the account.
+func (s *SQLiteUserStore) SetDisabled(userID string, disabled bool) error {
+	if strings.TrimSpace(userID) == "" {
+		return ErrUserNotFound
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	v := 0
+	if disabled {
+		v = 1
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET disabled = ? WHERE id = ?`, v, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrUserNotFound
+	}
+	return nil
 }
 
 // UpdateRole sets the user's role.
@@ -423,13 +479,15 @@ func (s *SQLiteUserStore) AuthenticateByPublicKey(username string, key ssh.Publi
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var u User
-	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, '') FROM users WHERE username = ?`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale)
+	var pkDisabled int
+	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(disabled, 0) FROM users WHERE username = ?`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &pkDisabled)
 	if err == sql.ErrNoRows {
 		return nil, ErrInvalidSecret
 	}
 	if err != nil {
 		return nil, err
 	}
+	u.Disabled = pkDisabled != 0
 	rows, err := s.db.QueryContext(ctx, `SELECT key_line FROM user_ssh_keys WHERE user_id = ?`, u.ID)
 	if err != nil {
 		return nil, err
@@ -446,6 +504,9 @@ func (s *SQLiteUserStore) AuthenticateByPublicKey(username string, key ssh.Publi
 			continue
 		}
 		if bytes.Equal(stored.Marshal(), keyMarshal) {
+			if u.Disabled {
+				return nil, ErrUserDisabled
+			}
 			return &u, nil
 		}
 	}

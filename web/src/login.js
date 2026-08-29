@@ -306,7 +306,7 @@ function showOIDCError(errorEl) {
     return
   }
   if (!reason) return
-  const known = ['denied', 'state', 'provider_unavailable', 'exchange', 'token', 'not_provisioned', 'resolve', 'session']
+  const known = ['denied', 'state', 'provider_unavailable', 'exchange', 'token', 'not_provisioned', 'resolve', 'session', 'disabled']
   const key = known.includes(reason) ? `login.oidcError.${reason}` : 'login.oidcError.generic'
   errorEl.textContent = t(key)
   errorEl.classList.remove('hidden')

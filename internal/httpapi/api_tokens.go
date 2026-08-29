@@ -50,7 +50,7 @@ func (a *App) apiTokenMiddleware(next http.Handler) http.Handler {
 			writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if u, err := a.UserStore.GetByID(tok.UserID); err != nil || u == nil {
+		if u, err := a.UserStore.GetByID(tok.UserID); err != nil || u == nil || u.Disabled {
 			writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
 			return
 		}

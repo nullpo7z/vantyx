@@ -118,6 +118,11 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := a.UserStore.Authenticate(req.Username, req.Password)
+	if errors.Is(err, auth.ErrUserDisabled) {
+		audit("login_failed", auditFields{"username_hash": auditUsernameHash(req.Username), "reason": "account_disabled"})
+		writeJSONErrorKey(w, r, "auth.accountDisabled", http.StatusForbidden)
+		return
+	}
 	if err != nil {
 		if a.LoginRateLimiter != nil {
 			if ip != "" {

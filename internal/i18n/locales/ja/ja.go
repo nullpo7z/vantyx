@@ -91,6 +91,10 @@ var Messages = map[string]string{
 	"users.cannotDeleteSelf":          "自分自身のアカウントは削除できません",
 	"users.lastAdmin":                 "最後の管理者は削除できません",
 	"users.invalidRole":               "ロールは admin または user を指定してください",
+	"users.usernameInvalid":           "ユーザー名は 1〜64 文字で指定してください",
+	"users.cannotDisableSelf":         "自分自身のアカウントは無効化できません",
+	"users.lastAdminDisable":          "最後の管理者は無効化できません",
+	"auth.accountDisabled":            "このアカウントは無効化されています。管理者に連絡してください",
 	"users.cannotDemoteSelf":          "自分自身の管理者ロールは外せません",
 	"users.lastAdminRole":             "最後の管理者のロールは変更できません",
 

@@ -428,6 +428,11 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		a.oidcFail(w, r, reason)
 		return
 	}
+	if u.Disabled {
+		audit("oidc_login_failed", auditFields{"reason": "account_disabled", "user_id": u.ID})
+		a.oidcFail(w, r, "disabled")
+		return
+	}
 	if a.oidc.cfg.syncsGroups() {
 		if err := a.syncOIDCGroups(ctx, u, rawClaims); err != nil {
 			audit("oidc_login_failed", auditFields{"reason": "group_sync", "user_id": u.ID, "error": err.Error()})

@@ -92,7 +92,7 @@ func (a *App) countAdmins() (int, error) {
 	}
 	n := 0
 	for _, u := range users {
-		if u != nil && u.Role == auth.RoleAdmin {
+		if u != nil && u.Role == auth.RoleAdmin && !u.Disabled {
 			n++
 		}
 	}

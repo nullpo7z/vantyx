@@ -29,6 +29,11 @@ func (a *App) currentUserIDWithError(r *http.Request) (string, error) {
 		}
 		return "", err
 	}
+	// A disabled account is unauthenticated even if a session survived
+	// (sessions are revoked on disable, this is the belt to those braces).
+	if u, err := a.UserStore.GetByID(sess.UserID); err == nil && u != nil && u.Disabled {
+		return "", nil
+	}
 	return sess.UserID, nil
 }
 

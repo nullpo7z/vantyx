@@ -26,6 +26,9 @@ type User struct {
 	// password before any other API call succeeds. Used for the
 	// bootstrap admin account (ASVS V2.10.4 / CWE-1188).
 	ForcePasswordChange bool
+	// Disabled accounts keep their data but cannot authenticate (web,
+	// API token, SSH public key, OIDC) until re-enabled by an admin.
+	Disabled bool
 }
 
 // UserSSHKey is a stored SSH public key for vantyx SSH server (public key auth).
@@ -51,6 +54,11 @@ type UserStore interface {
 	// rules such as "not yourself" and "not the last admin" are enforced
 	// by the caller. Returns ErrUserNotFound / ErrInvalidRole.
 	UpdateRole(userID, role string) error
+	// UpdateUsername renames the account (unique, 1-64 chars). Returns
+	// ErrUserExists on collision.
+	UpdateUsername(userID, username string) error
+	// SetDisabled suspends or re-enables the account.
+	SetDisabled(userID string, disabled bool) error
 	AddPublicKey(userID, keyLine string) (int64, error)
 	ListPublicKeys(userID string) ([]UserSSHKey, error)
 	DeletePublicKey(userID string, keyID int64) error
@@ -74,9 +82,12 @@ var ErrInvalidLocale = errors.New("unsupported locale")
 var ErrInvalidRole = errors.New("invalid role")
 
 var (
-	ErrUserExists        = errors.New("user already exists")
-	ErrUserNotFound      = errors.New("user not found")
-	ErrInvalidSecret     = errors.New("invalid credentials")
+	ErrUserExists    = errors.New("user already exists")
+	ErrUserNotFound  = errors.New("user not found")
+	ErrInvalidSecret = errors.New("invalid credentials")
+	// ErrUserDisabled is returned by the authentication paths for a
+	// suspended account (after the credential itself verified).
+	ErrUserDisabled      = errors.New("account disabled")
 	ErrWrongPassword     = errors.New("current password is wrong")
 	ErrPasswordUnchanged = errors.New("new password must differ from current")
 	ErrInvalidPublicKey  = errors.New("invalid SSH public key")

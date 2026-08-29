@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -44,6 +45,12 @@ func TestApp_MeReportsServerTimezone(t *testing.T) {
 	router.ServeHTTP(w, jsonReq(t, http.MethodPost, "/api/login", map[string]string{"username": "admin", "password": "Admin123!"}, ""))
 	if tz := decodeJSON(t, w)["timezone"]; tz != "Asia/Tokyo" {
 		t.Fatalf("login timezone = %v, want Asia/Tokyo", tz)
+	}
+	// API timestamps carry the same zone (explicit +09:00 offset).
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/audit?limit=1", nil, sess.ID))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "+09:00") {
+		t.Fatalf("/api/audit: %d %s", w.Code, w.Body.String())
 	}
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodPut, "/api/me/timezone"},

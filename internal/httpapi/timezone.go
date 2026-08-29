@@ -28,6 +28,15 @@ func LoadTimezoneFromEnv() (*time.Location, error) {
 	return loc, nil
 }
 
+// serverLocation is the configured zone (UTC when the App was built
+// without one, e.g. in tests) for formatting API timestamps.
+func (a *App) serverLocation() *time.Location {
+	if a == nil || a.Location == nil {
+		return time.UTC
+	}
+	return a.Location
+}
+
 // displayTimezone is the zone name handed to clients (login / GET
 // /api/me `timezone`) so the UI formats timestamps like the server logs.
 func (a *App) displayTimezone() string {

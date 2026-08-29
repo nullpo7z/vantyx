@@ -71,7 +71,7 @@ func (a *App) handleCommandLogs(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&it.ID, &it.Time, &it.SessionID, &it.UserID, &it.TargetID, &it.LineText); err != nil {
 			continue
 		}
-		it.Time = it.Time.UTC()
+		it.Time = it.Time.In(a.serverLocation()) // same zone as the logs (VANTYX_TIMEZONE)
 		items = append(items, it)
 	}
 	nextCursor := commandNextCursor(items, pageLimit)

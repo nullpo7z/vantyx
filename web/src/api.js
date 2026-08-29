@@ -1346,18 +1346,6 @@ const API = {
     }
   },
 
-  /** キック済みユーザーの再参加ブロックを解除する（オーナー専用） */
-  async allowSessionRejoin(sessionId, userId, { kind = 'terminal' } = {}) {
-    const res = await fetch(
-      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/participants/${encodeURIComponent(userId)}/allow-rejoin`,
-      { method: 'POST', credentials: 'include' },
-    )
-    if (!res.ok && res.status !== 204) {
-      const err = await res.json().catch(() => ({ message: res.statusText }))
-      throw new Error(err.message || 'Failed to allow rejoin')
-    }
-  },
-
   /** 書込権限のリクエストを作成する */
   async createSessionWriteRequest(sessionId) {
     const res = await fetch(

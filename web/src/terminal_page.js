@@ -545,7 +545,6 @@ export function renderTerminalPage(container) {
         escapeHtml,
         getState: () => ({ participants: cachedParticipants, kicked: cachedKicked }),
         onKick: (uid, name) => kickParticipant(sid, uid, name),
-        onAllowRejoin: (uid) => allowRejoin(sid, uid),
       })
     })
   }
@@ -1543,15 +1542,6 @@ export function renderTerminalPage(container) {
     refreshParticipantsDialog()
   }
 
-  async function allowRejoin(sessionId, userId) {
-    if (!sessionId || !userId) return
-    try {
-      await API.allowSessionRejoin(sessionId, userId)
-      await refreshParticipants(sessionId)
-    } catch (err) {
-      await uiAlert(t('sharing.allowRejoinFailed', { error: err?.message || String(err) }))
-    }
-  }
 
   function clearWriteRequestApproval() {
     pendingWriteRequestApproval = null

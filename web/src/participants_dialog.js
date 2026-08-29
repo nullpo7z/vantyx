@@ -3,8 +3,10 @@
 // Replaces the always-visible participants panel that used to sit under
 // the sharing banner and shrink the terminal area as viewers joined.
 // Opened from the "Participants (N)" header button, like Invitations.
-// Lists current viewers with Remove, and users the owner removed with
-// "Allow rejoin" (E-16 / F-1).
+// Lists current viewers with Remove, and -- for information only -- the
+// users the owner removed. There is no "allow rejoin" control: issuing a
+// new named invitation to a removed user is the one way to let them back
+// in (F-2 / E-16).
 
 import { t } from './i18n.js'
 
@@ -15,7 +17,7 @@ let rerender = null
  * Re-render the dialog body from fresh state if it is currently open.
  * Called by the host page whenever its participant cache changes (SSE
  * participant_joined / participant_left / session_change, or after a
- * kick / allow-rejoin round-trip).
+ * kick round-trip).
  */
 export function refreshParticipantsDialog() {
   if (openDialogEl && typeof rerender === 'function') {
@@ -48,9 +50,8 @@ export function closeParticipantsDialog() {
  *   are the rows from GET .../participants (user_id, username, role,
  *   is_writer), `kicked` the user IDs blocked from rejoining.
  * @param {(userId: string, displayName: string) => Promise<void>} opts.onKick
- * @param {(userId: string) => Promise<void>} opts.onAllowRejoin
  */
-export function openParticipantsDialog({ sessionId, targetName, escapeHtml, getState, onKick, onAllowRejoin }) {
+export function openParticipantsDialog({ sessionId, targetName, escapeHtml, getState, onKick }) {
   if (!sessionId) return
   closeParticipantsDialog()
 
@@ -99,18 +100,10 @@ export function openParticipantsDialog({ sessionId, targetName, escapeHtml, getS
           </tr></thead><tbody>${viewerRows}</tbody></table>`
       : `<p class="text-xs text-slate-500 px-3 py-2">${t('sharing.participantsEmpty')}</p>`
 
-    const kickedRows = kicked
-      .map(
-        (uid) => `<tr class="border-b border-slate-100 last:border-0">
-          <td class="px-3 py-2 text-sm text-slate-800">${escapeHtml(uid)}</td>
-          <td class="px-3 py-2 text-right">
-            <button type="button" data-allow="${escapeHtml(uid)}" class="rounded border border-slate-300 bg-white px-2 py-0.5 text-xs text-slate-700 hover:bg-slate-50">${t('sharing.allowRejoin')}</button>
-          </td>
-        </tr>`,
-      )
-      .join('')
     const kickedHtml = kicked.length
-      ? `<table class="w-full text-left"><tbody>${kickedRows}</tbody></table>`
+      ? `<ul class="divide-y divide-slate-100">${kicked
+          .map((uid) => `<li class="px-3 py-2 text-sm text-slate-800">${escapeHtml(uid)}</li>`)
+          .join('')}</ul>`
       : ''
 
     body.innerHTML = `
@@ -133,16 +126,6 @@ export function openParticipantsDialog({ sessionId, targetName, escapeHtml, getS
         btn.disabled = true
         try {
           await onKick?.(btn.getAttribute('data-kick') || '', btn.getAttribute('data-name') || '')
-        } finally {
-          btn.disabled = false
-        }
-      })
-    })
-    body.querySelectorAll('[data-allow]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        btn.disabled = true
-        try {
-          await onAllowRejoin?.(btn.getAttribute('data-allow') || '')
         } finally {
           btn.disabled = false
         }

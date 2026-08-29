@@ -425,7 +425,6 @@ func (a *App) NewRouter() http.Handler {
 		r.Post("/{session_id}/join", a.handleJoinSession)
 		r.Get("/{session_id}/participants", a.handleListParticipants)
 		r.Delete("/{session_id}/participants/{user_id}", a.handleKickParticipant)
-		r.Post("/{session_id}/participants/{user_id}/allow-rejoin", a.handleAllowRejoin)
 		r.Post("/{session_id}/write-requests", a.handleCreateWriteRequest)
 		r.Post("/{session_id}/write-requests/{request_id}/grant", a.handleGrantWriteRequest)
 		r.Post("/{session_id}/write-requests/{request_id}/deny", a.handleDenyWriteRequest)
@@ -443,7 +442,6 @@ func (a *App) NewRouter() http.Handler {
 		r.Post("/{session_id}/join", a.handleVNCJoinSession)
 		r.Get("/{session_id}/participants", a.handleVNCListParticipants)
 		r.Delete("/{session_id}/participants/{user_id}", a.handleVNCKickParticipant)
-		r.Post("/{session_id}/participants/{user_id}/allow-rejoin", a.handleVNCAllowRejoin)
 	})
 	r.Route("/api/rdp/sessions", func(r chi.Router) {
 		r.Get("/", a.handleRDPSessions)
@@ -456,7 +454,6 @@ func (a *App) NewRouter() http.Handler {
 		r.Post("/{session_id}/join", a.handleRDPJoinSession)
 		r.Get("/{session_id}/participants", a.handleRDPListParticipants)
 		r.Delete("/{session_id}/participants/{user_id}", a.handleRDPKickParticipant)
-		r.Post("/{session_id}/participants/{user_id}/allow-rejoin", a.handleRDPAllowRejoin)
 	})
 	r.Get("/ws/rdp", a.handleRDPWebSocket)
 	r.Get("/ws/rdp/browser", a.handleRDPBrowserWebSocket)

@@ -19,7 +19,12 @@ const STORAGE_KEY = 'vantyx_timezone'
 export const SUPPORTED_TIMEZONES = (() => {
   try {
     if (typeof Intl.supportedValuesOf === 'function') {
-      return Intl.supportedValuesOf('timeZone')
+      const zones = Intl.supportedValuesOf('timeZone')
+      // Chrome's supportedValuesOf('timeZone') lists only region/city
+      // zones and omits plain "UTC", which is the one zone an operator
+      // most often wants for correlating with server logs. Always offer
+      // it first (Intl accepts "UTC" as a timeZone everywhere).
+      return zones.includes('UTC') ? zones : ['UTC', ...zones]
     }
   } catch {
     /* not supported in this browser */

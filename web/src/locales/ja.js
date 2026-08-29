@@ -1058,6 +1058,8 @@ const ja = {
     sessionEnded: 'セッションが終了しました。サーバー側でログアウトしたため、再接続はできません。',
     viewerRejoinFailed: 'この共有セッションに参加できません',
     viewerRejoinFailedHint: 'セッションから削除されたか、招待が無効になっています。オーナーに新しい招待を依頼してください。',
+    actionParticipants: '参加者',
+    actionLeave: '退出',
     authPrompt: 'ターゲットの {auth} 認証情報を入力してください。',
     storedCredHint: 'セッション名と説明を入力してください（任意）。接続で保存済み認証を使って接続します。',
     needsPasswordHint: 'ユーザー名は保存済みです。パスワードを入力してください。',

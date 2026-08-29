@@ -577,21 +577,55 @@ func (a *App) invitableUserIDsForGroup(ctx context.Context, ownerID, targetID, g
 	if !targetOK {
 		return nil, errInviteGroupNotForTarget
 	}
-	userIDs, err := a.AccessGroupStore.UserIDsForGroup(ctx, gid, &access.ListOpts{Limit: 1000})
-	if err != nil {
-		return nil, err
+	// Members of the group and of every ancestor: access is inherited down
+	// the hierarchy, so "invite the net/tokyo group" reaches the people who
+	// hold it through "net" as well.
+	seen := make(map[string]bool)
+	var userIDs []string
+	for _, g := range ancestorGroupIDs(groupID) {
+		ids, err := a.AccessGroupStore.UserIDsForGroup(ctx, access.GroupID(g), &access.ListOpts{Limit: 1000})
+		if err != nil {
+			return nil, err
+		}
+		for _, uid := range ids {
+			if !seen[string(uid)] {
+				seen[string(uid)] = true
+				userIDs = append(userIDs, string(uid))
+			}
+		}
 	}
+	sort.Strings(userIDs)
 	out := make([]string, 0, len(userIDs))
 	for _, uid := range userIDs {
-		ok, err := a.userCanAccessTarget(ctx, string(uid), access.TargetID(targetID))
+		ok, err := a.userCanAccessTarget(ctx, uid, access.TargetID(targetID))
 		if err != nil {
 			return nil, err
 		}
 		if ok {
-			out = append(out, string(uid))
+			out = append(out, uid)
 		}
 	}
 	return out, nil
+}
+
+// ancestorGroupIDs returns groupID and each of its ancestors, root first
+// ("a/b/c" -> a, a/b, a/b/c).
+func ancestorGroupIDs(groupID string) []string {
+	parts := strings.Split(strings.Trim(groupID, "/"), "/")
+	out := make([]string, 0, len(parts))
+	acc := ""
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		if acc == "" {
+			acc = p
+		} else {
+			acc += "/" + p
+		}
+		out = append(out, acc)
+	}
+	return out
 }
 
 func (a *App) tagsGrantingTargetAccess(ctx context.Context, targetID string) ([]string, error) {

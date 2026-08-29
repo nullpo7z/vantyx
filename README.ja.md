@@ -17,7 +17,7 @@ FTP / TFTP サーバーをつなぐセルフホスト型のアクセスゲート
 - **ブラウザリモートデスクトップ**：VNC（noVNC）。RDP ターゲットは xfreerdp + Xvfb + x11vnc 経由（ブラウザから接続）。VNC への共同参加は [ロードマップ](docs/roadmap.md)参照。
 - **ファイル転送**：SFTP / FTP / リモート TFTP、および組み込み TFTP サーバー（機器プロビジョニング向け）。バックグラウンド転送ジョブと進捗 SSE。
 - **資格情報ライブラリ**（管理者）：**Keys**（SSH 秘密鍵のみ）と **Identities**（ユーザー名 + 認証方式）を分離管理。サーバー登録時に Identity / Key / 手入力から選択。 [docs/credentials.md](docs/credentials.md)。
-- **タグベースのアクセス制御**：グループ・ターゲット・ユーザーへのタグ付与で、誰がどのサーバーに接続できるかを制御。
+- **階層型アクセスグループ**（`net/tokyo` は `net` の権限を継承）と**タグベースのアクセス制御**：グループ・ターゲット・ユーザーへのタグ付与で、誰がどのサーバーに接続できるかを制御。詳細は [docs/access-control.md](docs/access-control.md)。
 - **CLI ゲートウェイ**：`ssh user@vantyx` で Vantyx にログインし、許可されたターゲットへプロキシ接続。
 - **セッション録画**：ターミナル/CLI は asciinema `.cast`、RDP/VNC 画面録画は H.264 `.mp4`。UI で再生・GIF/MP4 書き出し（バックグラウンド変換）。
 - **監査パイプライン**：API 呼び出し・セッションイベントを記録し、外部 syslog / SIEM へ転送可能。

@@ -487,7 +487,7 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_Query1Error(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("query failed")
-	mock.ExpectQuery("SELECT group_id FROM user_groups WHERE user_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnError(wantErr)
+	mock.ExpectQuery("SELECT DISTINCT g.id\\s+FROM user_groups ug").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnError(wantErr)
 
 	_, err = store.GroupIDsForUser(ctx, "u1", nil)
 	if err != wantErr {
@@ -510,7 +510,7 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_Rows1Err(t *testing.T) {
 
 	wantErr := errors.New("rows1 err")
 	rows := sqlmock.NewRows([]string{"group_id"}).AddRow("g1").RowError(0, wantErr)
-	mock.ExpectQuery("SELECT group_id FROM user_groups WHERE user_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT DISTINCT g.id\\s+FROM user_groups ug").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(rows)
 
 	_, err = store.GroupIDsForUser(ctx, "u1", nil)
 	if err != wantErr {
@@ -532,7 +532,7 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_Query2Error(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("query2 failed")
-	mock.ExpectQuery("SELECT group_id FROM user_groups WHERE user_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
+	mock.ExpectQuery("SELECT DISTINCT g.id\\s+FROM user_groups ug").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
 	mock.ExpectQuery("SELECT DISTINCT gt.group_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnError(wantErr)
 
 	_, err = store.GroupIDsForUser(ctx, "u1", nil)
@@ -555,9 +555,9 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_Query3Error(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("query3 failed")
-	mock.ExpectQuery("SELECT group_id FROM user_groups WHERE user_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
+	mock.ExpectQuery("SELECT DISTINCT g.id\\s+FROM user_groups ug").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
 	mock.ExpectQuery("SELECT DISTINCT gt.group_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
-	mock.ExpectQuery("SELECT DISTINCT gtag.group_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnError(wantErr)
+	mock.ExpectQuery("FROM group_tags gtag").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnError(wantErr)
 
 	_, err = store.GroupIDsForUser(ctx, "u1", nil)
 	if err != wantErr {
@@ -579,7 +579,7 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_Rows1ScanErr(t *testing.T) {
 	ctx := context.Background()
 
 	rows := sqlmock.NewRows([]string{"group_id"}).AddRow(nil)
-	mock.ExpectQuery("SELECT group_id FROM user_groups WHERE user_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT DISTINCT g.id\\s+FROM user_groups ug").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(rows)
 
 	_, err = store.GroupIDsForUser(ctx, "u1", nil)
 	if err == nil {
@@ -602,7 +602,7 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_Rows2Err(t *testing.T) {
 
 	wantErr := errors.New("rows2 err")
 	rows := sqlmock.NewRows([]string{"group_id"}).AddRow("g1").RowError(0, wantErr)
-	mock.ExpectQuery("SELECT group_id FROM user_groups WHERE user_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
+	mock.ExpectQuery("SELECT DISTINCT g.id\\s+FROM user_groups ug").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
 	mock.ExpectQuery("SELECT DISTINCT gt.group_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(rows)
 
 	_, err = store.GroupIDsForUser(ctx, "u1", nil)
@@ -626,9 +626,9 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_Rows3Err(t *testing.T) {
 
 	wantErr := errors.New("rows3 err")
 	rows := sqlmock.NewRows([]string{"group_id"}).AddRow("g1").RowError(0, wantErr)
-	mock.ExpectQuery("SELECT group_id FROM user_groups WHERE user_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
+	mock.ExpectQuery("SELECT DISTINCT g.id\\s+FROM user_groups ug").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
 	mock.ExpectQuery("SELECT DISTINCT gt.group_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
-	mock.ExpectQuery("SELECT DISTINCT gtag.group_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(rows)
+	mock.ExpectQuery("FROM group_tags gtag").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(rows)
 
 	_, err = store.GroupIDsForUser(ctx, "u1", nil)
 	if err != wantErr {
@@ -650,7 +650,7 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_Rows2ScanErr(t *testing.T) {
 	ctx := context.Background()
 
 	rows := sqlmock.NewRows([]string{"group_id"}).AddRow(nil)
-	mock.ExpectQuery("SELECT group_id FROM user_groups WHERE user_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
+	mock.ExpectQuery("SELECT DISTINCT g.id\\s+FROM user_groups ug").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
 	mock.ExpectQuery("SELECT DISTINCT gt.group_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(rows)
 
 	_, err = store.GroupIDsForUser(ctx, "u1", nil)
@@ -673,9 +673,9 @@ func TestSQLiteAccessGroupStore_GroupIDsForUser_Rows3ScanErr(t *testing.T) {
 	ctx := context.Background()
 
 	rows := sqlmock.NewRows([]string{"group_id"}).AddRow(nil)
-	mock.ExpectQuery("SELECT group_id FROM user_groups WHERE user_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
+	mock.ExpectQuery("SELECT DISTINCT g.id\\s+FROM user_groups ug").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
 	mock.ExpectQuery("SELECT DISTINCT gt.group_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
-	mock.ExpectQuery("SELECT DISTINCT gtag.group_id").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(rows)
+	mock.ExpectQuery("FROM group_tags gtag").WithArgs("u1", maxFanoutRowsPerQuery).WillReturnRows(rows)
 
 	_, err = store.GroupIDsForUser(ctx, "u1", nil)
 	if err == nil {

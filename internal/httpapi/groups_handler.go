@@ -131,8 +131,9 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 		groupIDs = groupIDs[:pageLimit]
 		nextCursor = string(groupIDs[pageLimit-1])
 	}
-	// Targets this user is allowed to see (membership or tag based);
-	// admins are allowed to see all of them.
+	// Targets this user is allowed to see (membership or tag based,
+	// including groups below the ones they hold -- see
+	// docs/access-control.md); admins are allowed to see all of them.
 	allowedSet := make(map[access.TargetID]bool)
 	if !isAdmin {
 		allowedTargetIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)

@@ -381,7 +381,8 @@ func (s *SQLiteAccessGroupStore) UserIDsForGroup(ctx context.Context, groupID Gr
 }
 
 // UserIDsForTarget returns distinct user IDs that can access targetID via
-// group membership or tag-based ACL (mirrors TargetIDsForUser paths).
+// group membership or tag-based ACL (mirrors TargetIDsForUser paths,
+// including grants on ancestor groups).
 func (s *SQLiteAccessGroupStore) UserIDsForTarget(ctx context.Context, targetID TargetID, opts *ListOpts) ([]UserID, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
@@ -390,7 +391,9 @@ func (s *SQLiteAccessGroupStore) UserIDsForTarget(ctx context.Context, targetID 
 		SELECT DISTINCT uid FROM (
 			SELECT ug.user_id AS uid
 			FROM user_groups ug
-			INNER JOIN group_targets gt ON gt.group_id = ug.group_id
+			INNER JOIN group_targets gt
+				ON gt.group_id = ug.group_id
+				OR substr(gt.group_id, 1, length(ug.group_id) + 1) = ug.group_id || '/'
 			WHERE gt.target_id = ?
 			UNION
 			SELECT ut.user_id AS uid
@@ -401,7 +404,9 @@ func (s *SQLiteAccessGroupStore) UserIDsForTarget(ctx context.Context, targetID 
 			SELECT ut.user_id AS uid
 			FROM user_tags ut
 			INNER JOIN group_tags gtag ON gtag.tag = ut.tag
-			INNER JOIN group_targets gt ON gt.group_id = gtag.group_id
+			INNER JOIN group_targets gt
+				ON gt.group_id = gtag.group_id
+				OR substr(gt.group_id, 1, length(gtag.group_id) + 1) = gtag.group_id || '/'
 			WHERE gt.target_id = ?
 		)
 		ORDER BY uid
@@ -441,7 +446,8 @@ func (s *SQLiteAccessGroupStore) UserIDsForTarget(ctx context.Context, targetID 
 	return all, nil
 }
 
-// TagsGrantingTargetAccess returns distinct tags that grant access to targetID.
+// TagsGrantingTargetAccess returns distinct tags that grant access to
+// targetID: its own tags plus the tags of its groups and their ancestors.
 func (s *SQLiteAccessGroupStore) TagsGrantingTargetAccess(ctx context.Context, targetID TargetID) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
@@ -450,7 +456,9 @@ func (s *SQLiteAccessGroupStore) TagsGrantingTargetAccess(ctx context.Context, t
 			SELECT tag FROM target_tags WHERE target_id = ?
 			UNION
 			SELECT gtag.tag FROM group_tags gtag
-			INNER JOIN group_targets gt ON gt.group_id = gtag.group_id
+			INNER JOIN group_targets gt
+				ON gt.group_id = gtag.group_id
+				OR substr(gt.group_id, 1, length(gtag.group_id) + 1) = gtag.group_id || '/'
 			WHERE gt.target_id = ?
 		)
 		ORDER BY tag
@@ -615,15 +623,32 @@ func (s *SQLiteAccessGroupStore) GroupIDsForTarget(ctx context.Context, targetID
 
 // GroupIDsForUser returns the set of access group IDs the user can see: direct membership (user_groups)
 // and tag-based (groups that have a target with matching user tag, or groups with matching tag).
+// Group hierarchy: a group ID is a "/"-separated path ("net/tokyo") and
+// access granted on a group covers the group itself and every descendant
+// ("net" reaches "net/tokyo" and "net/tokyo/rack1"), never the other
+// way round. The descendant test is a plain prefix comparison on
+// substr()/length() rather than LIKE, because "_" is legal in IDs and
+// would be a single-character wildcard ("a_b" must not match "a/b").
+//
+//	descendantOrSelf(child, parent) :=
+//	    child = parent OR substr(child, 1, length(parent) + 1) = parent || '/'
+
 func (s *SQLiteAccessGroupStore) GroupIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]GroupID, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
 	seen := make(map[GroupID]bool)
 
-	// 1) Via direct group membership
+	// 1) Via group membership: the groups the user is in and all of their
+	//    descendants.
 	rows1, err := s.db.QueryContext(ctx, `
-		SELECT group_id FROM user_groups WHERE user_id = ? LIMIT ?
+		SELECT DISTINCT g.id
+		FROM user_groups ug
+		INNER JOIN access_groups g
+			ON g.id = ug.group_id
+			OR substr(g.id, 1, length(ug.group_id) + 1) = ug.group_id || '/'
+		WHERE ug.user_id = ?
+		LIMIT ?
 	`, string(userID), maxFanoutRowsPerQuery)
 	if err != nil {
 		return nil, err
@@ -665,11 +690,14 @@ func (s *SQLiteAccessGroupStore) GroupIDsForUser(ctx context.Context, userID Use
 		return nil, err
 	}
 
-	// 3) Via user tag = group tag
+	// 3) Via user tag = group tag (the tagged group and its descendants)
 	rows3, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT gtag.group_id
+		SELECT DISTINCT g.id
 		FROM group_tags gtag
 		INNER JOIN user_tags ut ON gtag.tag = ut.tag AND ut.user_id = ?
+		INNER JOIN access_groups g
+			ON g.id = gtag.group_id
+			OR substr(g.id, 1, length(gtag.group_id) + 1) = gtag.group_id || '/'
 		LIMIT ?
 	`, string(userID), maxFanoutRowsPerQuery)
 	if err != nil {
@@ -803,6 +831,7 @@ func (s *SQLiteAccessGroupStore) TargetIDsForGroup(ctx context.Context, groupID 
 
 // TargetIDsForUser returns the set of target IDs the user can access via group membership or tag match.
 // Tag-based: user has tag T and (target has tag T or target's group has tag T).
+// Group-based grants (membership and group tags) cover descendant groups too.
 func (s *SQLiteAccessGroupStore) TargetIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]TargetID, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
@@ -810,11 +839,13 @@ func (s *SQLiteAccessGroupStore) TargetIDsForUser(ctx context.Context, userID Us
 	// Collect all accessible target IDs: from groups and from tags (then dedup, sort, paginate in Go).
 	seen := make(map[TargetID]bool)
 
-	// 1) Via group membership
+	// 1) Via group membership (the group and its descendants)
 	rows1, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT gt.target_id
 		FROM user_groups ug
-		JOIN group_targets gt ON ug.group_id = gt.group_id
+		JOIN group_targets gt
+			ON gt.group_id = ug.group_id
+			OR substr(gt.group_id, 1, length(ug.group_id) + 1) = ug.group_id || '/'
 		WHERE ug.user_id = ?
 		LIMIT ?
 	`, string(userID), maxFanoutRowsPerQuery)
@@ -857,12 +888,14 @@ func (s *SQLiteAccessGroupStore) TargetIDsForUser(ctx context.Context, userID Us
 		return nil, err
 	}
 
-	// 3) Via user tag = group tag (target belongs to that group)
+	// 3) Via user tag = group tag (target belongs to that group or a descendant)
 	rows3, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT gt.target_id
 		FROM user_tags ut
 		INNER JOIN group_tags gtag ON gtag.tag = ut.tag AND ut.user_id = ?
-		INNER JOIN group_targets gt ON gtag.group_id = gt.group_id
+		INNER JOIN group_targets gt
+			ON gt.group_id = gtag.group_id
+			OR substr(gt.group_id, 1, length(gtag.group_id) + 1) = gtag.group_id || '/'
 		LIMIT ?
 	`, string(userID), maxFanoutRowsPerQuery)
 	if err != nil {

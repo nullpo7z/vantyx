@@ -51,6 +51,10 @@ type AccessGroupStore interface {
 	Delete(ctx context.Context, id GroupID) error
 	AddUserToGroup(ctx context.Context, userID UserID, groupID GroupID) error
 	RemoveUserFromGroup(ctx context.Context, userID UserID, groupID GroupID) error
+	// UserIDsForGroup returns the direct members of the group only (the
+	// management UI edits exactly this set). Members of ancestor groups
+	// also have access; see ancestorGroupIDs in httpapi for callers that
+	// need everyone with access through the group.
 	UserIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]UserID, error)
 	AddTargetToGroup(ctx context.Context, groupID GroupID, targetID TargetID) error
 	// RemoveTargetFromGroup revokes the group's access to the target.
@@ -60,13 +64,21 @@ type AccessGroupStore interface {
 	// visibility. Used to move a target between groups (remove from all
 	// current groups, then add to the new one).
 	GroupIDsForTarget(ctx context.Context, targetID TargetID) ([]GroupID, error)
+	// GroupIDsForUser returns the groups the user can see: the ones they
+	// are a member of or reach by tag, plus every descendant of those
+	// (group access is inherited down the "parent/child" ID hierarchy).
 	GroupIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]GroupID, error)
 	// AllGroupIDs returns every group ID (sorted, paginated via opts)
 	// regardless of membership. Only for admin management views, which
 	// bypass the membership/tag visibility rules that GroupIDsForUser
 	// enforces for ordinary users.
 	AllGroupIDs(ctx context.Context, opts *ListOpts) ([]GroupID, error)
+	// TargetIDsForGroup returns the targets assigned directly to the
+	// group (not those of its descendants; the tree lists them under
+	// their own group).
 	TargetIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]TargetID, error)
+	// TargetIDsForUser returns every target the user may access: targets
+	// of their groups and of all descendant groups, plus tag matches.
 	TargetIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]TargetID, error)
 	// UserIDsForTarget returns user IDs that can access the target (group
 	// membership or matching tags). Used when listing invitation candidates.

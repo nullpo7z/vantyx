@@ -27,10 +27,12 @@ exposes a unified REST + WebSocket API for the bundled single-page UI.
 - **Credential library** (admin): separate **Keys** (private PEM only) and
   **Identities** (username + auth). Apply to targets via Identity, Key + manual
   username, or inline entry. See [docs/credentials.md](docs/credentials.md).
-- **Tag-based access control** on groups, targets, and users.
-- **OIDC single sign-on** (Keycloak, Entra ID, Okta, … via discovery + PKCE)
-  and **TOTP two-factor** for built-in users, on both the web UI and the CLI
-  gateway. See [docs/configuration.md](docs/configuration.md#two-factor-authentication-totp).
+- **Hierarchical access groups** (`net/tokyo` inherits access from `net`) plus
+  **tag-based access control** on groups, targets, and users. See
+  [docs/access-control.md](docs/access-control.md).
+- **OIDC single sign-on** (Keycloak, Entra ID, Okta, Cloudflare Access, … via
+  discovery + PKCE) and **TOTP two-factor** for built-in users on the web UI.
+  See [docs/configuration.md](docs/configuration.md#two-factor-authentication-totp).
 - **CLI gateway**: `ssh user@vantyx` (public-key auth only) and proxy to
   allowed targets.
 - **Session recording**: terminal/CLI sessions as asciinema `.cast`; RDP/VNC

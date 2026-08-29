@@ -221,9 +221,19 @@ func (b *sshDetachableBridge) DetachUser(userID string) {
 	}
 	b.clientMu.Unlock()
 	for _, c := range toClose {
+		// Tell the client *why* on the connection itself before closing
+		// it. The out-of-band SSE notification can lose the race with the
+		// close (the page then shows a generic "disconnected" screen), but
+		// a frame on this socket is always observed before onclose.
+		_ = c.w.WriteText([]byte(kickedEndMsg))
 		_ = c.w.Close()
 	}
 }
+
+// kickedEndMsg is the session_ended frame sent to a client that the
+// session owner removed. The SPA maps it to the "you were removed"
+// screen instead of the generic session-ended one.
+const kickedEndMsg = "session_ended: kicked"
 
 func (b *sshDetachableBridge) runExternalResize() {
 	if b.externalResize == nil || b.windowChange == nil {

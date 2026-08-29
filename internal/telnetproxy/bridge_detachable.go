@@ -210,9 +210,16 @@ func (b *detachableBridge) DetachUser(userID string) {
 	}
 	b.clientMu.Unlock()
 	for _, c := range toClose {
+		// Same as the SSH bridge: say why on the socket itself before
+		// closing so the page never has to rely on the SSE race.
+		_ = c.w.WriteText([]byte(kickedEndMsg))
 		_ = c.w.Close()
 	}
 }
+
+// kickedEndMsg mirrors sshproxy's: the SPA maps it to the "you were
+// removed" screen.
+const kickedEndMsg = "session_ended: kicked"
 
 func (b *detachableBridge) runOutputPump() {
 	defer b.signalBridgeDone()

@@ -215,7 +215,18 @@ export function renderTerminalPage(container) {
   /** WebSocket メッセージ共通処理。制御フレームは xterm に書き込まない。 */
   function handleTerminalWsMessage(ws, ev, { onError, onSessionEnded, onData } = {}) {
     if (typeof ev.data === 'string' && ev.data.startsWith('session_ended:')) {
-      const msg = ev.data.slice('session_ended:'.length).trim() || t('terminal.sessionEndedSuffix')
+      const raw = ev.data.slice('session_ended:'.length).trim()
+      if (raw === 'kicked') {
+        // The owner removed us. The bridge says so on this socket right
+        // before closing it, so this is observed before onclose (R-5):
+        // mark the close as handled and show the dedicated screen (no
+        // Reconnect -- the server would refuse it anyway).
+        onSessionEnded?.()
+        showKickedSessionEnded()
+        try { ws.close() } catch { /* ignore */ }
+        return true
+      }
+      const msg = raw || t('terminal.sessionEndedSuffix')
       if (term) term.write(`\r\n\n${t('terminal.sessionEndedPrefix')} ${msg}\r\n`)
       currentSessionId = null
       syncInviteManageButton()

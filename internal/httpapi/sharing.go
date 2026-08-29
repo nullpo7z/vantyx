@@ -1188,22 +1188,25 @@ func (a *App) handleKickParticipant(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	audit("session_participant_kicked", auditFields{
+		"user_id":    ownerID,
+		"target_id":  target,
+		"session_id": string(termSess.ID()),
+	})
+	// Notify BEFORE detaching so the event is queued on the kicked user's
+	// SSE stream ahead of their WebSocket closing. They are no longer a
+	// participant, so name them explicitly or they never receive the
+	// reason=kicked event (E-15). The bridge additionally sends a
+	// "session_ended: kicked" frame on the socket itself (R-5).
+	a.publishSharingEvent(termSess, sharing.EventParticipantLeft, target, "", map[string]interface{}{
+		"reason": "kicked",
+	}, target)
 	if a.SharingBridges != nil {
 		if controller, ok := a.SharingBridges.Get(termSess.ID()); ok {
 			controller.DetachUser(target)
 			controller.SetWriter(room.WriterID())
 		}
 	}
-	audit("session_participant_kicked", auditFields{
-		"user_id":    ownerID,
-		"target_id":  target,
-		"session_id": string(termSess.ID()),
-	})
-	// The kicked user is no longer a participant, so name them explicitly
-	// or they never receive the reason=kicked event (E-15).
-	a.publishSharingEvent(termSess, sharing.EventParticipantLeft, target, "", map[string]interface{}{
-		"reason": "kicked",
-	}, target)
 	if a.SessionEventBroker != nil {
 		a.SessionEventBroker.Broadcast()
 	}

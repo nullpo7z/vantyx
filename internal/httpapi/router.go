@@ -462,6 +462,7 @@ func (a *App) NewRouter() http.Handler {
 	r.Delete("/api/recordings/exports/{export_id}", a.handleDeleteRecordingExport)
 	r.Post("/api/recordings/{recording_id}/export", a.handlePostRecordingExport)
 	r.Get("/api/recordings/{recording_id}/file", a.handleGetRecordingFile)
+	r.Delete("/api/recordings/{recording_id}", a.handleDeleteRecording)
 
 	// Background file transfers.
 	r.Get("/api/file-transfers", a.handleFileTransfersList)

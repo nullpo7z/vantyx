@@ -112,6 +112,22 @@ func (r *recordingExportRegistry) remove(id string) (*recordingExportJob, bool) 
 	return j, ok
 }
 
+// removeForRecording drops every export job derived from recordingID and
+// returns them so the caller can cancel running ones and delete their
+// output files. Used when the source recording itself is deleted.
+func (r *recordingExportRegistry) removeForRecording(recordingID string) []*recordingExportJob {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []*recordingExportJob
+	for id, j := range r.jobs {
+		if j.RecordingID == recordingID {
+			out = append(out, j)
+			delete(r.jobs, id)
+		}
+	}
+	return out
+}
+
 func (r *recordingExportRegistry) listForViewer(userID string, includeAll bool) []*recordingExportJob {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -4,6 +4,7 @@ import 'asciinema-player/dist/bundle/asciinema-player.css'
 import { t } from './i18n.js'
 import { formatDateInputValue, formatDateTime } from './datetime.js'
 import { queueRecordingExportAndNotify } from './recording_exports_page.js'
+import { uiAlert, uiConfirm } from './ui_dialog.js'
 
 /** Target protocol label for tables (SSH, Telnet, …). */
 function formatTargetProtocol(protocol) {
@@ -284,6 +285,11 @@ export async function renderRecordingsPage({
           const gifBtn = `<button type="button" class="recording-queue-export rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-id="${escapeHtml(
             r.id,
           )}" data-format="gif" title="${escapeHtml(gifHint)}">GIF</button>`
+          const deleteBtn = isAdmin
+            ? `<button type="button" class="recording-delete-btn rounded border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50" data-id="${escapeHtml(
+                r.id,
+              )}">${t('recordings.delete')}</button>`
+            : ''
           return `
           <tr class="border-b border-slate-200 hover:bg-slate-50">
             <td class="px-4 py-2 text-sm text-slate-700 whitespace-nowrap">${escapeHtml(formatDateTime(r.started_at))}</td>
@@ -304,6 +310,7 @@ export async function renderRecordingsPage({
                 ${mp4Link}
                 ${mp4Btn}
                 ${gifBtn}
+                ${deleteBtn}
               </div>
             </td>
           </tr>
@@ -475,6 +482,22 @@ export async function renderRecordingsPage({
           delete btn.dataset.queuing
           btn.classList.remove('opacity-50', 'pointer-events-none')
           btn.textContent = prev
+        }
+      })
+    })
+    mainContent.querySelectorAll('.recording-delete-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const recordingId = btn.dataset.id || ''
+        if (!recordingId) return
+        const ok = await uiConfirm(t('recordings.confirmDelete'))
+        if (!ok) return
+        btn.disabled = true
+        try {
+          await API.deleteRecording(recordingId)
+          refresh()
+        } catch (err) {
+          btn.disabled = false
+          await uiAlert(t('recordings.deleteFailed', { error: err.message || String(err) }))
         }
       })
     })

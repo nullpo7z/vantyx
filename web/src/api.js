@@ -978,6 +978,18 @@ const API = {
     }
   },
 
+  /** Delete a recording (row + media file + derived exports). Admin only. */
+  async deleteRecording(recordingId) {
+    const res = await fetch(`/api/recordings/${encodeURIComponent(recordingId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete recording')
+    }
+  },
+
   /** Delete a background recording export job. */
   async deleteRecordingExport(exportId) {
     const res = await fetch(`/api/recordings/exports/${encodeURIComponent(exportId)}`, {

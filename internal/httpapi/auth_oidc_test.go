@@ -28,6 +28,12 @@ type fakeIdP struct {
 	srv *httptest.Server
 	key *rsa.PrivateKey
 
+	// discoveryPath is where the well-known document is served ("" =
+	// at the issuer root); issuer is the value the document and ID
+	// tokens carry (defaults to srv.URL).
+	discoveryPath string
+	issuer        string
+
 	mu     sync.Mutex
 	claims map[string]interface{} // extra claims for the next ID token
 	nonce  string
@@ -36,16 +42,23 @@ type fakeIdP struct {
 }
 
 func newFakeIdP(t *testing.T) *fakeIdP {
+	return newFakeIdPAt(t, "")
+}
+
+// newFakeIdPAt serves the discovery document under discoveryPath (for
+// example "/cdn-cgi/access/sso/oidc/cid") while the issuer stays the
+// server root, like Cloudflare Access does.
+func newFakeIdPAt(t *testing.T, discoveryPath string) *fakeIdP {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("rsa key: %v", err)
 	}
-	p := &fakeIdP{key: key, claims: map[string]interface{}{}}
+	p := &fakeIdP{key: key, claims: map[string]interface{}{}, discoveryPath: discoveryPath}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc(discoveryPath+"/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"issuer":                                p.srv.URL,
+			"issuer":                                p.issuer,
 			"authorization_endpoint":                p.srv.URL + "/authorize",
 			"token_endpoint":                        p.srv.URL + "/token",
 			"jwks_uri":                              p.srv.URL + "/keys",
@@ -71,7 +84,7 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 		p.tokens++
 		p.verif = r.PostForm.Get("code_verifier")
 		claims := map[string]interface{}{
-			"iss":   p.srv.URL,
+			"iss":   p.issuer,
 			"aud":   "vantyx-test",
 			"exp":   time.Now().Add(5 * time.Minute).Unix(),
 			"iat":   time.Now().Unix(),
@@ -90,6 +103,7 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 		})
 	})
 	p.srv = httptest.NewServer(mux)
+	p.issuer = p.srv.URL
 	t.Cleanup(p.srv.Close)
 	return p
 }
@@ -363,6 +377,50 @@ func TestOIDC_RejectsBadStateNonceAndAudience(t *testing.T) {
 	}
 }
 
+// Cloudflare Access style: discovery lives under a per-client path, the
+// issuer in the document / ID token is the bare team domain.
+func TestOIDC_DiscoveryURLDistinctFromIssuer(t *testing.T) {
+	idp := newFakeIdPAt(t, "/cdn-cgi/access/sso/oidc/cid")
+	idp.setClaims(map[string]interface{}{"sub": "cf-1", "email": "eve@example.com", "name": "Eve"})
+
+	// Without the discovery URL the well-known document is not at the issuer.
+	app, router := newOIDCTestApp(t, idp, true)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/auth/oidc/login", nil))
+	if w.Code != http.StatusFound || !strings.Contains(w.Header().Get("Location"), "oidc_error=provider_unavailable") {
+		t.Fatalf("login without discovery url: %d %q", w.Code, w.Header().Get("Location"))
+	}
+
+	app.oidc.cfg.DiscoveryURL = idp.srv.URL + "/cdn-cgi/access/sso/oidc/cid"
+	app.oidc.cfg.UsernameClaim = "email"
+	cookie, state, nonce := startOIDCLogin(t, router, "/")
+	idp.setNonce(nonce)
+	w = oidcCallback(t, router, cookie, state)
+	if w.Code != http.StatusFound || w.Header().Get("Location") != "/" {
+		t.Fatalf("callback: %d %q", w.Code, w.Header().Get("Location"))
+	}
+	sess, _ := app.SessionStore.Get(sessionCookie(w))
+	if sess == nil {
+		t.Fatal("no session")
+	}
+	u, _ := app.UserStore.GetByID(sess.UserID)
+	if u == nil || u.Username != "eve@example.com" {
+		t.Fatalf("user = %+v, want username from email claim", u)
+	}
+	// The link records the real issuer (team domain), not the discovery URL.
+	if uid, err := app.OIDCLinks.Lookup(context.Background(), idp.srv.URL, "cf-1"); err != nil || uid != u.ID {
+		t.Fatalf("link lookup = %q, %v", uid, err)
+	}
+	// An ID token whose iss is the discovery URL (wrong issuer) is rejected.
+	idp.issuer = idp.srv.URL + "/cdn-cgi/access/sso/oidc/cid"
+	cookie, state, nonce = startOIDCLogin(t, router, "/")
+	idp.setNonce(nonce)
+	w = oidcCallback(t, router, cookie, state)
+	if !strings.Contains(w.Header().Get("Location"), "oidc_error=token") {
+		t.Fatalf("issuer mismatch accepted: %q", w.Header().Get("Location"))
+	}
+}
+
 func TestOIDC_NextPathIsSameOriginOnly(t *testing.T) {
 	for in, want := range map[string]string{
 		"":                       "/",
@@ -397,12 +455,16 @@ func TestOIDCConfigFromEnv(t *testing.T) {
 	t.Setenv("VANTYX_OIDC_AUTO_CREATE_USERS", "true")
 	t.Setenv("VANTYX_OIDC_USERNAME_CLAIM", "")
 	t.Setenv("VANTYX_OIDC_DISPLAY_NAME", "")
+	t.Setenv("VANTYX_OIDC_DISCOVERY_URL", "https://team.cloudflareaccess.com/cdn-cgi/access/sso/oidc/cid/")
 	cfg := oidcConfigFromEnv()
 	if cfg == nil {
 		t.Fatal("config nil")
 	}
 	if !cfg.AutoCreate || cfg.UsernameClaim != "preferred_username" || cfg.DisplayName != "SSO" {
 		t.Fatalf("defaults not applied: %+v", cfg)
+	}
+	if cfg.DiscoveryURL != "https://team.cloudflareaccess.com/cdn-cgi/access/sso/oidc/cid" {
+		t.Fatalf("DiscoveryURL = %q (trailing slash should be trimmed)", cfg.DiscoveryURL)
 	}
 	if strings.Join(cfg.Scopes, " ") != "openid profile groups" {
 		t.Fatalf("scopes = %v; openid must be prepended", cfg.Scopes)

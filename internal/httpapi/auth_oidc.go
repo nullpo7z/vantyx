@@ -23,7 +23,9 @@ import (
 // from the environment at start-up. Login is enabled when Issuer and
 // ClientID are both set.
 //
-//	VANTYX_OIDC_ISSUER            https://idp.example.com/realms/x (discovery base URL)
+//	VANTYX_OIDC_ISSUER            https://idp.example.com/realms/x (expected `iss`; also the discovery base URL)
+//	VANTYX_OIDC_DISCOVERY_URL     (optional; base URL whose /.well-known/openid-configuration to fetch when it
+//	                               differs from the issuer, e.g. Cloudflare Access SaaS apps)
 //	VANTYX_OIDC_CLIENT_ID
 //	VANTYX_OIDC_CLIENT_SECRET     (optional for public clients; PKCE is always used)
 //	VANTYX_OIDC_REDIRECT_URL      (optional; default <scheme>://<host>/api/auth/oidc/callback)
@@ -33,6 +35,7 @@ import (
 //	VANTYX_OIDC_DISPLAY_NAME      (optional; button label, default "SSO")
 type oidcConfig struct {
 	Issuer        string
+	DiscoveryURL  string
 	ClientID      string
 	ClientSecret  string
 	RedirectURL   string
@@ -50,6 +53,7 @@ func oidcConfigFromEnv() *oidcConfig {
 	}
 	cfg := &oidcConfig{
 		Issuer:        issuer,
+		DiscoveryURL:  strings.TrimRight(strings.TrimSpace(os.Getenv("VANTYX_OIDC_DISCOVERY_URL")), "/"),
 		ClientID:      clientID,
 		ClientSecret:  strings.TrimSpace(os.Getenv("VANTYX_OIDC_CLIENT_SECRET")),
 		RedirectURL:   strings.TrimSpace(os.Getenv("VANTYX_OIDC_REDIRECT_URL")),
@@ -123,7 +127,16 @@ func (s *oidcService) providerFor(ctx context.Context) (*oidc.Provider, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	p, err := oidc.NewProvider(ctx, s.cfg.Issuer)
+	discovery := s.cfg.Issuer
+	if s.cfg.DiscoveryURL != "" && s.cfg.DiscoveryURL != s.cfg.Issuer {
+		// Some providers (Cloudflare Access SaaS apps, some Azure AD
+		// set-ups) publish the discovery document under a path that is
+		// not the `iss` they put in ID tokens. Fetch from the configured
+		// URL but keep verifying tokens against the configured issuer.
+		discovery = s.cfg.DiscoveryURL
+		ctx = oidc.InsecureIssuerURLContext(ctx, s.cfg.Issuer)
+	}
+	p, err := oidc.NewProvider(ctx, discovery)
 	if err != nil {
 		return nil, err
 	}

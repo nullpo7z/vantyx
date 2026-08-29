@@ -74,6 +74,7 @@ S256 and nonce). SSO is enabled when both `VANTYX_OIDC_ISSUER` and
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VANTYX_OIDC_ISSUER` | — | Issuer URL used for discovery (`<issuer>/.well-known/openid-configuration`), e.g. `https://keycloak.example/realms/ops`, `https://login.microsoftonline.com/<tenant>/v2.0`, `https://<org>.okta.com`. Discovery happens lazily on the first login, so an unreachable IdP does not block start-up. |
+| `VANTYX_OIDC_DISCOVERY_URL` | = issuer | Base URL whose `/.well-known/openid-configuration` is fetched when it differs from the `iss` the IdP puts in ID tokens. Cloudflare Access SaaS apps need this: `VANTYX_OIDC_ISSUER=https://<team>.cloudflareaccess.com`, `VANTYX_OIDC_DISCOVERY_URL=https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<client-id>`. Tokens are still verified against `VANTYX_OIDC_ISSUER`. |
 | `VANTYX_OIDC_CLIENT_ID` | — | Client ID registered at the IdP. |
 | `VANTYX_OIDC_CLIENT_SECRET` | — | Client secret. Optional for public clients (PKCE is always used). |
 | `VANTYX_OIDC_REDIRECT_URL` | derived | Callback URL registered at the IdP. Defaults to `<scheme>://<host>/api/auth/oidc/callback` from the incoming request (honours `X-Forwarded-Proto`); set it explicitly behind a reverse proxy. |
@@ -91,6 +92,36 @@ IdP round trip; only same-origin paths are honoured.
 
 Audit events: `oidc_login_started`, `oidc_login_ok`, `oidc_login_failed`
 (with `reason`), `oidc_user_created`.
+
+### Example: Cloudflare Access (Zero Trust) as the IdP
+
+1. Zero Trust dashboard → **Access → Applications → Add an application →
+   SaaS**, protocol **OIDC**. Redirect URL:
+   `https://<vantyx-host>/api/auth/oidc/callback`. Enable **PKCE**. Keep the
+   default scopes (`openid email profile`). Assign an Access policy (who may
+   log in) and save; note the *Client ID*, *Client secret* and the
+   endpoints shown.
+2. Cloudflare ID tokens carry `sub`, `email`, `name` (no
+   `preferred_username`), so map usernames to the e-mail address:
+
+   ```
+   VANTYX_OIDC_ISSUER=https://<team>.cloudflareaccess.com
+   VANTYX_OIDC_DISCOVERY_URL=https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<client-id>
+   VANTYX_OIDC_CLIENT_ID=<client-id>
+   VANTYX_OIDC_CLIENT_SECRET=<client-secret>
+   VANTYX_OIDC_REDIRECT_URL=https://<vantyx-host>/api/auth/oidc/callback
+   VANTYX_OIDC_USERNAME_CLAIM=email
+   VANTYX_OIDC_AUTO_CREATE_USERS=1
+   VANTYX_OIDC_DISPLAY_NAME=Cloudflare
+   ```
+
+   If the discovery document's `issuer` turns out to equal the
+   `/cdn-cgi/access/sso/oidc/<client-id>` base URL, set `VANTYX_OIDC_ISSUER`
+   to that value instead and drop `VANTYX_OIDC_DISCOVERY_URL`; the
+   `oidc_login_failed` audit event (`reason=id_token_invalid`, "issuer did
+   not match") tells you which one applies.
+3. Without auto-create, pre-create the user with the e-mail address as
+   the username; Vantyx links the Cloudflare identity to it on first login.
 
 ## Storage
 

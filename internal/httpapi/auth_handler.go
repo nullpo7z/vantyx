@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 )
 
@@ -27,6 +28,18 @@ type loginResponse struct {
 
 	RequirePasswordChange bool `json:"require_password_change,omitempty"`
 	TOTPEnabled           bool `json:"totp_enabled,omitempty"`
+}
+
+// meResponse extends the login payload with what the account page shows.
+type meResponse struct {
+	loginResponse
+	Tags   []string  `json:"tags"`
+	Groups []meGroup `json:"groups"`
+}
+
+type meGroup struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type changePasswordRequest struct {
@@ -189,17 +202,37 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 		u.Role = auth.RoleUser
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 	totpEnabled := a.TOTPStore != nil && a.TOTPStore.Enabled(r.Context(), u.ID)
-	_ = json.NewEncoder(w).Encode(loginResponse{
-		UserID:      u.ID,
-		Username:    u.Username,
-		Role:        u.Role,
-		Locale:      u.Locale,
-		Timezone:    a.displayTimezone(),
-		TOTPEnabled: totpEnabled,
-	})
+	resp := meResponse{
+		loginResponse: loginResponse{
+			UserID:      u.ID,
+			Username:    u.Username,
+			Role:        u.Role,
+			Locale:      u.Locale,
+			Timezone:    a.displayTimezone(),
+			TOTPEnabled: totpEnabled,
+		},
+		Tags:   []string{},
+		Groups: []meGroup{},
+	}
+	if tags, err := a.UserStore.TagsForUser(u.ID); err == nil && tags != nil {
+		resp.Tags = tags
+	}
+	if a.AccessGroupStore != nil {
+		// Groups the user can reach (memberships, tags, and everything
+		// below those groups) -- what the account page shows as
+		// "accessible groups".
+		if gids, err := a.AccessGroupStore.GroupIDsForUser(r.Context(), access.UserID(u.ID), &access.ListOpts{Limit: 500}); err == nil {
+			for _, gid := range gids {
+				name := string(gid)
+				if g, gerr := a.AccessGroupStore.Get(r.Context(), gid); gerr == nil && g != nil && g.Name != "" {
+					name = g.Name
+				}
+				resp.Groups = append(resp.Groups, meGroup{ID: string(gid), Name: name})
+			}
+		}
+	}
+	writeJSON(w, resp)
 }
 
 // handleUpdateLocale persists the current user's UI locale preference.

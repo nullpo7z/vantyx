@@ -12,9 +12,8 @@ import {
   bindSessionListActions,
   countIdleSessions,
 } from './session_list_shared.js'
-import { renderUserInfo } from './account_page.js'
+import { renderAccountPage } from './account_page.js'
 import { renderAuditPage } from './audit_page.js'
-import { renderSettingsPage } from './settings_page.js'
 import { renderGroupTargetsTable } from './targets_page.js'
 import { renderCredentialsPage } from './credentials_page.js'
 import {
@@ -199,13 +198,7 @@ export function renderApp(container) {
 
   function showUserInfo() {
     if (!meData) return
-    setActiveNav('recordings')
-    renderUserInfo({
-      mainContent,
-      meData,
-      escapeHtml,
-      onChangePassword: () => showChangePasswordModal(),
-    })
+    showSettings()
   }
 
   async function showUsersPage() {
@@ -305,76 +298,17 @@ export function renderApp(container) {
     await renderAuditPage({ mainContent, meData, setActiveNav })
   }
 
+  // Account settings: profile, language, password, 2FA, SSH keys and
+  // (admins) audit forwarding. Also opened from the user name in the header.
   async function showSettings() {
     disconnectAppSessionEvents()
-    await renderSettingsPage(mainContent, { meData })
-  }
-
-  function showChangePasswordModal() {
-    const modal = document.getElementById('change-password-modal')
-    modal.classList.remove('hidden')
-    modal.innerHTML = `
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
-          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">${t('app.changePasswordTitle')}</h3>
-            <button id="change-password-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
-          </div>
-          <form id="change-password-form">
-            <div class="px-6 py-5 space-y-5">
-              <div>
-                <label for="change-password-current" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldCurrentPassword')}</label>
-                <input type="password" id="change-password-current" autocomplete="current-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderCurrentPassword')}" />
-              </div>
-              <div>
-                <label for="change-password-new" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldNewPassword')}</label>
-                <input type="password" id="change-password-new" autocomplete="new-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderStrong')}" />
-              </div>
-              <div>
-                <label for="change-password-confirm" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldNewPasswordConfirm')}</label>
-                <input type="password" id="change-password-confirm" autocomplete="new-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderConfirm')}" />
-              </div>
-              <p id="change-password-error" class="text-sm text-red-600 hidden"></p>
-            </div>
-            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="change-password-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
-              <button type="submit" id="change-password-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.submitChange')}</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    `
-    const close = () => {
-      modal.classList.add('hidden')
-      modal.innerHTML = ''
+    try {
+      meData = await API.me()
+      userNameEl.textContent = meData.username
+    } catch {
+      /* keep the cached meData */
     }
-    modal.querySelector('#change-password-close').addEventListener('click', close)
-    modal.querySelector('#change-password-cancel').addEventListener('click', close)
-    modal.querySelector('#change-password-form').addEventListener('submit', async (e) => {
-      e.preventDefault()
-      const errorEl = modal.querySelector('#change-password-error')
-      const submitBtn = modal.querySelector('#change-password-submit')
-      const current = modal.querySelector('#change-password-current').value
-      const newPass = modal.querySelector('#change-password-new').value
-      const confirmPass = modal.querySelector('#change-password-confirm').value
-      errorEl.classList.add('hidden')
-      if (newPass !== confirmPass) {
-        errorEl.textContent = t('app.passwordMismatch')
-        errorEl.classList.remove('hidden')
-        return
-      }
-      submitBtn.disabled = true
-      try {
-        await API.changePassword(current, newPass)
-        close()
-        showUserInfo()
-      } catch (err) {
-        errorEl.textContent = err.message || t('app.passwordChangeFailed')
-        errorEl.classList.remove('hidden')
-      } finally {
-        submitBtn.disabled = false
-      }
-    })
+    await renderAccountPage(mainContent, { meData })
   }
 
   function showEditTagsModal({ type, id, label, currentTags, onSaved }) {

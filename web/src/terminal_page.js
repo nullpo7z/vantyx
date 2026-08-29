@@ -90,7 +90,8 @@ export function renderTerminalPage(container) {
             <button id="term-participants-manage" type="button" class="vantyx-page-btn hidden" title="${escapeHtml(t('sharing.participantsTitle'))}">${t('terminal.actionParticipants')} (0)</button>
             <button id="term-invite-manage" type="button" class="vantyx-page-btn hidden" title="${escapeHtml(t('sharing.inviteTitle'))}">${t('terminal.inviteManage')}</button>
             <button id="term-back" type="button" class="vantyx-page-btn">${t('terminal.back')}</button>
-            <button id="term-close" type="button" class="vantyx-page-btn">${t('terminal.endSessionBtn')}</button>
+            <button id="term-leave" type="button" class="vantyx-page-btn${sharingMode === 'viewer' ? '' : ' hidden'}">${t('terminal.actionLeave')}</button>
+            <button id="term-close" type="button" class="vantyx-page-btn${sharingMode === 'viewer' ? ' hidden' : ''}">${t('terminal.endSessionBtn')}</button>
           </div>
         </div>
       </header>
@@ -578,6 +579,9 @@ export function renderTerminalPage(container) {
   backFromDisconnectBtn.addEventListener('click', goHomeOrCloseToOpener)
   backFromEndedBtn.addEventListener('click', goHomeOrCloseToOpener)
   cancelBtn.addEventListener('click', goHomeOrCloseToOpener)
+  // Viewers get "Leave" instead of the owner-only "End session" (E-14):
+  // leaving just closes this tab; the owner's session keeps running.
+  container.querySelector('#term-leave')?.addEventListener('click', goHomeOrCloseToOpener)
 
   function connectResume(sessionId) {
     if (!sessionId) return

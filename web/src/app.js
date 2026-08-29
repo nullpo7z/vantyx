@@ -15,6 +15,7 @@ import {
 import { renderAccountPage } from './account_page.js'
 import { formatDateTime } from './datetime.js'
 import { renderSystemSettingsPage } from './system_settings_page.js'
+import { renderAccessRequestsAdminPage, renderMyAccessRequests, showAccessRequestModal } from './access_requests.js'
 import { renderAuditPage } from './audit_page.js'
 import { renderGroupTargetsTable } from './targets_page.js'
 import { renderCredentialsPage } from './credentials_page.js'
@@ -125,6 +126,7 @@ export function renderApp(container) {
   const navUsers = document.getElementById('nav-users')
   const navCredentials = document.getElementById('nav-credentials')
   const navAudit = document.getElementById('nav-audit')
+  const navAccessRequests = document.getElementById('nav-access-requests')
   const navSystem = document.getElementById('nav-system')
   const navSettings = document.getElementById('nav-settings')
 
@@ -299,6 +301,13 @@ export function renderApp(container) {
   async function showAuditLogs() {
     disconnectAppSessionEvents()
     await renderAuditPage({ mainContent, meData, setActiveNav })
+  }
+
+  // Access requests (admin only): approve / deny membership requests.
+  async function showAccessRequests() {
+    if (!meData || meData.role !== 'admin') return
+    disconnectAppSessionEvents()
+    await renderAccessRequestsAdminPage(mainContent, { onDecided: () => { groupsCache = null } })
   }
 
   // System settings (admin only): server-wide knobs such as audit forwarding.
@@ -1038,12 +1047,13 @@ export function renderApp(container) {
 
       const addTargetBtnHtml = isManageMode
         ? `<button type="button" id="btn-add-target-in-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50" ${selectedGroupId ? '' : 'disabled'}>${t('app.addTargetBtn')}</button>`
-        : ''
+        : `<button type="button" id="btn-request-access" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('access.requestBtn')}</button>`
       const showMembersSection = isManageMode && isAdminRole && selectedGroupId
 
       mainContent.innerHTML = `
         <div class="w-full h-full flex flex-col gap-4">
           ${!isManageMode ? '<section id="incoming-invitations-banner" class="hidden w-full bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-4 space-y-3"></section>' : ''}
+          ${!isManageMode ? '<section id="my-access-requests" class="hidden w-full bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-3 space-y-2"></section>' : ''}
           <div class="flex gap-6 w-full flex-1 min-h-0">
             <aside class="w-80 flex-col border-r border-slate-200 bg-white shadow-sm shrink-0 rounded-lg overflow-hidden flex">
               <div class="px-4 py-3 border-b border-slate-200 text-sm font-semibold text-slate-700 flex items-center justify-between">
@@ -1180,6 +1190,16 @@ export function renderApp(container) {
 
       if (isManageMode) {
         mainContent.querySelector('#btn-add-group')?.addEventListener('click', showAddGroupModal)
+        mainContent.querySelector('#btn-request-access')?.addEventListener('click', () => {
+          showAccessRequestModal({
+            onCreated: () => renderMyAccessRequests(mainContent.querySelector('#my-access-requests')),
+          })
+        })
+        if (!isManageMode) {
+          renderMyAccessRequests(mainContent.querySelector('#my-access-requests'), {
+            onChanged: () => { groupsCache = null },
+          })
+        }
         mainContent.querySelector('#btn-add-target-in-group')?.addEventListener('click', () => {
           if (!selectedGroupId) return
           showAddTargetModal()
@@ -2954,6 +2974,7 @@ export function renderApp(container) {
     navUsers,
     navCredentials,
     navAudit,
+    navAccessRequests,
     navSystem,
     navSettings,
     getMe: () => meData,
@@ -2965,6 +2986,7 @@ export function renderApp(container) {
     onUsers: () => showUsersPage(),
     onCredentials: () => showCredentialsPage(),
     onAudit: () => showAuditLogs(),
+    onAccessRequests: () => showAccessRequests(),
     onSystem: () => showSystemSettings(),
     onSettings: () => showSettings(),
   })

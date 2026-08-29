@@ -13,6 +13,7 @@ let state = {
   navUsers: null,
   navCredentials: null,
   navAudit: null,
+  navAccessRequests: null,
   navSystem: null,
   navSettings: null,
   navApiRef: null,
@@ -29,6 +30,7 @@ function navLinks() {
     navUsers,
     navCredentials,
     navAudit,
+    navAccessRequests,
     navSystem,
     navSettings,
     navApiRef,
@@ -42,6 +44,7 @@ function navLinks() {
     navUsers,
     navCredentials,
     navAudit,
+    navAccessRequests,
     navSystem,
     navSettings,
     navApiRef,
@@ -53,12 +56,13 @@ function navLinks() {
 // reach (E-8). Server-wide settings live under the admin-only "System
 // settings" entry.
 function isAdminOnlyNav(el) {
-  const { navGroups, navUsers, navCredentials, navAudit, navSystem, navApiRef } = state
+  const { navGroups, navUsers, navCredentials, navAudit, navAccessRequests, navSystem, navApiRef } = state
   return (
     el === navGroups ||
     el === navUsers ||
     el === navCredentials ||
     el === navAudit ||
+    el === navAccessRequests ||
     el === navSystem ||
     el === navApiRef
   )
@@ -85,6 +89,7 @@ function setNavLinkVisible(el, visible) {
  * @param {HTMLElement} opts.navUsers
  * @param {HTMLElement} opts.navCredentials
  * @param {HTMLElement} opts.navAudit
+ * @param {HTMLElement} [opts.navAccessRequests]
  * @param {HTMLElement} [opts.navSystem]
  * @param {HTMLElement} opts.navSettings
  * @param {() => ({role: string} | null)} opts.getMe
@@ -96,6 +101,7 @@ function setNavLinkVisible(el, visible) {
  * @param {() => void} opts.onUsers
  * @param {() => void} opts.onCredentials
  * @param {() => void} opts.onAudit
+ * @param {() => void} [opts.onAccessRequests]
  * @param {() => void} [opts.onSystem]
  * @param {() => void} opts.onSettings
  */
@@ -108,6 +114,7 @@ export function initNav({
   navUsers,
   navCredentials,
   navAudit,
+  navAccessRequests,
   navSystem,
   navSettings,
   getMe,
@@ -119,6 +126,7 @@ export function initNav({
   onUsers,
   onCredentials,
   onAudit,
+  onAccessRequests,
   onSystem,
   onSettings,
 }) {
@@ -132,6 +140,7 @@ export function initNav({
     navUsers,
     navCredentials,
     navAudit,
+    navAccessRequests,
     navSystem,
     navSettings,
     navApiRef,
@@ -204,6 +213,15 @@ export function initNav({
     })
   }
 
+  if (navAccessRequests) {
+    navAccessRequests.addEventListener('click', (e) => {
+      e.preventDefault()
+      const me = state.getMe && state.getMe()
+      if (!me || me.role !== 'admin') return
+      if (typeof onAccessRequests === 'function') onAccessRequests()
+    })
+  }
+
   if (navSystem) {
     navSystem.addEventListener('click', (e) => {
       e.preventDefault()
@@ -228,7 +246,7 @@ export function initNav({
  * Mark the supplied tab as active and refresh per-link visibility based
  * on the current user's role.
  *
- * @param {'targets'|'sessions'|'recordings'|'recordingExports'|'groups'|'users'|'credentials'|'audit'|'system'|'settings'} tab
+ * @param {'targets'|'sessions'|'recordings'|'recordingExports'|'groups'|'users'|'credentials'|'audit'|'accessRequests'|'system'|'settings'} tab
  */
 export function setActiveNav(tab) {
   const { navTargets, navRecordings, navGroups, getMe } = state
@@ -251,6 +269,7 @@ export function setActiveNav(tab) {
     users: state.navUsers,
     credentials: state.navCredentials,
     audit: state.navAudit,
+    accessRequests: state.navAccessRequests,
     system: state.navSystem,
     settings: state.navSettings,
   }[tab]

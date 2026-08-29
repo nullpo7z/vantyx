@@ -38,6 +38,7 @@ export function buildAppShellHTML() {
               <a href="#" id="nav-users" class="vantyx-nav-link hidden">${t('nav.users')}</a>
               <a href="#" id="nav-credentials" class="vantyx-nav-link hidden">${t('nav.credentials')}</a>
               <a href="#" id="nav-audit" class="vantyx-nav-link hidden">${t('nav.audit')}</a>
+              <a href="#" id="nav-access-requests" class="vantyx-nav-link hidden">${t('nav.accessRequests')}</a>
               <a href="#" id="nav-system" class="vantyx-nav-link hidden">${t('nav.system')}</a>
               <a href="#" id="nav-settings" class="vantyx-nav-link hidden">${t('nav.settings')}</a>
               <a href="/docs" id="nav-api-ref" target="_blank" rel="noopener noreferrer" class="vantyx-nav-link hidden">${t('nav.apiRef')}</a>

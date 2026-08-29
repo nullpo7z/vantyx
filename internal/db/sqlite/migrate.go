@@ -294,6 +294,24 @@ func Migrate(db *sql.DB) error {
 		// VANTYX_OIDC_GROUP_MAP). Tracked separately from user_groups so a
 		// login that no longer carries a group revokes only what OIDC
 		// granted, never memberships an admin added by hand.
+		// Access requests: a user asks for (time-limited) membership of a
+		// group; an admin approves (creating the membership) or denies.
+		`CREATE TABLE IF NOT EXISTS access_requests (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			group_id TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			duration_seconds INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at INTEGER NOT NULL,
+			decided_at INTEGER,
+			decided_by TEXT,
+			decision_note TEXT,
+			expires_at INTEGER,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_access_requests_user ON access_requests(user_id, created_at)`,
 		`CREATE TABLE IF NOT EXISTS user_oidc_groups (
 			user_id TEXT NOT NULL,
 			group_id TEXT NOT NULL,

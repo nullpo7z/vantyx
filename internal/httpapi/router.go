@@ -51,6 +51,7 @@ type App struct {
 	SessionStore            auth.SessionStore
 	TargetStore             access.TargetStore
 	AccessGroupStore        access.AccessGroupStore
+	AccessRequests          access.AccessRequestStore
 	SSHKeyStore             access.SSHKeyStore
 	CredentialIdentityStore access.CredentialIdentityStore
 
@@ -283,6 +284,7 @@ func NewApp() *App {
 		SessionStore:            sessionStore,
 		TargetStore:             targetStore,
 		AccessGroupStore:        groupStore,
+		AccessRequests:          access.NewSQLiteAccessRequestStore(db),
 		SSHKeyStore:             sshKeyStore,
 		CredentialIdentityStore: credIdentityStore,
 		TerminalSessionManager:  terminalSessions,
@@ -391,6 +393,13 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/api/groups/{group_id}/members", a.handleGroupMembers)
 	r.Post("/api/groups/{group_id}/members", a.handleAddGroupMember)
 	r.Delete("/api/groups/{group_id}/members/{user_id}", a.handleRemoveGroupMember)
+	// Access requests: any user asks, admins decide.
+	r.Get("/api/access-requests/groups", a.handleAccessRequestGroups)
+	r.Get("/api/access-requests", a.handleListAccessRequests)
+	r.Post("/api/access-requests", a.handleCreateAccessRequest)
+	r.Post("/api/access-requests/{id}/approve", a.handleApproveAccessRequest)
+	r.Post("/api/access-requests/{id}/deny", a.handleDenyAccessRequest)
+	r.Delete("/api/access-requests/{id}", a.handleCancelAccessRequest)
 	r.Get("/api/groups/{group_id}/tags", a.handleGroupTags)
 	r.Put("/api/groups/{group_id}/tags", a.handleSetGroupTags)
 

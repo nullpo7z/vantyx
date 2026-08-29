@@ -40,6 +40,26 @@ The same applies to tag grants on a group (below). Consequences:
 Only the `/` separator defines the hierarchy: `net_x` is a sibling of
 `net`, not a child (IDs may contain `_`).
 
+## Time-limited memberships
+
+A membership can carry an expiry (**Add member → Access until**, or
+`expires_at` on `POST /api/groups/{id}/members`). After that time the user
+loses the group — and everything inherited below it — automatically; the
+row stays listed as *expired* until an admin removes it. Re-adding a member
+updates the expiry; adding without one makes it permanent.
+
+## Access requests
+
+Users who lack a group can ask for it from the home page (**Request
+access**): pick the group, a duration (1 hour … 30 days, or permanent) and
+an optional reason. Admins see pending requests under **Access requests**
+and approve (optionally changing the duration) or deny with a note. An
+approval creates the membership through the same path as adding a member
+by hand, so expiry and inheritance behave identically. Requesters can
+withdraw pending requests. Audit events: `access_request_created`,
+`access_request_approved`, `access_request_denied`,
+`access_request_cancelled`.
+
 ## Tags
 
 Tags are a second, orthogonal grant. A user with tag `T` can reach:

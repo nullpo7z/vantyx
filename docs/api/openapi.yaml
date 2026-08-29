@@ -237,6 +237,40 @@ components:
       required:
         - user_id
         - username
+    AccessRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        username:
+          type: string
+        group_id:
+          type: string
+        group_name:
+          type: string
+        reason:
+          type: string
+        duration_seconds:
+          type: integer
+        status:
+          type: string
+          enum: [pending, approved, denied, cancelled]
+        created_at:
+          type: string
+          format: date-time
+        decided_at:
+          type: string
+          format: date-time
+        decided_by:
+          type: string
+        decision_note:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+          description: 承認時に付与したメンバーシップの期限（無期限なら省略）
     MFARequiredResponse:
       type: object
       description: |
@@ -3072,6 +3106,178 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/access-requests/groups:
+    get:
+      summary: 申請可能なグループ一覧
+      description: すべてのグループ（id, name）と、呼び出しユーザーが既にアクセスできるか（has_access）を返します。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: グループ一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    has_access:
+                      type: boolean
+
+  /api/access-requests:
+    get:
+      summary: アクセス申請一覧
+      description: 一般ユーザーは自分の申請のみ。管理者は全件（`mine=1` で自分のみ、`status=pending|approved|denied|cancelled` で絞り込み）。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, approved, denied, cancelled]
+        - in: query
+          name: mine
+          schema:
+            type: string
+            enum: ['1']
+      responses:
+        '200':
+          description: 申請一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccessRequest'
+    post:
+      summary: アクセス申請を作成
+      description: |
+        グループへの（期間付き）メンバーシップを申請します。既にアクセスできるグループ、承認待ちの申請があるグループには 409。
+        `duration_seconds` は 0（無期限）〜 31536000（365 日）。監査イベント `access_request_created`。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [group_id]
+              properties:
+                group_id:
+                  type: string
+                reason:
+                  type: string
+                  maxLength: 500
+                duration_seconds:
+                  type: integer
+      responses:
+        '201':
+          description: 作成した申請
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessRequest'
+        '400':
+          description: 不正な入力
+        '404':
+          description: グループが存在しない
+        '409':
+          description: 既にアクセス可能、または承認待ちの申請あり
+
+  /api/access-requests/{id}/approve:
+    post:
+      summary: アクセス申請を承認（管理者のみ）
+      description: 申請者をグループに追加します（`duration_seconds` で期間を上書き可、0 = 無期限）。監査イベント `access_request_approved`。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                duration_seconds:
+                  type: integer
+                note:
+                  type: string
+      responses:
+        '200':
+          description: 更新後の申請
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessRequest'
+        '403':
+          description: 管理者以外
+        '404':
+          description: 申請が存在しない
+        '409':
+          description: 申請が承認待ちではない
+
+  /api/access-requests/{id}/deny:
+    post:
+      summary: アクセス申請を却下（管理者のみ）
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note:
+                  type: string
+      responses:
+        '200':
+          description: 更新後の申請
+        '403':
+          description: 管理者以外
+        '404':
+          description: 申請が存在しない
+        '409':
+          description: 申請が承認待ちではない
+
+  /api/access-requests/{id}:
+    delete:
+      summary: アクセス申請を取り下げ
+      description: 申請者本人（または管理者）が承認待ちの申請を取り下げます。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 取り下げ完了
+        '403':
+          description: 他人の申請
+        '404':
+          description: 申請が存在しない
+        '409':
+          description: 申請が承認待ちではない
 
   /api/settings/audit-forwarder:
     get:

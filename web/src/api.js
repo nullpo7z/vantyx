@@ -1051,6 +1051,69 @@ const API = {
     return res.json()
   },
 
+  /** Access requests: groups the caller may ask for. */
+  async accessRequestGroups() {
+    const res = await fetch('/api/access-requests/groups', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load groups')
+    }
+    return res.json()
+  },
+
+  /** Access requests: list (mine for users; all or by status for admins). */
+  async accessRequests({ status = '', mine = false } = {}) {
+    const q = new URLSearchParams()
+    if (status) q.set('status', status)
+    if (mine) q.set('mine', '1')
+    const res = await fetch('/api/access-requests' + (q.toString() ? `?${q}` : ''), { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load access requests')
+    }
+    return res.json()
+  },
+
+  async createAccessRequest({ group_id, reason, duration_seconds }) {
+    const res = await fetch('/api/access-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ group_id, reason: reason || '', duration_seconds: Number(duration_seconds) || 0 }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to create the request')
+    }
+    return res.json()
+  },
+
+  async decideAccessRequest(id, decision, { duration_seconds, note } = {}) {
+    const body = { note: note || '' }
+    if (duration_seconds !== undefined && duration_seconds !== null && duration_seconds !== '') {
+      body.duration_seconds = Number(duration_seconds)
+    }
+    const res = await fetch(`/api/access-requests/${encodeURIComponent(id)}/${decision}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to decide the request')
+    }
+    return res.json()
+  },
+
+  async cancelAccessRequest(id) {
+    const res = await fetch(`/api/access-requests/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'include' })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to cancel the request')
+    }
+  },
+
   /** グループにメンバーを追加（管理者のみ） */
   async addGroupMember(groupId, userId, expiresAt = '') {
     const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/members`, {

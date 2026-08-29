@@ -119,6 +119,19 @@ func (a *App) handleSharingCreateInvitation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	a.ensureRoomForMeta(meta)
+	// Mirror the terminal path (sharing.go handleCreateInvitation) so
+	// VNC/RDP invitations are auditable too: who invited whom, to which
+	// session/target, and whether it was a shareable link.
+	audit("session_invitation_created", auditFields{
+		"user_id":    meta.OwnerID,
+		"session_id": meta.SessionID,
+		"target_id":  meta.TargetID,
+		"kind":       string(meta.Kind),
+		"inv_id":     inv.ID,
+		"mode":       string(inv.Mode),
+		"is_link":    invitee == "",
+		"invitee":    invitee,
+	})
 	if invitee != "" {
 		a.publishInvitationEventToInvitee(invitee, sharing.EventInvitationReceived, inv)
 	}
@@ -160,6 +173,17 @@ func (a *App) handleSharingCreateTagInvitations(w http.ResponseWriter, r *http.R
 			writeInternalError(w, err)
 			return
 		}
+		audit("session_invitation_created", auditFields{
+			"user_id":    meta.OwnerID,
+			"session_id": meta.SessionID,
+			"target_id":  meta.TargetID,
+			"kind":       string(meta.Kind),
+			"inv_id":     inv.ID,
+			"mode":       string(inv.Mode),
+			"is_link":    false,
+			"invitee":    uid,
+			"tag":        tag,
+		})
 		a.publishInvitationEventToInvitee(uid, sharing.EventInvitationReceived, inv)
 		items = append(items, encodeInvitation(inv, a.usernameFor(r.Context(), uid)))
 	}
@@ -198,6 +222,17 @@ func (a *App) handleSharingCreateGroupInvitations(w http.ResponseWriter, r *http
 			writeInternalError(w, err)
 			return
 		}
+		audit("session_invitation_created", auditFields{
+			"user_id":    meta.OwnerID,
+			"session_id": meta.SessionID,
+			"target_id":  meta.TargetID,
+			"kind":       string(meta.Kind),
+			"inv_id":     inv.ID,
+			"mode":       string(inv.Mode),
+			"is_link":    false,
+			"invitee":    uid,
+			"group":      groupID,
+		})
 		a.publishInvitationEventToInvitee(uid, sharing.EventInvitationReceived, inv)
 		items = append(items, encodeInvitation(inv, a.usernameFor(r.Context(), uid)))
 	}

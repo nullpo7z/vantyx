@@ -6,6 +6,7 @@
 import API from './api.js'
 import { captureNextQueryParam, consumePostLoginRedirect } from './auth_redirect.js'
 import { applyServerLocale, t } from './i18n.js'
+import { applyServerTimezone } from './timezone.js'
 
 /**
  * Render the "you must change your password" screen.
@@ -160,6 +161,9 @@ export function renderLogin(container) {
 async function finishLogin(container, data) {
   if (data && typeof data.locale === 'string' && data.locale) {
     applyServerLocale(data.locale)
+  }
+  if (data && typeof data.timezone === 'string') {
+    applyServerTimezone(data.timezone)
   }
   if (data && data.require_password_change) {
     renderChangePassword(container)

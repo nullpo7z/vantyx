@@ -432,8 +432,10 @@ const ja = {
     languageEnglish: 'English（英語）',
     languageJapanese: '日本語',
     sectionTimezone: 'タイムゾーン',
-    timezoneHint: '録画・監査ログなどの日時表示に使うタイムゾーンを選びます。変更は即時反映され、他のデバイスにも引き継がれます。',
-    timezoneAuto: '自動（ブラウザの既定値 — {tz}）',
+    timezoneHint:
+      '録画・監査ログ・セッション一覧などの日時表示に使う、全ユーザー共通のタイムゾーンです。他のユーザーには次回のページ読み込み時に反映されます。',
+    timezoneAuto: 'ブラウザのローカル時刻（このブラウザ: {tz}）',
+    timezoneSaved: '保存しました。全ユーザーに適用されます。',
   },
   language: {
     english: 'English',

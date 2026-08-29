@@ -411,44 +411,6 @@ func TestNormalizeUILocale(t *testing.T) {
 	}
 }
 
-func TestSQLiteUserStore_UpdateTimezone(t *testing.T) {
-	store := newTestSQLiteUserStore(t)
-	if _, err := store.CreateUser("u1", "alice", "Alice1!x", ""); err != nil {
-		t.Fatalf("CreateUser: %v", err)
-	}
-
-	got, err := store.GetByID("u1")
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-	if got.Timezone != "" {
-		t.Fatalf("expected empty timezone on fresh user, got %q", got.Timezone)
-	}
-
-	if err := store.UpdateTimezone("u1", "Asia/Tokyo"); err != nil {
-		t.Fatalf("UpdateTimezone Asia/Tokyo: %v", err)
-	}
-	got, _ = store.GetByID("u1")
-	if got.Timezone != "Asia/Tokyo" {
-		t.Fatalf("expected Asia/Tokyo, got %q", got.Timezone)
-	}
-
-	if err := store.UpdateTimezone("u1", ""); err != nil {
-		t.Fatalf("UpdateTimezone clear: %v", err)
-	}
-	got, _ = store.GetByID("u1")
-	if got.Timezone != "" {
-		t.Fatalf("expected cleared timezone, got %q", got.Timezone)
-	}
-
-	if err := store.UpdateTimezone("u1", "Not/AZone"); err != ErrInvalidTimezone {
-		t.Fatalf("expected ErrInvalidTimezone for unsupported zone, got %v", err)
-	}
-	if err := store.UpdateTimezone("missing", "Asia/Tokyo"); err != ErrUserNotFound {
-		t.Fatalf("expected ErrUserNotFound for missing user, got %v", err)
-	}
-}
-
 func TestNormalizeUITimezone(t *testing.T) {
 	for _, tc := range []struct {
 		in   string

@@ -455,8 +455,10 @@ const en = {
     languageEnglish: 'English',
     languageJapanese: '日本語 (Japanese)',
     sectionTimezone: 'Timezone',
-    timezoneHint: 'Choose the timezone used to display timestamps (recordings, audit log, etc). Applies immediately and follows you across devices.',
-    timezoneAuto: 'Auto (browser default — {tz})',
+    timezoneHint:
+      'Site-wide timezone used to display timestamps (recordings, audit log, sessions) for every user. Applies to other users on their next page load.',
+    timezoneAuto: 'Browser local (this browser: {tz})',
+    timezoneSaved: 'Saved. Applies to every user.',
   },
   language: {
     english: 'English',

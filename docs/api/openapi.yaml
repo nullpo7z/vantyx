@@ -216,6 +216,9 @@ components:
         totp_enabled:
           type: boolean
           description: GET /api/me で返る。二要素認証（TOTP）が有効なら true。
+        timezone:
+          type: string
+          description: 管理者が設定した全ユーザー共通の表示タイムゾーン（IANA 名）。空文字はブラウザのローカル時刻。
       required:
         - user_id
         - username
@@ -3003,6 +3006,50 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/settings/timezone:
+    get:
+      summary: 全ユーザー共通の表示タイムゾーン取得
+      description: 管理者が設定した表示タイムゾーン。ログイン応答・GET /api/me にも `timezone` として含まれます。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: タイムゾーン
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  timezone:
+                    type: string
+                    description: IANA 名（例 Asia/Tokyo）。空文字はブラウザのローカル時刻。
+        '401':
+          description: 未認証
+    put:
+      summary: 全ユーザー共通の表示タイムゾーン設定（管理者のみ）
+      description: 一般ユーザーは変更できません。`{"timezone":""}` でブラウザのローカル時刻に戻します。監査イベント `settings_update`（key=timezone）を記録します。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timezone]
+              properties:
+                timezone:
+                  type: string
+      responses:
+        '200':
+          description: 保存した値
+        '400':
+          description: 不正な JSON または未対応のタイムゾーン名
+        '401':
+          description: 未認証
+        '403':
+          description: 管理者以外
 
   /api/settings/audit-forwarder:
     get:

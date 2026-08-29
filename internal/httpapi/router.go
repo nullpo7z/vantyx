@@ -365,7 +365,6 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/api/me", a.handleMe)
 	r.Post("/api/me/password", a.handleChangePassword)
 	r.Put("/api/me/locale", a.handleUpdateLocale)
-	r.Put("/api/me/timezone", a.handleUpdateTimezone)
 	r.Get("/api/me/totp", a.handleTOTPStatus)
 	r.Post("/api/me/totp/setup", a.handleTOTPSetup)
 	r.Post("/api/me/totp/confirm", a.handleTOTPConfirm)
@@ -401,6 +400,9 @@ func (a *App) NewRouter() http.Handler {
 	// App settings (admin only).
 	r.Get("/api/settings/audit-forwarder", a.handleGetAuditForwarderSettings)
 	r.Put("/api/settings/audit-forwarder", a.handlePutAuditForwarderSettings)
+	// Site-wide display timezone: readable by every user, set by admins.
+	r.Get("/api/settings/timezone", a.handleGetTimezoneSetting)
+	r.Put("/api/settings/timezone", a.handlePutTimezoneSetting)
 	// Command logs (admin only).
 	r.Get("/api/commands", a.handleCommandLogs)
 

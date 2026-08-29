@@ -113,7 +113,7 @@ func (a *App) finishLogin(w http.ResponseWriter, r *http.Request, u *auth.User, 
 		Username:              u.Username,
 		Role:                  u.Role,
 		Locale:                u.Locale,
-		Timezone:              u.Timezone,
+		Timezone:              a.globalTimezone(),
 		RequirePasswordChange: u.ForcePasswordChange,
 	})
 	return true

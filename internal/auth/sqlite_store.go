@@ -80,10 +80,10 @@ func (s *SQLiteUserStore) Authenticate(username, plainPassword string) (*User, e
 	var u User
 	var forcePW int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(timezone, ''), COALESCE(force_password_change, 0)
+		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(force_password_change, 0)
 		FROM users
 		WHERE username = ?
-	`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &u.Timezone, &forcePW)
+	`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &forcePW)
 	if err == sql.ErrNoRows {
 		// Run bcrypt against a dummy hash so the latency matches.
 		_ = VerifyPassword(dummyBcryptHash, plainPassword)
@@ -107,10 +107,10 @@ func (s *SQLiteUserStore) GetByID(id string) (*User, error) {
 	var u User
 	var forcePW int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(timezone, ''), COALESCE(force_password_change, 0)
+		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(force_password_change, 0)
 		FROM users
 		WHERE id = ?
-	`, id).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &u.Timezone, &forcePW)
+	`, id).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &forcePW)
 	if err == sql.ErrNoRows {
 		return nil, ErrUserNotFound
 	}
@@ -133,7 +133,7 @@ func (s *SQLiteUserStore) ListUsers(limit, offset int) ([]*User, error) {
 	defer cancel()
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(timezone, ''), COALESCE(force_password_change, 0)
+		SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(force_password_change, 0)
 		FROM users
 		ORDER BY username
 		LIMIT ? OFFSET ?
@@ -147,7 +147,7 @@ func (s *SQLiteUserStore) ListUsers(limit, offset int) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		var forcePW int
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &u.Timezone, &forcePW); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &forcePW); err != nil {
 			return nil, err
 		}
 		u.ForcePasswordChange = forcePW != 0
@@ -238,8 +238,11 @@ func (s *SQLiteUserStore) UpdateLocale(userID, locale string) error {
 	return nil
 }
 
+const maxUserTagLen = 64
+
 // NormalizeUITimezone returns a canonical, validated IANA timezone name or
-// ErrInvalidTimezone. An empty string ("no preference") is always accepted.
+// ErrInvalidTimezone. An empty string ("browser local") is always accepted.
+// Used by the admin-only site-wide timezone setting.
 // Validation uses time.LoadLocation, which requires zoneinfo data; the
 // server binary imports time/tzdata so this works even in minimal
 // containers without a system tzdata package.
@@ -253,30 +256,6 @@ func NormalizeUITimezone(timezone string) (string, error) {
 	}
 	return tz, nil
 }
-
-// UpdateTimezone persists the user's preferred IANA timezone name. Pass "" to clear it.
-func (s *SQLiteUserStore) UpdateTimezone(userID, timezone string) error {
-	if strings.TrimSpace(userID) == "" {
-		return ErrUserNotFound
-	}
-	tz, err := NormalizeUITimezone(timezone)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	res, err := s.db.ExecContext(ctx, `UPDATE users SET timezone = ? WHERE id = ?`, tz, userID)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n != 1 {
-		return ErrUserNotFound
-	}
-	return nil
-}
-
-const maxUserTagLen = 64
 
 func validateUserTag(tag string) error {
 	if tag == "" || len(tag) > maxUserTagLen {
@@ -440,7 +419,7 @@ func (s *SQLiteUserStore) AuthenticateByPublicKey(username string, key ssh.Publi
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var u User
-	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, ''), COALESCE(timezone, '') FROM users WHERE username = ?`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale, &u.Timezone)
+	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, COALESCE(role, 'user'), COALESCE(locale, '') FROM users WHERE username = ?`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Locale)
 	if err == sql.ErrNoRows {
 		return nil, ErrInvalidSecret
 	}

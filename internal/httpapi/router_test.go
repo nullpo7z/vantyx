@@ -1624,90 +1624,104 @@ func TestApp_UpdateLocale_Validation(t *testing.T) {
 	}
 }
 
-// TestApp_UpdateTimezone_RoundTrip verifies that PUT /api/me/timezone persists
-// the user's timezone and that subsequent GET /api/me reflects it.
-func TestApp_UpdateTimezone_RoundTrip(t *testing.T) {
+// TestApp_TimezoneSetting_AdminOnly verifies the site-wide timezone:
+// admins set it via PUT /api/settings/timezone, every user reads it from
+// GET /api/me, and the retired per-user PUT /api/me/timezone is gone.
+func TestApp_TimezoneSetting_AdminOnly(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
+	if _, err := app.UserStore.CreateUser("bob", "bob", "Password1!", "user"); err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	adminSess, _ := app.SessionStore.Create("admin")
+	bobSess, _ := app.SessionStore.Create("bob")
+	adminCookie := &http.Cookie{Name: "vantyx_session", Value: adminSess.ID, Path: "/"}
+	bobCookie := &http.Cookie{Name: "vantyx_session", Value: bobSess.ID, Path: "/"}
 
-	sess, _ := app.SessionStore.Create("admin")
-	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+	put := func(cookie *http.Cookie, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/settings/timezone", bytes.NewReader([]byte(body)))
+		req.Header.Set("Content-Type", "application/json")
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+	get := func(path string, cookie *http.Cookie) (int, string) {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		var resp struct {
+			Timezone string `json:"timezone"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return w.Result().StatusCode, resp.Timezone
+	}
 
+	// Unset by default, visible to everyone.
+	if code, tz := get("/api/me", bobCookie); code != http.StatusOK || tz != "" {
+		t.Fatalf("/api/me default: %d %q", code, tz)
+	}
+	if code, _ := get("/api/settings/timezone", nil); code != http.StatusUnauthorized {
+		t.Fatalf("GET setting unauthenticated: %d, want 401", code)
+	}
+
+	// Non-admin and anonymous callers cannot change it.
+	if w := put(bobCookie, `{"timezone":"Asia/Tokyo"}`); w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin PUT: %d, want 403", w.Result().StatusCode)
+	}
+	if w := put(nil, `{"timezone":"Asia/Tokyo"}`); w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("anonymous PUT: %d, want 401", w.Result().StatusCode)
+	}
+	if code, tz := get("/api/me", bobCookie); code != http.StatusOK || tz != "" {
+		t.Fatalf("/api/me after rejected PUTs: %d %q", code, tz)
+	}
+
+	// Admin sets it; both users see it; the setting endpoint agrees.
+	w := put(adminCookie, `{"timezone":"Asia/Tokyo"}`)
+	if w.Result().StatusCode != http.StatusOK || !strings.Contains(w.Body.String(), `"timezone":"Asia/Tokyo"`) {
+		t.Fatalf("admin PUT: %d %s", w.Result().StatusCode, w.Body.String())
+	}
+	for name, c := range map[string]*http.Cookie{"admin": adminCookie, "bob": bobCookie} {
+		if code, tz := get("/api/me", c); code != http.StatusOK || tz != "Asia/Tokyo" {
+			t.Fatalf("/api/me for %s: %d %q, want Asia/Tokyo", name, code, tz)
+		}
+		if code, tz := get("/api/settings/timezone", c); code != http.StatusOK || tz != "Asia/Tokyo" {
+			t.Fatalf("GET setting for %s: %d %q", name, code, tz)
+		}
+	}
+
+	// Validation.
+	if w := put(adminCookie, `{"timezone":"Not/AZone"}`); w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("unsupported zone: %d, want 400", w.Result().StatusCode)
+	}
+	if w := put(adminCookie, `not json`); w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid body: %d, want 400", w.Result().StatusCode)
+	}
+	if code, tz := get("/api/me", bobCookie); tz != "Asia/Tokyo" {
+		t.Fatalf("value changed by rejected PUT: %d %q", code, tz)
+	}
+
+	// Clearing restores browser-local.
+	if w := put(adminCookie, `{"timezone":""}`); w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("clear: %d", w.Result().StatusCode)
+	}
+	if _, tz := get("/api/me", bobCookie); tz != "" {
+		t.Fatalf("after clear: %q", tz)
+	}
+
+	// The per-user endpoint no longer exists.
 	req := httptest.NewRequest(http.MethodPut, "/api/me/timezone", bytes.NewReader([]byte(`{"timezone":"Asia/Tokyo"}`)))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Result().StatusCode != http.StatusOK {
-		t.Fatalf("PUT /api/me/timezone expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
-	}
-	var resp struct {
-		Timezone string `json:"timezone"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.Timezone != "Asia/Tokyo" {
-		t.Fatalf("expected timezone=Asia/Tokyo in response, got %q", resp.Timezone)
-	}
-
-	meReq := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	meReq.AddCookie(cookie)
-	meW := httptest.NewRecorder()
-	router.ServeHTTP(meW, meReq)
-	if meW.Result().StatusCode != http.StatusOK {
-		t.Fatalf("/api/me expected 200, got %d", meW.Result().StatusCode)
-	}
-	var me struct {
-		Timezone string `json:"timezone"`
-	}
-	_ = json.Unmarshal(meW.Body.Bytes(), &me)
-	if me.Timezone != "Asia/Tokyo" {
-		t.Fatalf("expected /api/me timezone=Asia/Tokyo, got %q", me.Timezone)
-	}
-
-	clearReq := httptest.NewRequest(http.MethodPut, "/api/me/timezone", bytes.NewReader([]byte(`{"timezone":""}`)))
-	clearReq.Header.Set("Content-Type", "application/json")
-	clearReq.AddCookie(cookie)
-	clearW := httptest.NewRecorder()
-	router.ServeHTTP(clearW, clearReq)
-	if clearW.Result().StatusCode != http.StatusOK {
-		t.Fatalf("clearing timezone expected 200, got %d", clearW.Result().StatusCode)
-	}
-}
-
-// TestApp_UpdateTimezone_Validation rejects unsupported timezone names and
-// unauthenticated callers.
-func TestApp_UpdateTimezone_Validation(t *testing.T) {
-	app := newTestApp(t)
-	router := app.NewRouter()
-	sess, _ := app.SessionStore.Create("admin")
-	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
-
-	req := httptest.NewRequest(http.MethodPut, "/api/me/timezone", bytes.NewReader([]byte(`{"timezone":"Not/AZone"}`)))
-	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Result().StatusCode != http.StatusBadRequest {
-		t.Fatalf("unsupported timezone expected 400, got %d body=%s", w.Result().StatusCode, w.Body.String())
-	}
-
-	bad := httptest.NewRequest(http.MethodPut, "/api/me/timezone", bytes.NewReader([]byte("not json")))
-	bad.Header.Set("Content-Type", "application/json")
-	bad.AddCookie(cookie)
-	badW := httptest.NewRecorder()
-	router.ServeHTTP(badW, bad)
-	if badW.Result().StatusCode != http.StatusBadRequest {
-		t.Fatalf("invalid body expected 400, got %d", badW.Result().StatusCode)
-	}
-
-	unauthed := httptest.NewRequest(http.MethodPut, "/api/me/timezone", bytes.NewReader([]byte(`{"timezone":"Asia/Tokyo"}`)))
-	unauthed.Header.Set("Content-Type", "application/json")
-	uw := httptest.NewRecorder()
-	router.ServeHTTP(uw, unauthed)
-	if uw.Result().StatusCode != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated expected 401, got %d", uw.Result().StatusCode)
+	req.AddCookie(bobCookie)
+	rw := httptest.NewRecorder()
+	router.ServeHTTP(rw, req)
+	if rw.Result().StatusCode == http.StatusOK {
+		t.Fatalf("PUT /api/me/timezone still accepted (%d)", rw.Result().StatusCode)
 	}
 }
 

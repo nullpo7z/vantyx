@@ -19,13 +19,14 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	UserID                string `json:"user_id"`
-	Username              string `json:"username"`
-	Role                  string `json:"role"`
-	Locale                string `json:"locale,omitempty"`
-	Timezone              string `json:"timezone,omitempty"`
-	RequirePasswordChange bool   `json:"require_password_change,omitempty"`
-	TOTPEnabled           bool   `json:"totp_enabled,omitempty"`
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	Locale   string `json:"locale,omitempty"`
+	Timezone string `json:"timezone"` // site-wide display timezone (admin setting); "" = browser local
+
+	RequirePasswordChange bool `json:"require_password_change,omitempty"`
+	TOTPEnabled           bool `json:"totp_enabled,omitempty"`
 }
 
 type changePasswordRequest struct {
@@ -39,14 +40,6 @@ type updateLocaleRequest struct {
 
 type localeResponse struct {
 	Locale string `json:"locale"`
-}
-
-type updateTimezoneRequest struct {
-	Timezone string `json:"timezone"`
-}
-
-type timezoneResponse struct {
-	Timezone string `json:"timezone"`
 }
 
 type sshKeyResponse struct {
@@ -204,7 +197,7 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 		Username:    u.Username,
 		Role:        u.Role,
 		Locale:      u.Locale,
-		Timezone:    u.Timezone,
+		Timezone:    a.globalTimezone(),
 		TOTPEnabled: totpEnabled,
 	})
 }
@@ -246,47 +239,6 @@ func (a *App) handleUpdateLocale(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(localeResponse{Locale: loc})
-}
-
-// handleUpdateTimezone persists the current user's preferred IANA
-// timezone (used by the frontend to format timestamps). Pass
-// {"timezone":""} to clear the preference (the browser's local zone
-// applies instead).
-func (a *App) handleUpdateTimezone(w http.ResponseWriter, r *http.Request) {
-	userID := strings.TrimSpace(a.currentUserID(r))
-	if userID == "" {
-		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
-		return
-	}
-	var req updateTimezoneRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
-		return
-	}
-	tz, err := auth.NormalizeUITimezone(req.Timezone)
-	if err != nil {
-		writeJSONErrorKey(w, r, "auth.unsupportedTimezone", http.StatusBadRequest)
-		return
-	}
-	if err := a.UserStore.UpdateTimezone(userID, tz); err != nil {
-		if errors.Is(err, auth.ErrUserNotFound) {
-			writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if errors.Is(err, auth.ErrInvalidTimezone) {
-			writeJSONErrorKey(w, r, "auth.unsupportedTimezone", http.StatusBadRequest)
-			return
-		}
-		writeInternalError(w, err)
-		return
-	}
-	audit("user_timezone_update", auditFields{
-		"user_id":  userID,
-		"timezone": tz,
-	})
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(timezoneResponse{Timezone: tz})
 }
 
 // handleChangePassword updates the current user's password.

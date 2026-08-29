@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
+	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 )
 
@@ -33,6 +35,10 @@ import (
 //	VANTYX_OIDC_USERNAME_CLAIM    (optional; default "preferred_username", falls back to email)
 //	VANTYX_OIDC_AUTO_CREATE_USERS (optional; 1/true to create unknown users with role user)
 //	VANTYX_OIDC_DISPLAY_NAME      (optional; button label, default "SSO")
+//	VANTYX_OIDC_GROUPS_CLAIM      (optional; claim holding the IdP groups, default "groups")
+//	VANTYX_OIDC_GROUP_MAP         (optional; "idpGroup=vantyxGroup,idpGroup2=net/tokyo,..." -- memberships
+//	                               synced on every login; groups the IdP stops sending are revoked)
+//	VANTYX_OIDC_ADMIN_GROUPS      (optional; "idpGroup,idpGroup2" -- members get role admin, others user)
 type oidcConfig struct {
 	Issuer        string
 	DiscoveryURL  string
@@ -43,6 +49,41 @@ type oidcConfig struct {
 	UsernameClaim string
 	AutoCreate    bool
 	DisplayName   string
+	GroupsClaim   string
+	// GroupMap: IdP group -> Vantyx group IDs it grants.
+	GroupMap map[string][]string
+	// AdminGroups: IdP groups whose members get role admin. When set,
+	// OIDC users outside them are kept at role user.
+	AdminGroups map[string]bool
+}
+
+// syncsGroups reports whether logins should reconcile memberships/role.
+func (c *oidcConfig) syncsGroups() bool {
+	return c != nil && (len(c.GroupMap) > 0 || len(c.AdminGroups) > 0)
+}
+
+// parseOIDCGroupMap parses "a=g1,a=g2,b=net/tokyo" (also ";" separated).
+func parseOIDCGroupMap(raw string) map[string][]string {
+	out := map[string][]string{}
+	for _, pair := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ';' || r == '\n' }) {
+		k, v, ok := strings.Cut(pair, "=")
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if !ok || k == "" || v == "" {
+			continue
+		}
+		out[k] = append(out[k], v)
+	}
+	return out
+}
+
+func parseOIDCList(raw string) map[string]bool {
+	out := map[string]bool{}
+	for _, v := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ';' || r == '\n' }) {
+		if v = strings.TrimSpace(v); v != "" {
+			out[v] = true
+		}
+	}
+	return out
 }
 
 func oidcConfigFromEnv() *oidcConfig {
@@ -66,6 +107,12 @@ func oidcConfigFromEnv() *oidcConfig {
 	if cfg.DisplayName == "" {
 		cfg.DisplayName = "SSO"
 	}
+	cfg.GroupsClaim = strings.TrimSpace(os.Getenv("VANTYX_OIDC_GROUPS_CLAIM"))
+	if cfg.GroupsClaim == "" {
+		cfg.GroupsClaim = "groups"
+	}
+	cfg.GroupMap = parseOIDCGroupMap(os.Getenv("VANTYX_OIDC_GROUP_MAP"))
+	cfg.AdminGroups = parseOIDCList(os.Getenv("VANTYX_OIDC_ADMIN_GROUPS"))
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("VANTYX_OIDC_AUTO_CREATE_USERS"))) {
 	case "1", "true", "yes":
 		cfg.AutoCreate = true
@@ -381,6 +428,13 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		a.oidcFail(w, r, reason)
 		return
 	}
+	if a.oidc.cfg.syncsGroups() {
+		if err := a.syncOIDCGroups(ctx, u, rawClaims); err != nil {
+			audit("oidc_login_failed", auditFields{"reason": "group_sync", "user_id": u.ID, "error": err.Error()})
+			a.oidcFail(w, r, "resolve")
+			return
+		}
+	}
 	sess, err := a.SessionStore.Create(u.ID)
 	if err != nil {
 		audit("oidc_login_failed", auditFields{"reason": "session_create_failed", "error": err.Error()})
@@ -399,6 +453,140 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 var errOIDCNotProvisioned = errors.New("oidc identity is not linked to a local user")
+
+// oidcClaimGroups extracts the IdP group names from the configured claim.
+// Accepts an array of strings, a single string, or objects carrying
+// "name" / "id" (some IdPs emit the latter).
+func oidcClaimGroups(raw map[string]interface{}, claim string) []string {
+	var out []string
+	add := func(v interface{}) {
+		switch x := v.(type) {
+		case string:
+			if x = strings.TrimSpace(x); x != "" {
+				out = append(out, x)
+			}
+		case map[string]interface{}:
+			for _, k := range []string{"name", "id", "displayName"} {
+				if s, ok := x[k].(string); ok && strings.TrimSpace(s) != "" {
+					out = append(out, strings.TrimSpace(s))
+					return
+				}
+			}
+		}
+	}
+	switch v := raw[claim].(type) {
+	case []interface{}:
+		for _, e := range v {
+			add(e)
+		}
+	case string, map[string]interface{}:
+		add(v)
+	}
+	return out
+}
+
+// syncOIDCGroups reconciles the user's Vantyx memberships and role with
+// the IdP's groups claim:
+//   - every mapped Vantyx group present in the claim is granted;
+//   - groups OIDC granted on an earlier login but not carried now are
+//     revoked (memberships an admin added by hand are never touched);
+//   - with VANTYX_OIDC_ADMIN_GROUPS set, the role follows the claim
+//     (never demoting the last remaining admin).
+func (a *App) syncOIDCGroups(ctx context.Context, u *auth.User, raw map[string]interface{}) error {
+	cfg := a.oidc.cfg
+	idpGroups := oidcClaimGroups(raw, cfg.GroupsClaim)
+	desired := map[string]bool{}
+	var unknown []string
+	for _, g := range idpGroups {
+		for _, target := range cfg.GroupMap[g] {
+			if _, err := a.AccessGroupStore.Get(ctx, access.GroupID(target)); err != nil {
+				unknown = append(unknown, target)
+				continue
+			}
+			desired[target] = true
+		}
+	}
+	previous, err := a.OIDCLinks.ManagedGroups(ctx, u.ID)
+	if err != nil {
+		return err
+	}
+	prevSet := map[string]bool{}
+	for _, g := range previous {
+		prevSet[g] = true
+	}
+	var added, removed []string
+	for g := range desired {
+		if !prevSet[g] {
+			if err := a.AccessGroupStore.AddUserToGroup(ctx, access.UserID(u.ID), access.GroupID(g)); err != nil {
+				return fmt.Errorf("add %s to %s: %w", u.ID, g, err)
+			}
+			added = append(added, g)
+		}
+	}
+	for _, g := range previous {
+		if !desired[g] {
+			if err := a.AccessGroupStore.RemoveUserFromGroup(ctx, access.UserID(u.ID), access.GroupID(g)); err != nil && !errors.Is(err, access.ErrGroupNotFound) {
+				return fmt.Errorf("remove %s from %s: %w", u.ID, g, err)
+			}
+			removed = append(removed, g)
+		}
+	}
+	managed := make([]string, 0, len(desired))
+	for g := range desired {
+		managed = append(managed, g)
+	}
+	sort.Strings(managed)
+	sort.Strings(added)
+	sort.Strings(removed)
+	if err := a.OIDCLinks.SetManagedGroups(ctx, u.ID, managed); err != nil {
+		return err
+	}
+
+	roleNote := ""
+	if len(cfg.AdminGroups) > 0 {
+		wantAdmin := false
+		for _, g := range idpGroups {
+			if cfg.AdminGroups[g] {
+				wantAdmin = true
+				break
+			}
+		}
+		current := u.Role
+		if current == "" {
+			current = auth.RoleUser
+		}
+		want := auth.RoleUser
+		if wantAdmin {
+			want = auth.RoleAdmin
+		}
+		if want != current {
+			if want == auth.RoleUser {
+				if n, err := a.countAdmins(); err == nil && n <= 1 {
+					roleNote = "kept_last_admin"
+					want = current
+				}
+			}
+			if want != current {
+				if err := a.UserStore.UpdateRole(u.ID, want); err != nil {
+					return fmt.Errorf("update role: %w", err)
+				}
+				u.Role = want
+				roleNote = current + "->" + want
+			}
+		}
+	}
+	if len(added) > 0 || len(removed) > 0 || roleNote != "" || len(unknown) > 0 {
+		audit("oidc_groups_synced", auditFields{
+			"user_id":        u.ID,
+			"idp_groups":     idpGroups,
+			"added":          added,
+			"removed":        removed,
+			"role":           roleNote,
+			"unknown_groups": unknown,
+		})
+	}
+	return nil
+}
 
 // resolveOIDCUser maps a verified identity to a local user:
 //  1. an existing link (issuer, subject) wins;

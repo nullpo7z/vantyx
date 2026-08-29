@@ -82,6 +82,9 @@ S256 and nonce). SSO is enabled when both `VANTYX_OIDC_ISSUER` and
 | `VANTYX_OIDC_USERNAME_CLAIM` | `preferred_username` | ID-token claim mapped to the Vantyx username. Falls back to `preferred_username`, then `email`. |
 | `VANTYX_OIDC_AUTO_CREATE_USERS` | `0` | `1`/`true`: create unknown users as role `user` with an unusable random password. Otherwise unknown identities are rejected with `not_provisioned`. |
 | `VANTYX_OIDC_DISPLAY_NAME` | `SSO` | Label for the login button ("Sign in with *name*"). |
+| `VANTYX_OIDC_GROUPS_CLAIM` | `groups` | ID-token claim that lists the user's IdP groups (array of strings, or objects with `name`/`id`). Add the `groups` scope to `VANTYX_OIDC_SCOPES` for IdPs that need it (Cloudflare Access, Keycloak). |
+| `VANTYX_OIDC_GROUP_MAP` | — | `idpGroup=vantyxGroup` pairs separated by `,` or `;` (repeat an IdP group to grant several Vantyx groups, e.g. `netops=net,netops=net/tokyo`). On **every** login the user's memberships are reconciled: mapped groups present in the claim are granted, groups OIDC granted earlier but no longer present are revoked. Memberships an admin added by hand are never touched; unknown Vantyx groups are skipped (audited). |
+| `VANTYX_OIDC_ADMIN_GROUPS` | — | IdP groups whose members get role `admin`; when set, OIDC users outside them are kept at `user`. The last remaining admin is never demoted (audited as `role=kept_last_admin`). |
 
 Identity mapping on each login, in order: an existing link (`issuer`,
 `sub`) → a local user whose username equals the username claim
@@ -91,7 +94,8 @@ removes its links. Deep links (`/?next=/terminal?…`) are carried through the
 IdP round trip; only same-origin paths are honoured.
 
 Audit events: `oidc_login_started`, `oidc_login_ok`, `oidc_login_failed`
-(with `reason`), `oidc_user_created`.
+(with `reason`), `oidc_user_created`, `oidc_groups_synced` (`added`,
+`removed`, `role`, `unknown_groups`).
 
 ### Example: Cloudflare Access (Zero Trust) as the IdP
 
@@ -113,6 +117,10 @@ Audit events: `oidc_login_started`, `oidc_login_ok`, `oidc_login_failed`
    VANTYX_OIDC_USERNAME_CLAIM=email
    VANTYX_OIDC_AUTO_CREATE_USERS=1
    VANTYX_OIDC_DISPLAY_NAME=Cloudflare
+   # optional: let Access groups drive Vantyx groups / the admin role
+   VANTYX_OIDC_SCOPES=openid profile email groups
+   VANTYX_OIDC_GROUP_MAP=NetOps=net,NetOps=net/tokyo,Helpdesk=support
+   VANTYX_OIDC_ADMIN_GROUPS=Vantyx Admins
    ```
 
    If the discovery document's `issuer` turns out to equal the

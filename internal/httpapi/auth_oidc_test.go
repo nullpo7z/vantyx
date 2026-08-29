@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 )
 
@@ -418,6 +419,117 @@ func TestOIDC_DiscoveryURLDistinctFromIssuer(t *testing.T) {
 	w = oidcCallback(t, router, cookie, state)
 	if !strings.Contains(w.Header().Get("Location"), "oidc_error=token") {
 		t.Fatalf("issuer mismatch accepted: %q", w.Header().Get("Location"))
+	}
+}
+
+// Groups claim -> Vantyx memberships and role, reconciled on every login.
+func TestOIDC_GroupsClaimSyncsMembershipsAndRole(t *testing.T) {
+	idp := newFakeIdP(t)
+	app, router := newOIDCTestApp(t, idp, true)
+	ctx := context.Background()
+	for _, g := range []string{"net", "net/tokyo", "ops"} {
+		if _, err := app.AccessGroupStore.Create(ctx, access.GroupID(g), g); err != nil {
+			t.Fatalf("create %s: %v", g, err)
+		}
+	}
+	app.oidc.cfg.GroupsClaim = "groups"
+	app.oidc.cfg.GroupMap = parseOIDCGroupMap("cf-net=net, cf-net=net/tokyo; cf-ops=ops, cf-ghost=does-not-exist")
+	app.oidc.cfg.AdminGroups = parseOIDCList("cf-admins")
+
+	loginWith := func(groups interface{}) string {
+		claims := map[string]interface{}{"sub": "sub-g", "preferred_username": "gina"}
+		if groups != nil {
+			claims["groups"] = groups
+		}
+		idp.setClaims(claims)
+		cookie, state, nonce := startOIDCLogin(t, router, "/")
+		idp.setNonce(nonce)
+		w := oidcCallback(t, router, cookie, state)
+		if w.Code != http.StatusFound || w.Header().Get("Location") != "/" {
+			t.Fatalf("callback: %d %q", w.Code, w.Header().Get("Location"))
+		}
+		sess, _ := app.SessionStore.Get(sessionCookie(w))
+		if sess == nil {
+			t.Fatal("no session")
+		}
+		return sess.UserID
+	}
+	memberOf := func(uid string) map[string]bool {
+		out := map[string]bool{}
+		for _, g := range []string{"net", "net/tokyo", "ops", "manual"} {
+			ids, _ := app.AccessGroupStore.UserIDsForGroup(ctx, access.GroupID(g), nil)
+			for _, id := range ids {
+				if string(id) == uid {
+					out[g] = true
+				}
+			}
+		}
+		return out
+	}
+
+	// First login: cf-net grants net + net/tokyo; cf-admins grants admin;
+	// the unknown target group is skipped, not fatal.
+	uid := loginWith([]interface{}{"cf-net", "cf-admins", "cf-ghost", "unmapped"})
+	if m := memberOf(uid); !m["net"] || !m["net/tokyo"] || m["ops"] {
+		t.Fatalf("memberships after first login = %v", m)
+	}
+	if u, _ := app.UserStore.GetByID(uid); u.Role != auth.RoleAdmin {
+		t.Fatalf("role = %q, want admin", u.Role)
+	}
+	if managed, _ := app.OIDCLinks.ManagedGroups(ctx, uid); len(managed) != 2 {
+		t.Fatalf("managed = %v", managed)
+	}
+
+	// An admin adds a manual membership that OIDC must never revoke.
+	if _, err := app.AccessGroupStore.Create(ctx, "manual", "manual"); err != nil {
+		t.Fatal(err)
+	}
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID(uid), "manual")
+
+	// Second login: IdP now says only cf-ops (objects with "name" work too)
+	// and no admin group -> net/* revoked, ops granted, demoted to user.
+	loginWith([]interface{}{map[string]interface{}{"name": "cf-ops"}})
+	if m := memberOf(uid); m["net"] || m["net/tokyo"] || !m["ops"] || !m["manual"] {
+		t.Fatalf("memberships after second login = %v", m)
+	}
+	if u, _ := app.UserStore.GetByID(uid); u.Role != auth.RoleUser {
+		t.Fatalf("role = %q, want user", u.Role)
+	}
+
+	// Claim absent entirely: everything OIDC granted goes away, manual stays.
+	loginWith(nil)
+	if m := memberOf(uid); m["ops"] || !m["manual"] {
+		t.Fatalf("memberships after login without claim = %v", m)
+	}
+
+	// Last-admin guard: make gina the only admin, then a login without the
+	// admin group keeps her admin (audited) instead of locking everyone out.
+	_ = app.UserStore.UpdateRole(uid, auth.RoleAdmin)
+	_ = app.UserStore.UpdateRole("admin", auth.RoleUser)
+	loginWith([]interface{}{"cf-ops"})
+	if u, _ := app.UserStore.GetByID(uid); u.Role != auth.RoleAdmin {
+		t.Fatalf("last admin was demoted by OIDC sync")
+	}
+	_ = app.UserStore.UpdateRole("admin", auth.RoleAdmin)
+}
+
+func TestOIDCGroupMapParsing(t *testing.T) {
+	m := parseOIDCGroupMap(" a=g1 , a=g2;b=net/tokyo\nbroken, =x, y= ")
+	if len(m) != 2 || len(m["a"]) != 2 || m["a"][1] != "g2" || m["b"][0] != "net/tokyo" {
+		t.Fatalf("parseOIDCGroupMap = %v", m)
+	}
+	if l := parseOIDCList("x, y;z"); len(l) != 3 || !l["z"] {
+		t.Fatalf("parseOIDCList = %v", l)
+	}
+	if got := oidcClaimGroups(map[string]interface{}{"groups": "single"}, "groups"); len(got) != 1 || got[0] != "single" {
+		t.Fatalf("single string claim = %v", got)
+	}
+	if got := oidcClaimGroups(map[string]interface{}{}, "groups"); len(got) != 0 {
+		t.Fatalf("missing claim = %v", got)
+	}
+	cfg := &oidcConfig{}
+	if cfg.syncsGroups() {
+		t.Fatal("empty config should not sync")
 	}
 }
 

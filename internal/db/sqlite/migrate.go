@@ -290,6 +290,17 @@ func Migrate(db *sql.DB) error {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_user_oidc_links_user ON user_oidc_links(user_id)`,
+		// Group memberships granted by the IdP's groups claim (see
+		// VANTYX_OIDC_GROUP_MAP). Tracked separately from user_groups so a
+		// login that no longer carries a group revokes only what OIDC
+		// granted, never memberships an admin added by hand.
+		`CREATE TABLE IF NOT EXISTS user_oidc_groups (
+			user_id TEXT NOT NULL,
+			group_id TEXT NOT NULL,
+			PRIMARY KEY (user_id, group_id),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (group_id) REFERENCES access_groups(id) ON DELETE CASCADE
+		)`,
 	}
 
 	for _, stmt := range stmts {

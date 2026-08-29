@@ -235,6 +235,7 @@ export function renderApp(container) {
       sessionEndModal,
       openTerminalTab: openTerminalTabWithParent,
       getRdpResolutionForTarget,
+      isAdmin: !!(meData && meData.role === 'admin'),
     })
   }
 

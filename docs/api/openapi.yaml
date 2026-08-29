@@ -3107,6 +3107,128 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/admin/sessions:
+    get:
+      summary: 全ライブセッション一覧（管理者のみ）
+      description: ターミナル（SSH/Telnet）・VNC・ブラウザ RDP の全セッションを所有者・接続先・開始/最終活動・参加者付きで返します。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: セッション一覧
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum: [terminal, vnc, rdp]
+                        session_id:
+                          type: string
+                        owner_user_id:
+                          type: string
+                        owner_username:
+                          type: string
+                        target_id:
+                          type: string
+                        target_name:
+                          type: string
+                        target_path:
+                          type: string
+                        protocol:
+                          type: string
+                        created_at:
+                          type: string
+                          format: date-time
+                        last_seen:
+                          type: string
+                          format: date-time
+                        idle:
+                          type: boolean
+                        participants:
+                          type: array
+                          items:
+                            type: string
+                        watching:
+                          type: boolean
+        '403':
+          description: 管理者以外
+
+  /api/admin/sessions/{kind}/{session_id}/watch:
+    post:
+      summary: セッションを監視（管理者のみ）
+      description: 招待なしで管理者を閲覧者として共有ルームに追加し、開くべきページ URL（`/terminal`, `/vnc`, `/rdp` の viewer モード）を返します。所有者には participant_joined イベントが届き、参加者一覧に表示されます。監査イベント `session_watched_by_admin`。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: kind
+          required: true
+          schema:
+            type: string
+            enum: [terminal, vnc, rdp]
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 参加情報
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id:
+                    type: string
+                  kind:
+                    type: string
+                  role:
+                    type: string
+                  url:
+                    type: string
+        '404':
+          description: セッションが存在しない
+
+  /api/admin/sessions/{kind}/{session_id}:
+    delete:
+      summary: セッションを強制終了（管理者のみ）
+      description: 所有者と全参加者に `session_terminated_by_admin` イベント（reason 付き）を送ってからセッションを停止します。監査イベント `session_terminated_by_admin`。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: kind
+          required: true
+          schema:
+            type: string
+            enum: [terminal, vnc, rdp]
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '204':
+          description: 終了完了
+        '404':
+          description: セッションが存在しない
+
   /api/access-requests/groups:
     get:
       summary: 申請可能なグループ一覧

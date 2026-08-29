@@ -1,11 +1,12 @@
 import API from './api.js'
 import { t } from './i18n.js'
 import { createRealtimeWatcher, POLL_MS, shouldRefreshSessionList } from './sharing_events.js'
-import { uiAlert } from './ui_dialog.js'
+import { uiAlert, uiConfirm } from './ui_dialog.js'
 import {
   buildSessionsTableHTML,
   bindSessionListActions,
   countIdleSessions,
+  formatLastSeen,
 } from './session_list_shared.js'
 import {
   onFileTransfersChange,
@@ -74,6 +75,7 @@ export async function renderSessionsPage({
   sessionEndModal,
   openTerminalTab,
   getRdpResolutionForTarget,
+  isAdmin = false,
 }) {
   if (sessionListWatchStop) {
     sessionListWatchStop()
@@ -104,6 +106,19 @@ export async function renderSessionsPage({
           <p class="text-slate-500 p-6 text-sm leading-normal">${t('common.loading')}</p>
         </div>
       </section>
+      ${
+        isAdmin
+          ? `<section class="bg-white rounded-lg border border-slate-200 shadow-sm">
+        <div class="px-4 py-3 border-b border-slate-200">
+          <h3 class="text-sm font-semibold text-slate-800">${t('sessions.adminSectionTitle')}</h3>
+          <p class="text-xs text-slate-500 mt-0.5 leading-normal">${t('sessions.adminSectionIntro')}</p>
+        </div>
+        <div id="admin-sessions-table-wrap">
+          <p class="text-slate-500 p-6 text-sm leading-normal">${t('common.loading')}</p>
+        </div>
+      </section>`
+          : ''
+      }
       <section class="bg-white rounded-lg border border-slate-200 shadow-sm">
         <div class="px-4 py-3 border-b border-slate-200">
           <h3 class="text-sm font-semibold text-slate-800">${t('sessions.sectionFileTransfers')}</h3>
@@ -117,6 +132,7 @@ export async function renderSessionsPage({
   `
 
   const tableWrap = mainContent.querySelector('#sessions-table-wrap')
+  const adminWrap = mainContent.querySelector('#admin-sessions-table-wrap')
   const transfersWrap = mainContent.querySelector('#file-transfers-table-wrap')
   const idleBanner = mainContent.querySelector('#sessions-idle-banner')
   const refreshBtn = mainContent.querySelector('#sessions-refresh-btn')
@@ -234,9 +250,88 @@ export async function renderSessionsPage({
       }
       await refreshFileTransfers()
       renderTransfers()
+      if (adminWrap) await renderAdminSessions()
     } catch (err) {
       tableWrap.innerHTML = `<p class="text-red-600 p-6 text-sm leading-normal">${escapeHtml(err.message || t('sessions.loadFailed', { error: '' }).replace(/:\s*$/, ''))}</p>`
     }
+  }
+
+  // Admin oversight: every live session with watch / terminate actions.
+  async function renderAdminSessions() {
+    let items
+    try {
+      items = ((await API.adminSessions()) || {}).items || []
+    } catch (err) {
+      adminWrap.innerHTML = `<p class="text-red-600 p-6 text-sm leading-normal">${escapeHtml(err.message || '')}</p>`
+      return
+    }
+    if (items.length === 0) {
+      adminWrap.innerHTML = `<p class="text-slate-500 p-8 text-center text-sm leading-normal">${t('sessions.adminNone')}</p>`
+      return
+    }
+    const kindLabel = (k) => ({ terminal: t('sessions.kindTerminal'), vnc: 'VNC', rdp: 'RDP' })[k] || k
+    const rows = items
+      .map(
+        (s) => `<tr class="border-b border-slate-100 last:border-0${s.idle ? ' bg-amber-50/40' : ''}">
+          <td class="px-4 py-2.5 text-sm text-slate-900 font-medium whitespace-nowrap">${escapeHtml(s.owner_username || s.owner_user_id)}</td>
+          <td class="px-4 py-2.5 text-sm text-slate-700 font-mono break-all">${escapeHtml(s.target_path ? `${s.target_path}/${s.target_name}` : s.target_name || s.target_id)}${s.name ? `<div class="text-xs text-slate-500 font-sans">${escapeHtml(s.name)}</div>` : ''}</td>
+          <td class="px-2 py-2.5 text-sm text-slate-800 whitespace-nowrap">${escapeHtml(kindLabel(s.kind))}${s.protocol && s.kind === 'terminal' ? ` <span class="text-xs text-slate-500">${escapeHtml(String(s.protocol).toUpperCase())}</span>` : ''}</td>
+          <td class="px-2 py-2.5 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(formatLastSeen(s.created_at))}</td>
+          <td class="px-2 py-2.5 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(formatLastSeen(s.last_seen || s.created_at))}${s.idle ? ` <span class="text-amber-700">(${t('sessions.idleShort')})</span>` : ''}</td>
+          <td class="px-2 py-2.5 text-xs text-slate-600">${s.participants && s.participants.length ? escapeHtml(s.participants.join(', ')) : '<span class="text-slate-400">—</span>'}</td>
+          <td class="px-2 py-2.5 whitespace-nowrap">
+            <div class="flex items-center gap-1.5">
+              <button type="button" class="admin-watch rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50" data-kind="${escapeHtml(s.kind)}" data-id="${escapeHtml(s.session_id)}">${s.watching ? t('sessions.adminWatching') : t('sessions.adminWatch')}</button>
+              <button type="button" class="admin-terminate rounded border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50" data-kind="${escapeHtml(s.kind)}" data-id="${escapeHtml(s.session_id)}" data-owner="${escapeHtml(s.owner_username || s.owner_user_id)}">${t('sessions.adminTerminate')}</button>
+            </div>
+          </td>
+        </tr>`,
+      )
+      .join('')
+    adminWrap.innerHTML = `
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm border-collapse">
+          <thead class="bg-slate-50 border-b border-slate-200">
+            <tr>
+              <th class="px-4 py-2 text-xs font-semibold text-slate-700 whitespace-nowrap">${t('sessions.headerOwner')}</th>
+              <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('common.target')}</th>
+              <th class="px-2 py-2 text-xs font-semibold text-slate-700 whitespace-nowrap">${t('sessions.headerType')}</th>
+              <th class="px-2 py-2 text-xs font-semibold text-slate-700 whitespace-nowrap">${t('sessions.headerStarted')}</th>
+              <th class="px-2 py-2 text-xs font-semibold text-slate-700 whitespace-nowrap">${t('sessions.headerLastActivity')}</th>
+              <th class="px-2 py-2 text-xs font-semibold text-slate-700 whitespace-nowrap">${t('sessions.headerParticipants')}</th>
+              <th class="px-2 py-2 text-xs font-semibold text-slate-700 whitespace-nowrap">${t('common.actions')}</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`
+    adminWrap.querySelectorAll('.admin-watch').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true
+        try {
+          const res = await API.adminWatchSession(btn.dataset.kind, btn.dataset.id)
+          if (res && res.url) openTerminalTab(res.url)
+          await renderAdminSessions()
+        } catch (err) {
+          btn.disabled = false
+          await uiAlert(err.message || t('common.errorOccurred'))
+        }
+      })
+    })
+    adminWrap.querySelectorAll('.admin-terminate').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const owner = btn.dataset.owner || ''
+        if (!(await uiConfirm(t('sessions.adminConfirmTerminate', { owner }), { danger: true }))) return
+        btn.disabled = true
+        try {
+          await API.adminTerminateSession(btn.dataset.kind, btn.dataset.id, t('sessions.adminTerminateReasonDefault'))
+          await refresh()
+        } catch (err) {
+          btn.disabled = false
+          await uiAlert(err.message || t('common.errorOccurred'))
+        }
+      })
+    })
   }
 
   refreshBtn?.addEventListener('click', () => refresh())

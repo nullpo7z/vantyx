@@ -393,6 +393,10 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/api/groups/{group_id}/members", a.handleGroupMembers)
 	r.Post("/api/groups/{group_id}/members", a.handleAddGroupMember)
 	r.Delete("/api/groups/{group_id}/members/{user_id}", a.handleRemoveGroupMember)
+	// Admin session oversight: list / watch / terminate any live session.
+	r.Get("/api/admin/sessions", a.handleAdminListSessions)
+	r.Post("/api/admin/sessions/{kind}/{session_id}/watch", a.handleAdminWatchSession)
+	r.Delete("/api/admin/sessions/{kind}/{session_id}", a.handleAdminTerminateSession)
 	// Access requests: any user asks, admins decide.
 	r.Get("/api/access-requests/groups", a.handleAccessRequestGroups)
 	r.Get("/api/access-requests", a.handleListAccessRequests)

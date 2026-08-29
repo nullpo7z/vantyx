@@ -541,6 +541,18 @@ func (m *Manager) ActiveSessionsForUser(userID string) []Session {
 	return out
 }
 
+// AllSessions returns a snapshot of every managed browser-RDP session
+// (admin monitoring).
+func (m *Manager) AllSessions() []Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Session, 0, len(m.sessionsByID))
+	for _, s := range m.sessionsByID {
+		out = append(out, *s)
+	}
+	return out
+}
+
 // RemoveSession stops and removes the managed session by session ID.
 func (m *Manager) RemoveSession(sessionID string) {
 	var (

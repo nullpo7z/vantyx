@@ -1051,6 +1051,43 @@ const API = {
     return res.json()
   },
 
+  /** Admin: every live session (terminal / VNC / RDP). */
+  async adminSessions() {
+    const res = await fetch('/api/admin/sessions', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load sessions')
+    }
+    return res.json()
+  },
+
+  /** Admin: join a session as a read-only viewer; returns { url }. */
+  async adminWatchSession(kind, sessionId) {
+    const res = await fetch(`/api/admin/sessions/${encodeURIComponent(kind)}/${encodeURIComponent(sessionId)}/watch`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to watch the session')
+    }
+    return res.json()
+  },
+
+  /** Admin: terminate a session (owner and viewers are disconnected). */
+  async adminTerminateSession(kind, sessionId, reason = '') {
+    const res = await fetch(`/api/admin/sessions/${encodeURIComponent(kind)}/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ reason }),
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to terminate the session')
+    }
+  },
+
   /** Access requests: groups the caller may ask for. */
   async accessRequestGroups() {
     const res = await fetch('/api/access-requests/groups', { credentials: 'include' })

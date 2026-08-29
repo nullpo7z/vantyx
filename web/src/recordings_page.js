@@ -2,7 +2,7 @@ import API from './api.js'
 import * as AsciinemaPlayer from 'asciinema-player'
 import 'asciinema-player/dist/bundle/asciinema-player.css'
 import { t } from './i18n.js'
-import { formatDateTime } from './datetime.js'
+import { formatDateInputValue, formatDateTime } from './datetime.js'
 import { queueRecordingExportAndNotify } from './recording_exports_page.js'
 
 /** Target protocol label for tables (SSH, Telnet, …). */
@@ -22,9 +22,11 @@ function defaultDateRange() {
   const to = new Date()
   const from = new Date(to)
   from.setDate(from.getDate() - 30)
+  // Calendar dates in the viewer's timezone, not UTC: with toISOString()
+  // a user in Asia/Tokyo opening the page at 08:00 got "To: yesterday".
   return {
-    from: from.toISOString().slice(0, 10),
-    to: to.toISOString().slice(0, 10),
+    from: formatDateInputValue(from),
+    to: formatDateInputValue(to),
   }
 }
 

@@ -85,3 +85,24 @@ export function formatDateTime(raw, options, placeholder = '—') {
   if (!d) return placeholder
   return formatDate(d, options)
 }
+
+/**
+ * Format a `Date` as the `YYYY-MM-DD` calendar date it falls on in the
+ * viewer's configured timezone (browser zone when unset). Use this for
+ * `<input type="date">` defaults instead of `toISOString().slice(0, 10)`,
+ * which yields the UTC date and is "yesterday" for anyone east of UTC
+ * in the early hours of their day.
+ *
+ * @param {Date} d
+ * @returns {string}
+ */
+export function formatDateInputValue(d) {
+  const tz = getTimezone()
+  const opts = { year: 'numeric', month: '2-digit', day: '2-digit' }
+  try {
+    // en-CA renders as YYYY-MM-DD, exactly what <input type="date"> wants.
+    return new Intl.DateTimeFormat('en-CA', tz ? { ...opts, timeZone: tz } : opts).format(d)
+  } catch {
+    return new Intl.DateTimeFormat('en-CA', opts).format(d)
+  }
+}

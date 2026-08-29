@@ -59,6 +59,7 @@ var Messages = map[string]string{
 
 	// Users (admin management).
 	"auth.webauthnInvalid":            "パスキーの応答を検証できませんでした",
+	"auth.webauthnUnavailable":        "パスキーには DNS ホスト名が必要です。IP ではなくホスト名で Vantyx を開くか、VANTYX_WEBAUTHN_RP_ID / VANTYX_WEBAUTHN_ORIGINS を設定してください",
 	"auth.webauthnNoPending":          "パスキーの登録が開始されていません。最初からやり直してください",
 	"auth.webauthnNotEnabled":         "このアカウントにはパスキーが登録されていません",
 	"auth.webauthnNotFound":           "パスキーが見つかりません",

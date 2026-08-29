@@ -67,6 +67,7 @@ var Messages = map[string]string{
 
 	// Users (admin management).
 	"auth.webauthnInvalid":            "the passkey response could not be verified",
+	"auth.webauthnUnavailable":        "passkeys need a DNS hostname: open Vantyx by name (not IP) or set VANTYX_WEBAUTHN_RP_ID / VANTYX_WEBAUTHN_ORIGINS",
 	"auth.webauthnNoPending":          "no passkey registration in progress; start again",
 	"auth.webauthnNotEnabled":         "no passkey registered for this account",
 	"auth.webauthnNotFound":           "passkey not found",

@@ -1101,16 +1101,14 @@ router1,10.0.0.1,22,ssh,net/tokyo,core edge,admin,,true,false,false,,,</pre>
       const label = selectedGroupId || 'root'
 
       const addGroupBtnHtml = isManageMode
-        ? `<div class="flex items-center gap-1.5">
-            <a href="/api/targets/export?format=csv" class="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50" title="${t('targets.exportCsvTitle')}">CSV</a>
-            <a href="/api/targets/export?format=json" class="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50" title="${t('targets.exportJsonTitle')}">JSON</a>
-            <button type="button" id="btn-import-targets" class="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50">${t('targets.importBtn')}</button>
-            <button type="button" id="btn-add-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.addBtn')}</button>
-          </div>`
+        ? `<button type="button" id="btn-add-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.addBtn')}</button>`
         : ''
 
       const addTargetBtnHtml = isManageMode
-        ? `<button type="button" id="btn-check-targets" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors disabled:opacity-50" ${targets.length ? '' : 'disabled'}>${t('targets.checkBtn')}</button>
+        ? `<a href="/api/targets/export?format=csv" class="rounded border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm" title="${t('targets.exportCsvTitle')}">CSV</a>
+           <a href="/api/targets/export?format=json" class="rounded border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm" title="${t('targets.exportJsonTitle')}">JSON</a>
+           <button type="button" id="btn-import-targets" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('targets.importBtn')}</button>
+           <button type="button" id="btn-check-targets" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors disabled:opacity-50" ${targets.length ? '' : 'disabled'}>${t('targets.checkBtn')}</button>
            <button type="button" id="btn-add-target-in-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50" ${selectedGroupId ? '' : 'disabled'}>${t('app.addTargetBtn')}</button>`
         : `<button type="button" id="btn-request-access" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('access.requestBtn')}</button>`
       const showMembersSection = isManageMode && isAdminRole && selectedGroupId
@@ -1253,6 +1251,17 @@ router1,10.0.0.1,22,ssh,net/tokyo,core edge,admin,,true,false,false,,,</pre>
         }
       }
 
+      // Access requests live on the home view for every user.
+      mainContent.querySelector('#btn-request-access')?.addEventListener('click', () => {
+        showAccessRequestModal({
+          onCreated: () => renderMyAccessRequests(mainContent.querySelector('#my-access-requests')),
+        })
+      })
+      if (!isManageMode) {
+        renderMyAccessRequests(mainContent.querySelector('#my-access-requests'), {
+          onChanged: () => { groupsCache = null },
+        })
+      }
       if (isManageMode) {
         mainContent.querySelector('#btn-add-group')?.addEventListener('click', showAddGroupModal)
         mainContent.querySelector('#btn-import-targets')?.addEventListener('click', () => showImportTargetsModal())
@@ -1289,16 +1298,6 @@ router1,10.0.0.1,22,ssh,net/tokyo,core edge,admin,,true,false,false,,,</pre>
             btn.disabled = false
           }
         })
-        mainContent.querySelector('#btn-request-access')?.addEventListener('click', () => {
-          showAccessRequestModal({
-            onCreated: () => renderMyAccessRequests(mainContent.querySelector('#my-access-requests')),
-          })
-        })
-        if (!isManageMode) {
-          renderMyAccessRequests(mainContent.querySelector('#my-access-requests'), {
-            onChanged: () => { groupsCache = null },
-          })
-        }
         mainContent.querySelector('#btn-add-target-in-group')?.addEventListener('click', () => {
           if (!selectedGroupId) return
           showAddTargetModal()

@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -33,6 +35,20 @@ const (
 	webauthnMaxNameLen   = 100
 	webauthnDefaultRPNam = "Vantyx"
 )
+
+// errWebAuthnConfig marks a relying-party configuration problem (e.g. the
+// UI is reached by IP address), which handlers report as 400 with a hint
+// rather than as an internal error.
+var errWebAuthnConfig = errors.New("webauthn relying party unavailable")
+
+// writeWebAuthnError maps configuration problems to a helpful 400.
+func writeWebAuthnError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, errWebAuthnConfig) {
+		writeJSONErrorKey(w, r, "auth.webauthnUnavailable", http.StatusBadRequest)
+		return
+	}
+	writeInternalError(w, err)
+}
 
 // webauthnUser adapts a Vantyx user to webauthn.User.
 type webauthnUser struct {
@@ -128,7 +144,10 @@ func (a *App) webauthnFor(r *http.Request) (*webauthn.WebAuthn, error) {
 	}
 	w, err := webauthn.New(&webauthn.Config{RPDisplayName: name, RPID: rpID, RPOrigins: origins})
 	if err != nil {
-		return nil, err
+		// Typically an IP address or otherwise invalid RP ID: WebAuthn needs
+		// a DNS name, which operators supply via VANTYX_WEBAUTHN_RP_ID.
+		slog.Warn("webauthn unavailable for this host", "rp_id", rpID, "origins", origins, "error", err)
+		return nil, fmt.Errorf("%w: %v", errWebAuthnConfig, err)
 	}
 	a.webauthnRPs[key] = w
 	return w, nil
@@ -205,7 +224,7 @@ func (a *App) handlePasskeyRegisterBegin(w http.ResponseWriter, r *http.Request)
 	}
 	rp, err := a.webauthnFor(r)
 	if err != nil {
-		writeInternalError(w, err)
+		writeWebAuthnError(w, r, err)
 		return
 	}
 	wu, err := a.webauthnUserFor(r, userID)
@@ -262,7 +281,7 @@ func (a *App) handlePasskeyRegisterFinish(w http.ResponseWriter, r *http.Request
 	}
 	rp, err := a.webauthnFor(r)
 	if err != nil {
-		writeInternalError(w, err)
+		writeWebAuthnError(w, r, err)
 		return
 	}
 	wu, err := a.webauthnUserFor(r, userID)
@@ -350,7 +369,7 @@ func (a *App) handleLoginWebAuthnBegin(w http.ResponseWriter, r *http.Request) {
 	}
 	rp, err := a.webauthnFor(r)
 	if err != nil {
-		writeInternalError(w, err)
+		writeWebAuthnError(w, r, err)
 		return
 	}
 	wu, err := a.webauthnUserFor(r, p.userID)
@@ -402,7 +421,7 @@ func (a *App) handleLoginWebAuthnFinish(w http.ResponseWriter, r *http.Request) 
 	}
 	rp, err := a.webauthnFor(r)
 	if err != nil {
-		writeInternalError(w, err)
+		writeWebAuthnError(w, r, err)
 		return
 	}
 	wu, err := a.webauthnUserFor(r, p.userID)

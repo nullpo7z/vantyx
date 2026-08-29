@@ -7,8 +7,11 @@ function esc(s) {
   return String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
 }
 
-export async function renderSettingsPage(container) {
+export async function renderSettingsPage(container, { meData } = {}) {
   if (typeof setActiveNav === 'function') setActiveNav('settings')
+  // Language / timezone are per-user preferences and are shown to
+  // everyone (E-8); the audit-forwarder section is admin-only.
+  const isAdmin = !!(meData && meData.role === 'admin')
   const current = getLocale()
   const langOptions = SUPPORTED_LOCALES.map(
     (l) =>
@@ -45,7 +48,9 @@ export async function renderSettingsPage(container) {
         </select>
       </div>
 
-      <div class="mt-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      ${
+        isAdmin
+          ? `<div class="mt-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h3 class="text-sm font-semibold text-slate-800 mb-3">${t('settings.sectionAudit')}</h3>
         <div class="flex items-center gap-2">
           <input id="audit-fwd-enabled" type="checkbox" class="h-4 w-4" />
@@ -80,7 +85,9 @@ export async function renderSettingsPage(container) {
           <button id="audit-fwd-save" class="rounded bg-sky-700 px-4 py-2 text-sm font-medium text-white hover:bg-sky-800">${t('settings.save')}</button>
           <span id="audit-fwd-status" class="text-sm text-slate-600"></span>
         </div>
-      </div>
+      </div>`
+          : ''
+      }
     </div>
   `
 
@@ -97,6 +104,8 @@ export async function renderSettingsPage(container) {
       setTimezone(timezoneEl.value)
     })
   }
+
+  if (!isAdmin) return
 
   const enabledEl = container.querySelector('#audit-fwd-enabled')
   const protoEl = container.querySelector('#audit-fwd-proto')

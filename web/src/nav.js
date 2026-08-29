@@ -45,19 +45,22 @@ function navLinks() {
   ].filter(Boolean)
 }
 
+// Settings is deliberately NOT admin-only: it holds per-user preferences
+// (language, timezone) every user needs to reach (E-8). The admin-only
+// audit-forwarder section inside it is gated by the settings page itself.
 function isAdminOnlyNav(el) {
-  const { navGroups, navUsers, navCredentials, navAudit, navSettings, navApiRef } = state
+  const { navGroups, navUsers, navCredentials, navAudit, navApiRef } = state
   return (
     el === navGroups ||
     el === navUsers ||
     el === navCredentials ||
     el === navAudit ||
-    el === navSettings ||
     el === navApiRef
   )
 }
 
 function setNavLinkVisible(el, visible) {
+  if (!el) return
   if (visible) {
     el.classList.remove('hidden')
   } else {
@@ -243,10 +246,12 @@ export function setActiveNav(tab) {
  *   shown.
  */
 export function showAuthenticatedNav(isAdmin) {
-  const { navSessions, navRecordings, navRecordingExports } = state
+  const { navSessions, navRecordings, navRecordingExports, navSettings } = state
   setNavLinkVisible(navSessions, true)
   setNavLinkVisible(navRecordings, true)
   setNavLinkVisible(navRecordingExports, true)
+  // Settings holds per-user language/timezone preferences (E-8).
+  setNavLinkVisible(navSettings, true)
   if (isAdmin) {
     for (const el of navLinks()) {
       if (isAdminOnlyNav(el)) {

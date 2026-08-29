@@ -307,7 +307,7 @@ export function renderApp(container) {
 
   async function showSettings() {
     disconnectAppSessionEvents()
-    await renderSettingsPage(mainContent)
+    await renderSettingsPage(mainContent, { meData })
   }
 
   function showChangePasswordModal() {

@@ -58,6 +58,9 @@ var Messages = map[string]string{
 	"auth.passwordChangeRequired": "この機能を利用する前にパスワードを変更してください",
 
 	// Users (admin management).
+	"settings.webhookTooMany":         "Webhook エンドポイントが多すぎます（最大 20）",
+	"settings.webhookDuplicateID":     "Webhook エンドポイント ID が重複しています",
+	"settings.webhookNotFound":        "Webhook エンドポイントが見つかりません",
 	"accessRequests.alreadyHasAccess": "このグループには既にアクセスできます",
 	"accessRequests.pendingExists":    "このグループへの申請は既に承認待ちです",
 	"accessRequests.notFound":         "アクセス申請が見つかりません",

@@ -1051,6 +1051,41 @@ const API = {
     return res.json()
   },
 
+  /** Admin: webhook endpoints with delivery stats. */
+  async webhooksGet() {
+    const res = await fetch('/api/settings/webhooks', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load webhooks')
+    }
+    return res.json()
+  },
+
+  /** Admin: replace the webhook endpoint list. */
+  async webhooksPut(endpoints) {
+    const res = await fetch('/api/settings/webhooks', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ endpoints }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to save webhooks')
+    }
+    return res.json()
+  },
+
+  /** Admin: send a test event to one endpoint. */
+  async webhookTest(id) {
+    const res = await fetch(`/api/settings/webhooks/${encodeURIComponent(id)}/test`, { method: 'POST', credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to test the webhook')
+    }
+    return res.json()
+  },
+
   /** Admin: retention policy and last purge report. */
   async retentionGet() {
     const res = await fetch('/api/settings/retention', { credentials: 'include' })

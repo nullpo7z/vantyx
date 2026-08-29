@@ -153,6 +153,28 @@ Audit events: `oidc_login_started`, `oidc_login_ok`, `oidc_login_failed`
 | `VANTYX_RECORDING_EXPORT_CONVERT_TIMEOUT` | `45m` | Maximum wall time for a single GIF/MP4 export conversion job. |
 | `VANTYX_RECORDING_EXPORT_COMPLETED_TTL` | `168h` | How long completed, failed, or cancelled export jobs (and their output files) are retained in memory and on disk before automatic cleanup. |
 
+## Webhook notifications
+
+Admins register HTTP endpoints under **System settings → Webhook
+notifications** (`GET`/`PUT /api/settings/webhooks`, `POST
+/api/settings/webhooks/{id}/test`). Each endpoint subscribes to audit event
+names (exact, `*`, or globs such as `access_request_*`) and receives either
+generic JSON — `{"event","time","source","fields"}` with
+`X-Vantyx-Event` and, when a secret is set, `X-Vantyx-Signature:
+sha256=<HMAC-SHA256 of the body>` — or a Slack/Mattermost-style
+`{"text": …}` message. Delivery is asynchronous (bounded queue, 5 s
+timeout, two retries with backoff; 4xx responses are not retried) and never
+blocks request handling. Loopback / link-local / metadata addresses are
+refused unless `VANTYX_WEBHOOK_ALLOW_RESTRICTED_HOSTS=1`.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_WEBHOOK_URL` | — | Seeds one endpoint when none is stored yet (later edits in the UI take precedence). |
+| `VANTYX_WEBHOOK_EVENTS` | security defaults | Comma-separated event patterns for the seeded endpoint (default: `login_failed, login_rate_limited, oidc_login_failed, totp_reset_by_admin, user_role_update, access_request_*, session_terminated_by_admin, retention_purge`). |
+| `VANTYX_WEBHOOK_SECRET` | — | HMAC secret for the seeded endpoint. |
+| `VANTYX_WEBHOOK_FORMAT` | `generic` | `generic` or `slack` for the seeded endpoint. |
+| `VANTYX_WEBHOOK_ALLOW_RESTRICTED_HOSTS` | `0` | Allow loopback / link-local webhook targets (labs only). |
+
 ## Retention
 
 Age-based purge, all opt-in (empty or `0` = keep forever). The job runs a

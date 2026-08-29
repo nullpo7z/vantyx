@@ -29,3 +29,7 @@ func checkRestrictedHostIP(ip net.IP) error {
 	}
 	return nil
 }
+
+// CheckRestrictedHostIP is the exported form of checkRestrictedHostIP for
+// other packages that dial operator-supplied addresses (webhooks).
+func CheckRestrictedHostIP(ip net.IP) error { return checkRestrictedHostIP(ip) }

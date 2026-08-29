@@ -318,6 +318,7 @@ func NewApp() *App {
 	// Age-based purge of recordings / audit / command logs (opt-in via env).
 	app.startRetentionLoop()
 	app.registerMetricsGauges()
+	app.initWebhooks()
 	return app
 }
 
@@ -403,6 +404,10 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/api/groups/{group_id}/members", a.handleGroupMembers)
 	r.Post("/api/groups/{group_id}/members", a.handleAddGroupMember)
 	r.Delete("/api/groups/{group_id}/members/{user_id}", a.handleRemoveGroupMember)
+	// Webhook notifications (admin).
+	r.Get("/api/settings/webhooks", a.handleGetWebhooks)
+	r.Put("/api/settings/webhooks", a.handlePutWebhooks)
+	r.Post("/api/settings/webhooks/{id}/test", a.handleTestWebhook)
 	// Retention policy (admin): inspect and run the purge job.
 	r.Get("/api/settings/retention", a.handleGetRetention)
 	r.Post("/api/settings/retention/run", a.handleRunRetention)

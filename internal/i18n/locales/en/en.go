@@ -66,6 +66,9 @@ var Messages = map[string]string{
 	"auth.passwordChangeRequired": "password change required before using this feature",
 
 	// Users (admin management).
+	"settings.webhookTooMany":         "too many webhook endpoints (max 20)",
+	"settings.webhookDuplicateID":     "duplicate webhook endpoint id",
+	"settings.webhookNotFound":        "webhook endpoint not found",
 	"accessRequests.alreadyHasAccess": "you already have access to this group",
 	"accessRequests.pendingExists":    "a request for this group is already pending",
 	"accessRequests.notFound":         "access request not found",

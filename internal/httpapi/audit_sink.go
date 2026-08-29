@@ -101,6 +101,9 @@ func (s *auditSink) write(entry AuditEntry) {
 		}
 	}
 
+	// Webhook notifications (best-effort, async, filtered per endpoint).
+	globalWebhooks.dispatch(entry)
+
 	// Forward to external SIEM (best-effort).
 	s.mu.Lock()
 	fwd := s.forwarder

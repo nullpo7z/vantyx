@@ -54,6 +54,7 @@ func RunBridgeDetachable(
 	initialCols, initialRows int,
 	externalResize <-chan sshproxy.TerminalSize,
 	controlSink BridgeControlSink,
+	resizeRecorder sshproxy.ResizeRecorder,
 ) error {
 	dialer := net.Dialer{Timeout: 15 * time.Second}
 	addr := net.JoinHostPort(host, portString(port))
@@ -79,7 +80,7 @@ func RunBridgeDetachable(
 	}()
 
 	_ = sendClientNegotiation(conn)
-	b := newDetachableBridge(ctx, endMsg, conn, output, username, password, touch, tee, stdinRecorder, initialCols, initialRows, signalBridgeDone, cleanup)
+	b := newDetachableBridge(ctx, endMsg, conn, output, username, password, touch, tee, stdinRecorder, initialCols, initialRows, signalBridgeDone, cleanup, resizeRecorder)
 	b.bridgeDone = bridgeDone
 	if controlSink != nil {
 		controlSink.Register(b)

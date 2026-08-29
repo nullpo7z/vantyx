@@ -366,8 +366,21 @@ func (a *App) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		writeJSONErrorKey(w, r, "files.createFailed", http.StatusBadGateway)
 		return
 	}
-	defer remoteFile.Close()
 	if _, err := io.Copy(remoteFile, file); err != nil {
+		_ = remoteFile.Close()
+		audit("files_upload_failed", auditFields{
+			"target_id": target.ID,
+			"path":      pathParam,
+			"error":     err.Error(),
+		})
+		writeJSONErrorKey(w, r, "files.uploadFailed", http.StatusBadGateway)
+		return
+	}
+	// Close (not deferred): for backends like FTP the actual STOR only
+	// completes here, so a flush/commit failure must fail the request
+	// instead of silently telling the client "status: ok" for a file
+	// that never fully landed on the target.
+	if err := remoteFile.Close(); err != nil {
 		audit("files_upload_failed", auditFields{
 			"target_id": target.ID,
 			"path":      pathParam,

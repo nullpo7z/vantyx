@@ -5,6 +5,7 @@
 
 import { t } from './i18n.js'
 import { uiAlert } from './ui_dialog.js'
+import { isSameOriginBroadcast } from './dom_helpers.js'
 
 export function randomToken() {
   const b = new Uint8Array(16)
@@ -98,6 +99,7 @@ export function openTerminalWithStoredAuth(opts) {
     }
   }, 15_000)
   bc.onmessage = (ev) => {
+    if (!isSameOriginBroadcast(ev)) return
     if (ev?.data?.type !== 'ready') return
     if (ev?.data?.target_id !== targetId) return
     window.clearTimeout(timeoutId)
@@ -122,12 +124,17 @@ export function openTerminalWithStoredAuth(opts) {
   }
 }
 
-/** @param {{ targetId: string, targetName?: string, protocol?: string }} opts */
+/** @param {{ targetId: string, targetName?: string, protocol?: string, hasSshKey?: boolean }} opts */
 export function openTerminalPlain(opts) {
   const params = new URLSearchParams()
   params.set('target_id', opts.targetId)
   params.set('target_name', opts.targetName || opts.targetId)
   params.set('protocol', opts.protocol || 'ssh')
+  // Gates the ad-hoc credential form's optional passphrase field (see
+  // terminal_page.js) -- without it, a target reached from this
+  // standalone entry point that has a stored key but no username can
+  // never be offered the passphrase field.
+  if (opts.hasSshKey) params.set('has_ssh_key', '1')
   openTerminalTabWithParent(`/terminal?${params.toString()}`)
 }
 
@@ -164,5 +171,5 @@ export async function openTerminalForTarget(API, opts) {
     return
   }
 
-  openTerminalPlain({ targetId, targetName: name, protocol })
+  openTerminalPlain({ targetId, targetName: name, protocol, hasSshKey: !!target?.has_ssh_key })
 }

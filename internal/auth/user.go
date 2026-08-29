@@ -22,6 +22,9 @@ type User struct {
 	// Locale is the user's preferred UI locale (BCP 47 short code, currently "en" or "ja").
 	// Empty means "no preference"; UI clients should fall back to their own default.
 	Locale string
+	// Timezone is the user's preferred IANA timezone name (e.g. "Asia/Tokyo").
+	// Empty means "no preference"; UI clients fall back to the browser's local zone.
+	Timezone string
 	// ForcePasswordChange indicates that the user must rotate their
 	// password before any other API call succeeds. Used for the
 	// bootstrap admin account (ASVS V2.10.4 / CWE-1188).
@@ -47,6 +50,7 @@ type UserStore interface {
 	SetUserTags(userID string, tags []string) error
 	UpdatePassword(userID, currentPlain, newPlain string) error
 	UpdateLocale(userID, locale string) error
+	UpdateTimezone(userID, timezone string) error
 	AddPublicKey(userID, keyLine string) (int64, error)
 	ListPublicKeys(userID string) ([]UserSSHKey, error)
 	DeletePublicKey(userID string, keyID int64) error
@@ -58,6 +62,10 @@ type UserStore interface {
 // ErrInvalidLocale is returned when an UpdateLocale call receives a value
 // that is not in the supported set (currently "", "en", "ja").
 var ErrInvalidLocale = errors.New("unsupported locale")
+
+// ErrInvalidTimezone is returned when an UpdateTimezone call receives a
+// value that is not "" or a valid IANA timezone name.
+var ErrInvalidTimezone = errors.New("unsupported timezone")
 
 var (
 	ErrUserExists        = errors.New("user already exists")

@@ -41,16 +41,19 @@ type CredentialIdentityStore interface {
 }
 
 var (
-	ErrCredentialIdentityExists   = errors.New("credential identity already exists")
-	ErrCredentialIdentityNotFound = errors.New("credential identity not found")
-	ErrCredentialIdentityIDEmpty  = errors.New("credential identity id required")
-	ErrCredentialIdentityLabelReq = errors.New("credential identity label required")
-	ErrCredentialIdentityUserReq  = errors.New("credential identity username required")
-	ErrCredentialIdentityAuthReq  = errors.New("credential identity requires password and/or ssh key")
+	ErrCredentialIdentityExists     = errors.New("credential identity already exists")
+	ErrCredentialIdentityNotFound   = errors.New("credential identity not found")
+	ErrCredentialIdentityIDEmpty    = errors.New("credential identity id required")
+	ErrCredentialIdentityIDTooLong  = errors.New("credential identity id too long")
+	ErrCredentialIdentityIDInvalid  = errors.New("credential identity id contains invalid characters")
+	ErrCredentialIdentityLabelReq   = errors.New("credential identity label required")
+	ErrCredentialIdentityUserReq    = errors.New("credential identity username required")
+	ErrCredentialIdentityAuthReq    = errors.New("credential identity requires password and/or ssh key")
+	ErrCredentialIdentityInUse      = errors.New("credential identity is referenced by a target")
 )
 
 func validateCredentialIdentityID(id CredentialIdentityID) error {
-	return validateCredentialLibraryID(string(id), ErrCredentialIdentityIDEmpty)
+	return validateCredentialLibraryID(string(id), ErrCredentialIdentityIDEmpty, ErrCredentialIdentityIDTooLong, ErrCredentialIdentityIDInvalid)
 }
 
 func validateCredentialIdentityLabel(label string) error {

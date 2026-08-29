@@ -42,7 +42,7 @@ func TestRunBridgeDetachable_WithEchoServer(t *testing.T) {
 			defer wsConn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			err := RunBridgeDetachable(ctx, "session_ended: Telnet session closed", "127.0.0.1", port, "", "", output, attachCh, wsConn, nil, nil, nil, 80, 24, nil, nil)
+			err := RunBridgeDetachable(ctx, "session_ended: Telnet session closed", "127.0.0.1", port, "", "", output, attachCh, wsConn, nil, nil, nil, 80, 24, nil, nil, nil)
 			bridgeErrCh <- err
 		}()
 	}))
@@ -108,7 +108,7 @@ func TestRunBridgeDetachable_StreamAttach(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		bridgeErrCh <- RunBridgeDetachable(ctx, "session_ended: Telnet session closed", "127.0.0.1", port, "", "", output, attachCh, nil, nil, nil, nil, 80, 24, nil, nil)
+		bridgeErrCh <- RunBridgeDetachable(ctx, "session_ended: Telnet session closed", "127.0.0.1", port, "", "", output, attachCh, nil, nil, nil, nil, 80, 24, nil, nil, nil)
 	}()
 
 	time.Sleep(100 * time.Millisecond)

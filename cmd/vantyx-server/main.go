@@ -23,6 +23,10 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	// Embeds the IANA timezone database in the binary so time.LoadLocation
+	// (used to validate users' timezone preferences) works even when the
+	// container image has no system tzdata package installed.
+	_ "time/tzdata"
 
 	"github.com/nullpo7z/vantyx/internal/httpapi"
 	"github.com/nullpo7z/vantyx/internal/sshd"

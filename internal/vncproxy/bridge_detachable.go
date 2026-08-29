@@ -60,6 +60,23 @@ func (b *detachableVNCBBridge) SetWriter(userID string) {
 	}
 }
 
+// demoteOtherWritersLocked downgrades every currently-attached client
+// except newEntry to read-only. Called whenever a new writer attaches
+// so the single-active-writer invariant holds even outside the
+// explicit SetWriter promotion flow -- mirrors the same fix applied to
+// the SSH/Telnet detachable bridges (see demoteOtherWritersLocked
+// there): without it, a second browser tab (or a resumed session)
+// attaching as writer could drive the shared VNC session's mouse/
+// keyboard at the same time as the first, instead of taking over.
+// Caller must hold clientMu.
+func (b *detachableVNCBBridge) demoteOtherWritersLocked(newEntry *vncClientEntry) {
+	for c := range b.clients {
+		if c != newEntry {
+			c.canWrite = false
+		}
+	}
+}
+
 // DetachUser closes every client connection owned by userID.
 func (b *detachableVNCBBridge) DetachUser(userID string) {
 	if userID == "" {
@@ -110,6 +127,9 @@ func (b *detachableVNCBBridge) attachWebSocket(wsConn *websocket.Conn, mode sess
 		userID:   userID,
 	}
 	b.clientMu.Lock()
+	if entry.canWrite {
+		b.demoteOtherWritersLocked(entry)
+	}
 	b.clients[entry] = struct{}{}
 	b.clientMu.Unlock()
 
@@ -138,6 +158,14 @@ func (b *detachableVNCBBridge) pumpTCPToWS(entry *vncClientEntry) {
 }
 
 func (b *detachableVNCBBridge) pumpWSToTCP(entry *vncClientEntry) {
+	// Without this, closing the browser tab (the common exit path) only
+	// stops this goroutine -- pumpTCPToWS is left blocked forever on
+	// entry.tcp.Read() waiting for the now-orphaned upstream VNC
+	// connection, which typically stays open indefinitely for an idle
+	// session. detachEntry closes both entry.tcp and entry.w, so this
+	// mirrors pumpTCPToWS's own defer and makes cleanup symmetric
+	// regardless of which side closes first.
+	defer b.detachEntry(entry)
 	for {
 		mt, r, err := entry.w.NextReader()
 		if err != nil {

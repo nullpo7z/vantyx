@@ -48,6 +48,7 @@ var Messages = map[string]string{
 	"auth.sshKeyAuthorizedKeyReq": "authorized_key は必須です",
 	"auth.sshKeyIDInvalid":        "key_id が不正です",
 	"auth.unsupportedLocale":      "サポートされていない言語コードです",
+	"auth.unsupportedTimezone":    "サポートされていないタイムゾーンです",
 	"auth.passwordChangeRequired": "この機能を利用する前にパスワードを変更してください",
 
 	// Users (admin management).
@@ -60,6 +61,7 @@ var Messages = map[string]string{
 	// Groups.
 	"groups.idRequired":             "group_id は必須です",
 	"groups.notFound":               "グループが見つかりません",
+	"groups.notEmpty":               "このアクセスグループにはサーバーまたはサブグループが含まれているため削除できません。先に移動または削除してください。",
 	"groups.nameRequired":           "name は必須です",
 	"groups.userIDRequired":         "user_id は必須です",
 	"groups.groupAndUserIDRequired": "group_id と user_id が必要です",
@@ -83,10 +85,12 @@ var Messages = map[string]string{
 	"sshKeys.idRequired":                    "key_id は必須です",
 	"sshKeys.notFound":                      "SSH 鍵が見つかりません",
 	"sshKeys.exists":                        "同じ ID の SSH 鍵が既に存在します",
-	"sshKeys.inUse":                         "この SSH 鍵は Identity で使用中のため削除できません",
+	"sshKeys.inUse":                         "この SSH 鍵は Identity またはサーバーで使用中のため削除できません",
 	"sshKeys.privateKeyRequired":            "秘密鍵は必須です",
+	"sshKeys.unsupportedKeyType":            "サポートされていない鍵の種類です",
 	"credentialIdentities.idRequired":       "identity_id は必須です",
 	"credentialIdentities.notFound":         "Identity が見つかりません",
+	"credentialIdentities.inUse":            "この Identity はサーバーで使用中のため削除できません",
 	"credentialIdentities.exists":           "同じ ID の Identity が既に存在します",
 	"credentialIdentities.usernameRequired": "ユーザー名は必須です",
 	"credentialIdentities.authRequired":     "パスワードまたは SSH 鍵のいずれかが必要です",
@@ -158,11 +162,12 @@ var Messages = map[string]string{
 	"recordings.exportDirectOnly":  "この形式は直接ダウンロードのみです。GIF/MP4 変換は書き出しキューを利用してください",
 
 	// RDP / VNC / TFTP capability checks.
-	"rdp.notRDP":         "RDP サーバーではありません",
-	"rdp.startFailed":    "RDP セッションの開始に失敗しました",
-	"rdp.bridgeFailed":   "RDP ブリッジの開始に失敗しました",
-	"vnc.notVNC":         "VNC サーバーではありません",
-	"tftp.notTFTPServer": "TFTP サーバーではありません",
+	"rdp.notRDP":           "RDP サーバーではありません",
+	"rdp.startFailed":      "RDP セッションの開始に失敗しました",
+	"rdp.bridgeFailed":     "RDP ブリッジの開始に失敗しました",
+	"vnc.notVNC":           "VNC サーバーではありません",
+	"tftp.notTFTPServer":   "TFTP サーバーではありません",
+	"tftp.targetHostNotIP": "ターゲットのホストが IP アドレスではありません。TFTP 書き込みウィンドウには IP ホストが必要です",
 
 	// File operations (SFTP / FTP / TFTP).
 	"files.transferOnlySSHFTPTFTP":   "ファイル転送は SSH / FTP / TFTP のターゲットのみ対応しています",
@@ -203,6 +208,10 @@ var Messages = map[string]string{
 	"validation.targetIDEmpty":   "target_id は必須です",
 	"validation.targetIDTooLong": "target_id が長すぎます",
 	"validation.targetIDInvalid": "target_id に使用できない文字が含まれています",
+	"validation.sshKeyIDTooLong": "key_id が長すぎます",
+	"validation.sshKeyIDInvalid": "key_id に使用できない文字が含まれています",
+	"validation.credentialIdentityIDTooLong": "identity_id が長すぎます",
+	"validation.credentialIdentityIDInvalid": "identity_id に使用できない文字が含まれています",
 	"validation.nameEmpty":       "name は必須です",
 	"validation.nameTooLong":     "name が長すぎます",
 	"validation.nameInvalid":     "name に使用できない文字が含まれています",

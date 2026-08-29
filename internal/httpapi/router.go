@@ -74,6 +74,10 @@ type App struct {
 	// for SSE (GET /api/events/file-transfers).
 	FileTransferEventBroker *FileTransferEventBroker
 
+	// TFTPWriteWindowEvents streams write-window open/close status for
+	// SSE, per target (GET /api/tftp/targets/{target_id}/write-window/events).
+	TFTPWriteWindowEvents *TFTPWriteWindowEventBroker
+
 	// CommandLogStore persists terminal stdin lines for search.
 	CommandLogStore *commandLogStore
 
@@ -270,6 +274,7 @@ func NewApp() *App {
 		RDPVNCManager:           rdpSessions,
 		SessionEventBroker:      NewSessionEventBroker(),
 		FileTransferEventBroker: ftBroker,
+		TFTPWriteWindowEvents:   NewTFTPWriteWindowEventBroker(),
 		CommandLogStore:         newCommandLogStore(db),
 		FileTransferManager:     ftManager,
 		SharingRegistry:         sharing.NewRegistry(),
@@ -339,6 +344,7 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/api/me", a.handleMe)
 	r.Post("/api/me/password", a.handleChangePassword)
 	r.Put("/api/me/locale", a.handleUpdateLocale)
+	r.Put("/api/me/timezone", a.handleUpdateTimezone)
 	r.Get("/api/me/ssh-keys", a.handleListSSHKeys)
 	r.Post("/api/me/ssh-keys", a.handleAddSSHKey)
 	r.Delete("/api/me/ssh-keys/{key_id}", a.handleDeleteSSHKey)
@@ -384,6 +390,7 @@ func (a *App) NewRouter() http.Handler {
 	// SSH keys and identities (admin-only credential library).
 	r.Get("/api/ssh-keys", a.handleSSHKeysList)
 	r.Post("/api/ssh-keys", a.handleSSHKeysCreate)
+	r.Post("/api/ssh-keys/generate", a.handleSSHKeysGenerate)
 	r.Put("/api/ssh-keys/{key_id}", a.handleSSHKeysUpdate)
 	r.Delete("/api/ssh-keys/{key_id}", a.handleSSHKeysDelete)
 	r.Get("/api/credential-identities", a.handleCredentialIdentitiesList)
@@ -474,6 +481,10 @@ func (a *App) NewRouter() http.Handler {
 	r.Delete("/api/tftp/targets/{target_id}/files", a.handleTFTPServerDeleteFile)
 	r.Get("/api/tftp/targets/{target_id}/files/download", a.handleTFTPServerDownloadFile)
 	r.Post("/api/tftp/targets/{target_id}/files/upload", a.handleTFTPServerUploadFile)
+	r.Get("/api/tftp/targets/{target_id}/write-window", a.handleTFTPGetWriteWindow)
+	r.Get("/api/tftp/targets/{target_id}/write-window/events", a.handleTFTPWriteWindowEvents)
+	r.Post("/api/tftp/targets/{target_id}/write-window", a.handleTFTPOpenWriteWindow)
+	r.Delete("/api/tftp/targets/{target_id}/write-window", a.handleTFTPCloseWriteWindow)
 
 	// Admin-only: API spec and Swagger UI.
 	r.Get("/api/spec", a.handleAPISpec)

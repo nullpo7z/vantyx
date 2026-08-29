@@ -122,12 +122,17 @@ func (c *VNCCapture) Stop() error {
 	if c == nil {
 		return nil
 	}
-	if c.cancel != nil {
-		c.cancel()
-	}
+	// Stop the ffmpeg recorder FIRST, while Xvfb/vncviewer are still
+	// running, so it receives SIGINT (via VideoRecorder.Stop) and cleanly
+	// finalizes the MP4 -- writing the moov atom / trailer -- before its
+	// input display goes away. Cancelling captureCtx first would instead
+	// SIGKILL ffmpeg mid-write and truncate the recording's tail.
 	var err error
 	if c.video != nil {
 		err = c.video.Stop()
+	}
+	if c.cancel != nil {
+		c.cancel()
 	}
 	killCmd(c.viewer)
 	killCmd(c.xvfb)

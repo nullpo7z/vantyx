@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode"
@@ -13,6 +14,22 @@ import (
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 )
+
+// groupIDParam extracts the {group_id} route parameter. Access group
+// IDs are hierarchical paths (e.g. "parent/child"); the SPA percent-
+// encodes the "/" (encodeURIComponent) so the whole ID lands in a
+// single path segment, and chi returns route params exactly as
+// matched -- still percent-encoded. Decode it back here, mirroring
+// the same pattern used for recording IDs, or a nested group's ID
+// would fail validateGroupID with a spurious "invalid characters"
+// error (the literal "%2F" doesn't match the allowed character set).
+func groupIDParam(r *http.Request) string {
+	raw := chi.URLParam(r, "group_id")
+	if decoded, err := url.PathUnescape(raw); err == nil {
+		raw = decoded
+	}
+	return strings.TrimSpace(raw)
+}
 
 type groupResponse struct {
 	ID      string           `json:"id"`
@@ -222,7 +239,7 @@ func (a *App) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	groupID := strings.TrimSpace(chi.URLParam(r, "group_id"))
+	groupID := groupIDParam(r)
 	if groupID == "" {
 		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
@@ -260,7 +277,7 @@ func (a *App) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	groupID := strings.TrimSpace(chi.URLParam(r, "group_id"))
+	groupID := groupIDParam(r)
 	if groupID == "" {
 		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
@@ -286,7 +303,7 @@ func (a *App) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	groupID := chi.URLParam(r, "group_id")
+	groupID := groupIDParam(r)
 	if groupID == "" {
 		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
@@ -320,8 +337,7 @@ func (a *App) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	groupID := chi.URLParam(r, "group_id")
-	groupID = strings.TrimSpace(groupID)
+	groupID := groupIDParam(r)
 	if groupID == "" {
 		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
@@ -362,10 +378,8 @@ func (a *App) handleRemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	groupID := chi.URLParam(r, "group_id")
-	userID := chi.URLParam(r, "user_id")
-	groupID = strings.TrimSpace(groupID)
-	userID = strings.TrimSpace(userID)
+	groupID := groupIDParam(r)
+	userID := strings.TrimSpace(chi.URLParam(r, "user_id"))
 	if groupID == "" || userID == "" {
 		writeJSONErrorKey(w, r, "groups.groupAndUserIDRequired", http.StatusBadRequest)
 		return
@@ -385,8 +399,7 @@ func (a *App) handleRemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 // handleGroupTags returns tags for the group. The caller must be a
 // member or an admin.
 func (a *App) handleGroupTags(w http.ResponseWriter, r *http.Request) {
-	groupID := chi.URLParam(r, "group_id")
-	groupID = strings.TrimSpace(groupID)
+	groupID := groupIDParam(r)
 	if groupID == "" {
 		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
@@ -419,8 +432,7 @@ func (a *App) handleSetGroupTags(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	groupID := chi.URLParam(r, "group_id")
-	groupID = strings.TrimSpace(groupID)
+	groupID := groupIDParam(r)
 	if groupID == "" {
 		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return

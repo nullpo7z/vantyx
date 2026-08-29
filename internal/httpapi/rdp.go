@@ -331,7 +331,14 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 			sess := a.RDPVNCManager.RegisterSession(bridgeKey, sid, userID, targetID, target.Name, width, height, bridge)
 			sessionID = sess.ID
 			a.startRDPBridgeProxyIfNeeded(sess)
-			a.startRDPVideoRecording(r.Context(), sessionID, userID, targetID, bridge.Display(), width, height)
+			// Detached background context, same rationale as rdpvnc.Start
+			// above: r.Context() is canceled the moment this handler
+			// returns (a few lines below), which would otherwise kill the
+			// just-started ffmpeg recording via exec.CommandContext
+			// before it captures any real video. Recording lifecycle is
+			// tied to the RDP session itself via finishVideoRecording
+			// (wired to bridge.Done() just below), not to this request.
+			a.startRDPVideoRecording(context.Background(), sessionID, userID, targetID, bridge.Display(), width, height)
 			go func(id string, done <-chan struct{}) {
 				<-done
 				a.finishVideoRecording(id)

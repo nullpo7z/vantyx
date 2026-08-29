@@ -34,6 +34,11 @@ export function renderTerminalPage(container) {
   const useStoredCredentials = params.get('use_stored_credentials') === '1'
   const needsPassword = params.get('needs_password') === '1'
   const needsPassphrase = !isTelnet && params.get('needs_passphrase') === '1'
+  // Whether the target already has a private key stored server-side.
+  // Gates the ad-hoc credential form's optional passphrase field --
+  // without a key, entering a passphrase here can never do anything,
+  // and showing it anyway reads as if the target used key auth.
+  const hasSshKey = !isTelnet && params.get('has_ssh_key') === '1'
   const urlSessionName = params.get('session_name') ?? ''
   const urlSessionDesc = params.get('session_description') ?? ''
   const hasSessionParamsFromUrl = params.has('session_name') || params.has('session_description')
@@ -116,7 +121,7 @@ export function renderTerminalPage(container) {
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('terminal.fieldPassphrase')}</label>
                 <input type="password" id="ssh-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('terminal.fieldPassphrasePlaceholder')}" />
               </div>
-              ${isTelnet ? '' : `<div id="term-passphrase-optional-wrap">
+              ${isTelnet ? '' : `<div id="term-passphrase-optional-wrap" class="${hasSshKey ? '' : 'hidden'}">
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('terminal.fieldPassphraseOptional')}</label>
                 <input type="password" id="ssh-passphrase-optional" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('terminal.fieldPassphraseOptionalPlaceholder')}" />
               </div>`}
@@ -177,6 +182,7 @@ export function renderTerminalPage(container) {
   let fitAddon = null
   let resizeObserver = null
   let termStdinAttached = false
+  let termBeforeUnloadAttached = false
   // Cached creds + form values from the last connectWithCredentials /
   // connectWithStoredCredentials call so the host-key TOFU adopt /
   // mismatch dialogs can transparently retry the connection after
@@ -200,7 +206,7 @@ export function renderTerminalPage(container) {
   }
 
   /** WebSocket メッセージ共通処理。制御フレームは xterm に書き込まない。 */
-  function handleTerminalWsMessage(ws, ev, { onError, onSessionEnded } = {}) {
+  function handleTerminalWsMessage(ws, ev, { onError, onSessionEnded, onData } = {}) {
     if (typeof ev.data === 'string' && ev.data.startsWith('session_ended:')) {
       const msg = ev.data.slice('session_ended:'.length).trim() || t('terminal.sessionEndedSuffix')
       if (term) term.write(`\r\n\n${t('terminal.sessionEndedPrefix')} ${msg}\r\n`)
@@ -232,6 +238,15 @@ export function renderTerminalPage(container) {
     if (frameKind.kind !== 'terminal' && frameKind.kind !== 'binary') {
       return true
     }
+
+    // Real shell output. Unlike the session_id meta frame (sent up front,
+    // before the bridge even attempts to authenticate against the
+    // target), this can only happen once the bridge is genuinely up and
+    // running -- callers use it as the reliable signal that there was
+    // ever an actual live session, independent of whether an "error: "
+    // frame sent right after a failed connect happens to arrive before
+    // the socket closes.
+    onData?.()
 
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
@@ -324,6 +339,52 @@ export function renderTerminalPage(container) {
   }
 
   let currentSessionId = resumeSessionId || null
+  // Set once the parent-tab-credential-relay info line (#term-broadcast-info,
+  // "received credentials, connecting…") is created. showConnectError()
+  // clears it on failure so it doesn't linger next to the real error --
+  // otherwise a failed auth attempt shows both "connecting…" and the
+  // error at the same time, which reads as nonsense.
+  let broadcastInfoEl = null
+
+  /**
+   * Shows a connection error and undoes any state that assumed the
+   * connection would succeed:
+   *  - clears the stale "connecting…" status line from the parent-tab
+   *    credential relay, if any.
+   *  - hides the "enter a session name, we'll use the stored credentials"
+   *    hint, which is only relevant while a connection attempt hasn't
+   *    failed yet.
+   *  - re-enables the Connect button and clears any BroadcastChannel
+   *    wait-lock, both of which are left in their "attempt in
+   *    progress" state (disabled / readOnly) by the parent-tab
+   *    credential relay and never reset on their own. Without this,
+   *    re-showing credsWrap after a failed attempt looks like nothing
+   *    can be retried: the fields may be visible but Connect stays
+   *    dead.
+   *  - forgets currentSessionId and tears down the sharing banner /
+   *    participant polling. The backend sends the session_id meta frame
+   *    *before* it attempts to authenticate against the target (so the
+   *    client can resume even if the bridge dies moments later), which
+   *    means setCurrentSessionId() can already have fired -- creating a
+   *    "you hold the write token" banner and starting participant
+   *    polling -- by the time an auth failure arrives. None of that is
+   *    true once we're showing a real error, so it must not linger.
+   */
+  function showConnectError(msg) {
+    errorEl.textContent = msg
+    errorEl.classList.remove('hidden')
+    if (broadcastInfoEl) broadcastInfoEl.textContent = ''
+    const storedCredHint = container.querySelector('#term-stored-cred-hint')
+    if (storedCredHint) storedCredHint.classList.add('hidden')
+    connectBtn.disabled = false
+    if (currentSessionId) {
+      currentSessionId = null
+      syncInviteManageButton()
+      detachSharingEvents()
+    }
+    const banner = container.querySelector('#sharing-status-banner')
+    if (banner) banner.remove()
+  }
   const currentSessionIdReady = (() => {
     if (currentSessionId) return Promise.resolve(currentSessionId)
     let resolve
@@ -472,7 +533,6 @@ export function renderTerminalPage(container) {
   closeBtn.addEventListener('click', () => {
     showEndSessionConfirmModal()
   })
-  cancelBtn.addEventListener('click', () => { window.location.href = '/' })
   // ホームに戻る: 親タブから開かれていればそのタブにフォーカスしてこのタブを閉じる。そうでなければこのタブでホームへ遷移する。
   function goHomeOrCloseToOpener() {
     leavingPage = true
@@ -492,6 +552,7 @@ export function renderTerminalPage(container) {
   }
   backFromDisconnectBtn.addEventListener('click', goHomeOrCloseToOpener)
   backFromEndedBtn.addEventListener('click', goHomeOrCloseToOpener)
+  cancelBtn.addEventListener('click', goHomeOrCloseToOpener)
 
   function connectResume(sessionId) {
     if (!sessionId) return
@@ -500,22 +561,48 @@ export function renderTerminalPage(container) {
     shellWrap.classList.remove('hidden')
     errorEl.classList.add('hidden')
     disconnectedWrap.classList.add('hidden')
+    // currentSessionId is pre-seeded from the ?session_id= URL param (see
+    // its declaration) so it stays truthy even when THIS resume attempt
+    // never actually re-establishes anything -- it must not be used on
+    // its own to decide whether to show the "session is still running on
+    // the backend" recovery UI. sawFirstMessage / sawError track whether
+    // *this* attempt got anywhere, mirroring connectWithCredentials /
+    // connectWithStoredCredentials below. sawRealSession additionally
+    // requires actual shell output (not just the session_id meta frame,
+    // which the server sends before it even knows whether the bridge is
+    // still reachable) -- see handleTerminalWsMessage's onData.
+    let sawError = false
+    let sawFirstMessage = false
+    let sawRealSession = false
+    // See connectWithCredentials for why this guard is needed: onclose
+    // fires right after handleTerminalWsMessage handles a clean
+    // session_ended frame, by which point currentSessionId has already
+    // been nulled, so without this flag onclose would misread the clean
+    // shutdown as a failed resume attempt.
+    let sawSessionEnded = false
     const ws = new WebSocket(wsUrlResume(sessionId))
     ws.binaryType = 'arraybuffer'
     ws.onmessage = (ev) => {
+      sawFirstMessage = true
       handleTerminalWsMessage(ws, ev, {
+        onData: () => { sawRealSession = true },
+        onSessionEnded: () => { sawSessionEnded = true },
         onError: (msg) => {
-          errorEl.textContent = msg
-          errorEl.classList.remove('hidden')
+          sawError = true
+          showConnectError(msg)
           shellWrap.classList.add('hidden')
           credsWrap.classList.remove('hidden')
         },
       })
     }
-    ws.onerror = () => {
-      errorEl.textContent = t('terminal.wsConnectFailedShort')
-      errorEl.classList.remove('hidden')
-    }
+    // onerror deliberately does NOT touch the UI. Whether it fires before
+    // or after onmessage has processed a server-sent "error: ..." frame
+    // is not reliably ordered across browsers (both are commonly
+    // dispatched for the same abrupt-looking closure), so anything it
+    // shows here can race with, and clobber, a real message. onclose
+    // always fires last and is the single place that decides what to
+    // show, using sawError as the record of what already happened.
+    ws.onerror = () => {}
     ws.onclose = () => {
       if (leavingPage) return
       if (term) term.write(`\r\n\n${t('terminal.connectionClosed')}\r\n`)
@@ -524,10 +611,29 @@ export function renderTerminalPage(container) {
       // pretend the session is "still running on the backend" in
       // that case — there is no surviving session.
       if (hostKeyCtrl?.getSawHostKeyError()) return
-      if (currentSessionId) {
+      if (sawError) return // already shown via onmessage's onError above
+      if (sawSessionEnded) return // already shown via onmessage's session_ended handling above
+      if (!sawFirstMessage) {
+        // This attempt never actually re-attached to a live session
+        // (connectivity failure before the server said anything) --
+        // don't claim the session is still alive on the backend.
+        showConnectError(t('terminal.wsConnectFailedShort'))
+        shellWrap.classList.add('hidden')
+        credsWrap.classList.remove('hidden')
+        return
+      }
+      if (currentSessionId && sawRealSession) {
         shellWrap.classList.add('hidden')
         disconnectedWrap.classList.remove('hidden')
+        return
       }
+      // Got a session_id but never any actual shell output before the
+      // close -- the resume never really came up this time (e.g. the
+      // backend session was already gone). Don't claim it's "still
+      // running on the backend".
+      showConnectError(t('terminal.wsConnectFailedShort'))
+      shellWrap.classList.add('hidden')
+      credsWrap.classList.remove('hidden')
     }
   }
 
@@ -540,13 +646,11 @@ export function renderTerminalPage(container) {
 
   function connectWithCredentials(username, password, sessionName, sessionDescription, privateKeyPassphrase) {
     if (!targetId) {
-      errorEl.textContent = t('terminal.targetIdMissingFromHome')
-      errorEl.classList.remove('hidden')
+      showConnectError(t('terminal.targetIdMissingFromHome'))
       return
     }
     if (!username || !username.trim()) {
-      errorEl.textContent = t('terminal.usernameRequiredShort')
-      errorEl.classList.remove('hidden')
+      showConnectError(t('terminal.usernameRequiredShort'))
       return
     }
     const user = username.trim()
@@ -570,11 +674,22 @@ export function renderTerminalPage(container) {
     ws.binaryType = 'arraybuffer'
     let sawError = false
     let sawFirstMessage = false
+    // Requires actual shell output, not just the session_id meta frame
+    // (sent before the bridge even attempts to authenticate) -- see
+    // handleTerminalWsMessage's onData and the comment on its use below.
+    let sawRealSession = false
+    // Set when handleTerminalWsMessage already handled a clean
+    // session_ended frame (and shown sessionEndedWrap) on this socket.
+    // onclose fires right after (the handler calls ws.close()) with
+    // currentSessionId already nulled out by that same handler, so
+    // without this guard the checks below would misread the clean
+    // shutdown as "closed before any real session" and pop the connect
+    // form + error text on top of the session-ended overlay.
+    let sawSessionEnded = false
     const connectTimeout = window.setTimeout(() => {
       if (sawFirstMessage) return
       sawError = true
-      errorEl.textContent = t('terminal.connectTimedOutNew')
-      errorEl.classList.remove('hidden')
+      showConnectError(t('terminal.connectTimedOutNew'))
       connectBtn.disabled = false
       credsWrap.classList.remove('hidden')
       shellWrap.classList.add('hidden')
@@ -591,10 +706,11 @@ export function renderTerminalPage(container) {
       sawFirstMessage = true
       window.clearTimeout(connectTimeout)
       handleTerminalWsMessage(ws, ev, {
+        onData: () => { sawRealSession = true },
+        onSessionEnded: () => { sawSessionEnded = true },
         onError: (msg) => {
           sawError = true
-          errorEl.textContent = msg
-          errorEl.classList.remove('hidden')
+          showConnectError(msg)
           connectBtn.disabled = false
           credsWrap.classList.remove('hidden')
           shellWrap.classList.add('hidden')
@@ -602,14 +718,13 @@ export function renderTerminalPage(container) {
       })
     }
 
-    ws.onerror = () => {
-      sawError = true
-      errorEl.textContent = t('terminal.wsConnectFailed')
-      errorEl.classList.remove('hidden')
-      connectBtn.disabled = false
-      credsWrap.classList.remove('hidden')
-      shellWrap.classList.add('hidden')
-    }
+    // onerror deliberately does NOT touch the UI -- see the matching
+    // comment in connectResume for why (its firing order relative to
+    // onmessage is not reliably guaranteed, so anything it shows here
+    // can race with, and clobber, a real "error: ..." message that
+    // onmessage already surfaced). onclose always fires last and is the
+    // single place that decides what to show.
+    ws.onerror = () => {}
 
     ws.onclose = () => {
       if (leavingPage) return
@@ -621,24 +736,34 @@ export function renderTerminalPage(container) {
       // to the generic "session continuing on backend" UI or auto-
       // close the tab — the user needs to interact with the dialog.
       if (hostKeyCtrl?.getSawHostKeyError()) return
-      if (!sawFirstMessage && !sawError) {
-        sawError = true
-        errorEl.textContent = t('terminal.closedNoFirstNew')
-        errorEl.classList.remove('hidden')
-        credsWrap.classList.remove('hidden')
-        shellWrap.classList.add('hidden')
-      } else if (currentSessionId) {
+      if (sawError) return // already shown via onmessage's onError above
+      if (sawSessionEnded) return // already shown via onmessage's session_ended handling above
+      if (currentSessionId && sawRealSession) {
         shellWrap.classList.add('hidden')
         disconnectedWrap.classList.remove('hidden')
-      } else if (channelToken && !sawError) {
-        window.setTimeout(() => closeWindow(), 400)
+        return
       }
+      if (channelToken && !currentSessionId) {
+        // Never got far enough to even receive a session_id -- likely
+        // this popup's only purpose was the credential relay, so just
+        // close it rather than leave a dead form behind.
+        window.setTimeout(() => closeWindow(), 400)
+        return
+      }
+      // Either never received anything at all, or got a session_id but
+      // the bridge died before any real shell output arrived (e.g. an
+      // auth failure whose "error: ..." frame didn't make it before the
+      // socket closed) -- don't claim a session is still alive.
+      showConnectError(t('terminal.closedNoFirstNew'))
+      credsWrap.classList.remove('hidden')
+      shellWrap.classList.add('hidden')
     }
   }
 
   function connectWithStoredCredentials(sessionName, sessionDescription, password, privateKeyPassphrase) {
     if (!targetId) return
     errorEl.classList.add('hidden')
+    connectBtn.disabled = true
     hostKeyCtrl?.resetHostKeyError()
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
@@ -659,11 +784,20 @@ export function renderTerminalPage(container) {
     ws.binaryType = 'arraybuffer'
     let sawError = false
     let sawFirstMessage = false
+    // Requires actual shell output, not just the session_id meta frame
+    // (sent before the bridge even attempts to authenticate) -- see
+    // handleTerminalWsMessage's onData and the comment on its use below.
+    let sawRealSession = false
+    // See connectWithCredentials for why this guard is needed: onclose
+    // fires right after handleTerminalWsMessage handles a clean
+    // session_ended frame, by which point currentSessionId has already
+    // been nulled, so without this flag onclose would misread the clean
+    // shutdown as a failed connection attempt.
+    let sawSessionEnded = false
     const connectTimeout = window.setTimeout(() => {
       if (sawFirstMessage) return
       sawError = true
-      errorEl.textContent = t('terminal.connectTimedOutStored')
-      errorEl.classList.remove('hidden')
+      showConnectError(t('terminal.connectTimedOutStored'))
       credsWrap.classList.remove('hidden')
       shellWrap.classList.add('hidden')
       try { ws.close() } catch { /* ignore */ }
@@ -677,23 +811,21 @@ export function renderTerminalPage(container) {
       sawFirstMessage = true
       window.clearTimeout(connectTimeout)
       handleTerminalWsMessage(ws, ev, {
+        onData: () => { sawRealSession = true },
+        onSessionEnded: () => { sawSessionEnded = true },
         onError: (msg) => {
           sawError = true
-          errorEl.textContent = msg
-          errorEl.classList.remove('hidden')
+          showConnectError(msg)
           credsWrap.classList.remove('hidden')
           shellWrap.classList.add('hidden')
         },
       })
     }
 
-    ws.onerror = () => {
-      sawError = true
-      errorEl.textContent = t('terminal.wsConnectFailedStored')
-      errorEl.classList.remove('hidden')
-      credsWrap.classList.remove('hidden')
-      shellWrap.classList.add('hidden')
-    }
+    // onerror deliberately does NOT touch the UI -- see the matching
+    // comment in connectResume for why. onclose always fires last and is
+    // the single place that decides what to show.
+    ws.onerror = () => {}
 
     ws.onclose = () => {
       if (leavingPage) return
@@ -702,16 +834,20 @@ export function renderTerminalPage(container) {
       // See connectWithCredentials for why the host-key path
       // bypasses these recovery branches.
       if (hostKeyCtrl?.getSawHostKeyError()) return
-      if (!sawFirstMessage && !sawError) {
-        sawError = true
-        errorEl.textContent = t('terminal.closedNoFirstStored')
-        errorEl.classList.remove('hidden')
-        credsWrap.classList.remove('hidden')
-        shellWrap.classList.add('hidden')
-      } else if (currentSessionId) {
+      if (sawError) return // already shown via onmessage's onError above
+      if (sawSessionEnded) return // already shown via onmessage's session_ended handling above
+      if (currentSessionId && sawRealSession) {
         shellWrap.classList.add('hidden')
         disconnectedWrap.classList.remove('hidden')
+        return
       }
+      // Either never received anything at all, or got a session_id but
+      // the bridge died before any real shell output arrived (e.g. an
+      // auth failure whose "error: ..." frame didn't make it before the
+      // socket closed) -- don't claim a session is still alive.
+      showConnectError(t('terminal.closedNoFirstStored'))
+      credsWrap.classList.remove('hidden')
+      shellWrap.classList.add('hidden')
     }
   }
 
@@ -754,12 +890,18 @@ export function renderTerminalPage(container) {
   if (resumeSessionId) {
     credsWrap.classList.add('hidden')
     shellWrap.classList.remove('hidden')
+    // The sharing banner (write-token / viewer status) is intentionally
+    // NOT shown here, before the WebSocket even attempts to attach:
+    // setCurrentSessionId() already creates and populates it once the
+    // resume genuinely succeeds (a real session_id meta frame arrives).
+    // Showing it eagerly meant a failed resume (expired session, auth
+    // rejected, etc.) left a stale "you hold the write token" banner on
+    // screen for a session that was never actually attached.
     if (sharingMode === 'viewer') {
-      // Show the viewer banner and (optionally) consume the invite
-      // before opening the WebSocket. Failing to consume the invite
-      // is non-fatal: the user may already have joined via the
-      // sessions page, in which case the WebSocket attach succeeds.
-      ensureSharingBanner()
+      // (Optionally) consume the invite before opening the WebSocket.
+      // Failing to consume the invite is non-fatal: the user may
+      // already have joined via the sessions page, in which case the
+      // WebSocket attach succeeds.
       if (inviteToken) {
         joinAsViewer(resumeSessionId, inviteToken).finally(() => {
           connectResume(resumeSessionId)
@@ -772,7 +914,6 @@ export function renderTerminalPage(container) {
         refreshParticipants(resumeSessionId)
       }
     } else {
-      ensureSharingBanner()
       connectResume(resumeSessionId)
       attachSharingEvents(resumeSessionId)
       void refreshParticipants(resumeSessionId)
@@ -823,6 +964,7 @@ export function renderTerminalPage(container) {
     infoEl.className = 'text-xs text-slate-500'
     infoEl.textContent = t('terminal.parentTabReceiving')
     container.querySelector('#term-credentials .px-5')?.appendChild(infoEl)
+    broadcastInfoEl = infoEl
 
     // 認証情報受信中は「送信」させない（Enter 送信やブラウザの自動入力で誤接続しないようにする）
     waitingBroadcastCreds = true
@@ -947,9 +1089,15 @@ export function renderTerminalPage(container) {
       })
       resizeObserver.observe(xtermEl)
     }
-    window.addEventListener('beforeunload', () => {
-      try { ws.close() } catch { /* ignore */ }
-    }, { once: true })
+    if (!termBeforeUnloadAttached) {
+      termBeforeUnloadAttached = true
+      // Close over currentWs (not the ws param) so this single listener,
+      // registered once, always closes whichever socket is live at unload
+      // time instead of accumulating a new listener on every reconnect.
+      window.addEventListener('beforeunload', () => {
+        try { currentWs && currentWs.close() } catch { /* ignore */ }
+      })
+    }
   }
 
   function startXterm(ws) {
@@ -1150,12 +1298,14 @@ export function renderTerminalPage(container) {
 
   /** True when this tab holds the session write token (from server state). */
   function holdsWriteToken() {
-    if (!myUserId) return false
     if (!writerUserId) {
-      // Before /participants loads, only the initial writer attach may send stdin.
+      // Before /participants loads (and before /api/me may have resolved),
+      // only the initial writer attach may send stdin. This must not depend
+      // on myUserId being populated yet, or the owner's own keystrokes get
+      // silently dropped for the brief window before API.me() resolves.
       return !participantsLoaded && sharingMode === 'writer'
     }
-    return myUserId === writerUserId
+    return !!myUserId && myUserId === writerUserId
   }
 
   function handleSharingEvent(payload) {

@@ -24,6 +24,13 @@ type Service struct {
 	Store    Store
 	Registry *Registry
 	Bridges  BridgeLookup
+	// Access, when set, re-checks target ACL at join time against both
+	// the inviter (stale-access guard) and the joining user. It is the
+	// single enforcement point of the "a valid invitation token is not
+	// sufficient without target access" guarantee, so every caller
+	// (HTTP and the CLI SSH gateway) inherits it. Leaving it nil skips
+	// the check and must only be done in tests.
+	Access AccessCheck
 }
 
 // JoinRoom validates invitation state, records use, and adds the user as viewer.
@@ -39,6 +46,24 @@ func (s *Service) JoinRoom(ctx context.Context, inv Invitation, userID, username
 	}
 	if userID == inv.OwnerUserID {
 		return nil, ErrInvitationNotFound
+	}
+	// Re-check target ACL before consuming the invitation. Both the
+	// inviter (guards against an owner who has since lost access) and the
+	// joining user must independently be able to reach the target: a
+	// shared token never grants access on its own. This runs here, in the
+	// shared service, so the CLI join path cannot bypass it the way it
+	// would if the check lived only in the HTTP handler.
+	if s.Access != nil {
+		if ok, err := s.Access(ctx, inv.OwnerUserID, inv.TargetID); err != nil {
+			return nil, err
+		} else if !ok {
+			return nil, ErrInviterNoTargetAccess
+		}
+		if ok, err := s.Access(ctx, userID, inv.TargetID); err != nil {
+			return nil, err
+		} else if !ok {
+			return nil, ErrJoinerNoTargetAccess
+		}
 	}
 	if err := s.Store.RecordUse(ctx, inv.ID, userID, now); err != nil {
 		return nil, err

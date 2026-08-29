@@ -28,13 +28,13 @@ var tftpLogger = logging.WithComponent("tftp")
 // Access is allowed only when:
 //
 //   - the requested target has ProtocolTFTP;
-//   - the client's IP matches the target's stored host *and* one of
-//     the source IPs explicitly whitelisted via TrustedClient (set by
-//     the HTTP control plane after an admin authorizes a job); and
-//   - for write requests (WRQ), a write window is currently open for
-//     that target. Reads remain permissive when
-//     VANTYX_TFTP_ALLOW_READ_WITHOUT_WINDOW=1 (default off) so legacy
-//     "boot ROM" devices that pull config files can still operate.
+//   - the client's IP matches the target's stored host; and
+//   - a write window authorizing that specific client IP is currently
+//     open for the target (OpenWriteWindow / CloseWriteWindow, wired to
+//     POST and DELETE /api/tftp/targets/{target_id}/write-window). Reads
+//     remain permissive when VANTYX_TFTP_ALLOW_READ_WITHOUT_WINDOW=1
+//     (default off) so legacy "boot ROM" devices that pull config files
+//     can still operate without a window.
 //
 // UDP source addresses are trivially spoofable (CWE-290), so IP based
 // authorisation is treated as a hint and not a primary access
@@ -113,6 +113,35 @@ func (s *Server) hasOpenWindow(targetID access.TargetID, clientIP net.IP) bool {
 		return false
 	}
 	return w.allowIP.Equal(clientIP)
+}
+
+// WriteWindowInfo describes a currently open write window.
+type WriteWindowInfo struct {
+	ClientIP  net.IP
+	ExpiresAt time.Time
+}
+
+// WriteWindowStatus reports the write window currently open for targetID,
+// if any. ok is false when no window is open (never opened, expired, or
+// explicitly closed) — an expired entry is pruned as a side effect, same
+// as hasOpenWindow. This is a read-only status query for the HTTP control
+// plane (GET .../write-window); it does not take a clientIP to compare
+// against, unlike hasOpenWindow which gates actual TFTP requests.
+func (s *Server) WriteWindowStatus(targetID access.TargetID) (info WriteWindowInfo, ok bool) {
+	s.windowMu.Lock()
+	defer s.windowMu.Unlock()
+	w, exists := s.windows[targetID]
+	if !exists {
+		return WriteWindowInfo{}, false
+	}
+	if time.Now().After(w.expires) {
+		delete(s.windows, targetID)
+		return WriteWindowInfo{}, false
+	}
+	return WriteWindowInfo{
+		ClientIP:  append(net.IP(nil), w.allowIP...),
+		ExpiresAt: w.expires,
+	}, true
 }
 
 // ListenAndServe starts the TFTP server on the given UDP address

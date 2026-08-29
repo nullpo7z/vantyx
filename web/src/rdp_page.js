@@ -49,6 +49,7 @@ export async function renderRdpPage(container) {
             </div>
           </div>
           <div class="vantyx-header-end">
+            <button id="rdp-fullscreen" type="button" class="vantyx-page-btn hidden">${t('rdp.fullscreen')}</button>
             <button id="rdp-back" type="button" class="vantyx-page-btn">${t('rdp.back')}</button>
             <button id="rdp-disconnect" type="button" class="vantyx-page-btn vantyx-page-btn-danger hidden">${t('rdp.disconnect')}</button>
           </div>
@@ -72,12 +73,7 @@ export async function renderRdpPage(container) {
 
       <!-- noVNC screen -->
       <div id="rdp-screen-wrap" class="hidden flex-1 min-h-0 flex flex-col bg-white border-t border-slate-200 overflow-auto">
-        <div id="rdp-screen" class="relative flex-1 min-h-0 w-full overflow-hidden">
-          <button id="rdp-fullscreen" type="button"
-            class="absolute right-3 bottom-3 z-10 rounded bg-black/60 px-2 py-1 text-[11px] text-white hover:bg-black/80">
-            ${t('rdp.fullscreen')}
-          </button>
-        </div>
+        <div id="rdp-screen" class="relative flex-1 min-h-0 w-full overflow-hidden"></div>
       </div>
     </div>
   `
@@ -158,6 +154,7 @@ export async function renderRdpPage(container) {
     errorEl.classList.add('hidden')
     screenWrap.classList.add('hidden')
     disconnectBtn.classList.add('hidden')
+    fullscreenBtn.classList.add('hidden')
   }
 
   function showError(msg) {
@@ -166,6 +163,7 @@ export async function renderRdpPage(container) {
     errorEl.classList.remove('hidden')
     screenWrap.classList.add('hidden')
     disconnectBtn.classList.add('hidden')
+    fullscreenBtn.classList.add('hidden')
   }
 
   function showScreen() {
@@ -173,6 +171,7 @@ export async function renderRdpPage(container) {
     errorEl.classList.add('hidden')
     screenWrap.classList.remove('hidden')
     disconnectBtn.classList.remove('hidden')
+    fullscreenBtn.classList.remove('hidden')
   }
 
   function disconnect() {
@@ -287,6 +286,17 @@ export async function renderRdpPage(container) {
       return
     }
     if (el.requestFullscreen) el.requestFullscreen().catch(() => {})
+  })
+
+  // Update the button label and nudge noVNC to recompute its layout once
+  // the fullscreen transition actually completes -- a manual
+  // window.dispatchEvent('resize') right after requestFullscreen()/
+  // exitFullscreen() can race the browser's own layout change, leaving
+  // the remote screen scaled to its pre-transition size.
+  document.addEventListener('fullscreenchange', () => {
+    const isFullscreen = !!document.fullscreenElement
+    fullscreenBtn.textContent = t(isFullscreen ? 'rdp.exitFullscreen' : 'rdp.fullscreen')
+    onResize()
   })
 
   function onResize() {

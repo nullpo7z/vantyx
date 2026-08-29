@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
@@ -402,6 +404,7 @@ func TestApp_SSHKeysAndIdentities_CRUD_AndApplyOnCreateTarget(t *testing.T) {
 	if created.SSHUsername != "root" || !created.HasStoredCredentials {
 		t.Fatalf("unexpected target after identity apply: %+v", created)
 	}
+	identityTargetID := created.ID
 
 	// Target with ssh key + manual username
 	body = []byte(`{"name":"T-key","host":"10.0.0.12","port":22,"protocol":"ssh","group_id":"default","ssh_key_id":"k1","ssh_username":"deploy"}`)
@@ -419,6 +422,26 @@ func TestApp_SSHKeysAndIdentities_CRUD_AndApplyOnCreateTarget(t *testing.T) {
 	if created.SSHUsername != "deploy" || !created.HasSSHKey {
 		t.Fatalf("unexpected target after key apply: %+v", created)
 	}
+	keyTargetID := created.ID
+
+	// Identities/keys still linked from a target can't be deleted (the
+	// in-use check this session added for the group_id-style dangling-
+	// reference bug class). Remove the targets that reference them
+	// first, matching real-world usage.
+	req = httptest.NewRequest(http.MethodDelete, "/api/targets/"+identityTargetID, nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("delete identity-linked target expected 204, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodDelete, "/api/targets/"+keyTargetID, nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("delete key-linked target expected 204, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
 
 	// Delete identity then key
 	req = httptest.NewRequest(http.MethodDelete, "/api/credential-identities/i1", nil)
@@ -434,6 +457,127 @@ func TestApp_SSHKeysAndIdentities_CRUD_AndApplyOnCreateTarget(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusNoContent {
 		t.Fatalf("delete key expected 204, got %d", w.Result().StatusCode)
+	}
+}
+
+func TestApp_SSHKeysGenerate(t *testing.T) {
+	t.Setenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)))
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	sess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	// Default (ed25519, no passphrase): private key must parse, public key
+	// must be an ed25519 authorized_keys line, and the response must be
+	// the only place the private key is ever returned.
+	body := []byte(`{"id":"gen1","label":"generated one"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/ssh-keys/generate", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("generate expected 201, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	var genResp generateSSHKeyResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&genResp); err != nil {
+		t.Fatalf("decode generate response: %v", err)
+	}
+	if genResp.ID != "gen1" || genResp.KeyType != "ED25519" || genResp.HasPassphrase {
+		t.Fatalf("unexpected generate response: %+v", genResp)
+	}
+	signer, err := ssh.ParsePrivateKey([]byte(genResp.PrivateKey))
+	if err != nil {
+		t.Fatalf("generated private key does not parse: %v", err)
+	}
+	wantPub := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))) + " generated one"
+	if genResp.PublicKey != wantPub {
+		t.Fatalf("public key mismatch: got %q want %q", genResp.PublicKey, wantPub)
+	}
+	if !strings.HasPrefix(genResp.PublicKey, "ssh-ed25519 ") {
+		t.Fatalf("expected ed25519 public key, got %q", genResp.PublicKey)
+	}
+
+	// List must never expose the generated private/public key material.
+	req = httptest.NewRequest(http.MethodGet, "/api/ssh-keys", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if !strings.Contains(w.Body.String(), `"id":"gen1"`) {
+		t.Fatalf("generated key missing from list: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), genResp.PrivateKey) {
+		t.Fatalf("list response leaked the private key: %s", w.Body.String())
+	}
+
+	// RSA + passphrase: key type detected correctly, and the stored key
+	// requires the passphrase to decrypt (round-trips through the same
+	// store used by manually-pasted keys).
+	body = []byte(`{"id":"gen2","label":"generated two","key_type":"rsa","passphrase":"correct horse battery staple"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/ssh-keys/generate", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("generate rsa expected 201, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	var genResp2 generateSSHKeyResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&genResp2); err != nil {
+		t.Fatalf("decode generate rsa response: %v", err)
+	}
+	if genResp2.KeyType != "RSA" || !genResp2.HasPassphrase {
+		t.Fatalf("unexpected rsa generate response: %+v", genResp2)
+	}
+	if _, err := ssh.ParsePrivateKey([]byte(genResp2.PrivateKey)); err == nil {
+		t.Fatalf("passphrase-protected key should not parse without a passphrase")
+	}
+	if _, err := ssh.ParsePrivateKeyWithPassphrase([]byte(genResp2.PrivateKey), []byte("correct horse battery staple")); err != nil {
+		t.Fatalf("generated rsa key does not parse with its passphrase: %v", err)
+	}
+
+	// Unsupported key type is rejected before anything is stored.
+	body = []byte(`{"id":"gen3","label":"bad","key_type":"dsa"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/ssh-keys/generate", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("unsupported key type expected 400, got %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestApp_SSHKeysGenerate_NonAdminForbidden(t *testing.T) {
+	t.Setenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)))
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("default"), "Default")
+	if _, err := app.UserStore.CreateUser("user1", "user1", "User123!", auth.RoleUser); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("user1"), access.GroupID("default"))
+
+	sess, err := app.SessionStore.Create("user1")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	body := []byte(`{"id":"gen1","label":"generated one"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/ssh-keys/generate", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin, got %d", w.Result().StatusCode)
 	}
 }
 
@@ -1472,6 +1616,93 @@ func TestApp_UpdateLocale_Validation(t *testing.T) {
 	}
 
 	unauthed := httptest.NewRequest(http.MethodPut, "/api/me/locale", bytes.NewReader([]byte(`{"locale":"ja"}`)))
+	unauthed.Header.Set("Content-Type", "application/json")
+	uw := httptest.NewRecorder()
+	router.ServeHTTP(uw, unauthed)
+	if uw.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated expected 401, got %d", uw.Result().StatusCode)
+	}
+}
+
+// TestApp_UpdateTimezone_RoundTrip verifies that PUT /api/me/timezone persists
+// the user's timezone and that subsequent GET /api/me reflects it.
+func TestApp_UpdateTimezone_RoundTrip(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/me/timezone", bytes.NewReader([]byte(`{"timezone":"Asia/Tokyo"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("PUT /api/me/timezone expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+	var resp struct {
+		Timezone string `json:"timezone"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Timezone != "Asia/Tokyo" {
+		t.Fatalf("expected timezone=Asia/Tokyo in response, got %q", resp.Timezone)
+	}
+
+	meReq := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	meReq.AddCookie(cookie)
+	meW := httptest.NewRecorder()
+	router.ServeHTTP(meW, meReq)
+	if meW.Result().StatusCode != http.StatusOK {
+		t.Fatalf("/api/me expected 200, got %d", meW.Result().StatusCode)
+	}
+	var me struct {
+		Timezone string `json:"timezone"`
+	}
+	_ = json.Unmarshal(meW.Body.Bytes(), &me)
+	if me.Timezone != "Asia/Tokyo" {
+		t.Fatalf("expected /api/me timezone=Asia/Tokyo, got %q", me.Timezone)
+	}
+
+	clearReq := httptest.NewRequest(http.MethodPut, "/api/me/timezone", bytes.NewReader([]byte(`{"timezone":""}`)))
+	clearReq.Header.Set("Content-Type", "application/json")
+	clearReq.AddCookie(cookie)
+	clearW := httptest.NewRecorder()
+	router.ServeHTTP(clearW, clearReq)
+	if clearW.Result().StatusCode != http.StatusOK {
+		t.Fatalf("clearing timezone expected 200, got %d", clearW.Result().StatusCode)
+	}
+}
+
+// TestApp_UpdateTimezone_Validation rejects unsupported timezone names and
+// unauthenticated callers.
+func TestApp_UpdateTimezone_Validation(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/me/timezone", bytes.NewReader([]byte(`{"timezone":"Not/AZone"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("unsupported timezone expected 400, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+
+	bad := httptest.NewRequest(http.MethodPut, "/api/me/timezone", bytes.NewReader([]byte("not json")))
+	bad.Header.Set("Content-Type", "application/json")
+	bad.AddCookie(cookie)
+	badW := httptest.NewRecorder()
+	router.ServeHTTP(badW, bad)
+	if badW.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid body expected 400, got %d", badW.Result().StatusCode)
+	}
+
+	unauthed := httptest.NewRequest(http.MethodPut, "/api/me/timezone", bytes.NewReader([]byte(`{"timezone":"Asia/Tokyo"}`)))
 	unauthed.Header.Set("Content-Type", "application/json")
 	uw := httptest.NewRecorder()
 	router.ServeHTTP(uw, unauthed)
@@ -2987,6 +3218,260 @@ func TestApp_UpdateTarget_Success(t *testing.T) {
 	}
 	if out.SFTPEnabled != false || !out.FTPEnabled || !out.TFTPEnabled {
 		t.Fatalf("unexpected protocol flags after update: sftp=%v ftp=%v tftp=%v", out.SFTPEnabled, out.FTPEnabled, out.TFTPEnabled)
+	}
+}
+
+func TestApp_UpdateTarget_ChangeGroup_Success(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g2"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Old", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"name":"Old","host":"10.0.0.1","port":22,"protocol":"ssh","path":"","ssh_username":"","ssh_password":"","group_id":"g2"}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/targets/t1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+
+	g1Targets, err := app.AccessGroupStore.TargetIDsForGroup(ctx, access.GroupID("g1"), nil)
+	if err != nil {
+		t.Fatalf("TargetIDsForGroup g1: %v", err)
+	}
+	for _, id := range g1Targets {
+		if id == access.TargetID("t1") {
+			t.Fatal("expected t1 to be removed from g1 after moving to g2")
+		}
+	}
+	g2Targets, err := app.AccessGroupStore.TargetIDsForGroup(ctx, access.GroupID("g2"), nil)
+	if err != nil {
+		t.Fatalf("TargetIDsForGroup g2: %v", err)
+	}
+	found := false
+	for _, id := range g2Targets {
+		if id == access.TargetID("t1") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected t1 to be present in g2 after moving")
+	}
+}
+
+func TestApp_UpdateTarget_ChangeGroup_NotFound(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Old", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"name":"Old","host":"10.0.0.1","port":22,"protocol":"ssh","path":"","ssh_username":"","ssh_password":"","group_id":"does-not-exist"}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/targets/t1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Result().StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestApp_UpdateTarget_ChangeGroup_ForbiddenWhenAdminLacksDestGroup(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	// admin is NOT a member of g2.
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Old", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"name":"Old","host":"10.0.0.1","port":22,"protocol":"ssh","path":"","ssh_username":"","ssh_password":"","group_id":"g2"}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/targets/t1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+
+	g1Targets, err := app.AccessGroupStore.TargetIDsForGroup(ctx, access.GroupID("g1"), nil)
+	if err != nil {
+		t.Fatalf("TargetIDsForGroup g1: %v", err)
+	}
+	found := false
+	for _, id := range g1Targets {
+		if id == access.TargetID("t1") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected t1 to remain in g1 after a rejected group change")
+	}
+}
+
+func TestApp_UpdateTarget_ChangeGroup_EmptyGroupIDRejected(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Old", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+
+	sess, _ := app.SessionStore.Create("admin")
+	body := []byte(`{"name":"Old","host":"10.0.0.1","port":22,"protocol":"ssh","path":"","ssh_username":"","ssh_password":"","group_id":""}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/targets/t1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Result().StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+}
+
+func TestApp_UpdateTarget_GroupUnchangedWhenOmitted(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "Old", "10.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
+
+	sess, _ := app.SessionStore.Create("admin")
+	// No group_id key at all in the payload.
+	body := []byte(`{"name":"Renamed","host":"10.0.0.1","port":22,"protocol":"ssh","path":"","ssh_username":"","ssh_password":""}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/targets/t1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+	g1Targets, err := app.AccessGroupStore.TargetIDsForGroup(ctx, access.GroupID("g1"), nil)
+	if err != nil {
+		t.Fatalf("TargetIDsForGroup g1: %v", err)
+	}
+	found := false
+	for _, id := range g1Targets {
+		if id == access.TargetID("t1") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected t1 to remain in g1 when group_id is omitted from the update")
+	}
+}
+
+// TestApp_UpdateTarget_CredentialSourceOmitVsExplicit guards against a
+// regression class already fixed once for group_id: credential_identity_id
+// / ssh_key_id must be "omit = leave the tracked link unchanged", not
+// "always explicit, so omitting silently detaches it" -- the latter was
+// the actual behavior before this fix (masked only by the frontend
+// always resending both fields).
+func TestApp_UpdateTarget_CredentialSourceOmitVsExplicit(t *testing.T) {
+	t.Setenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)))
+	app := newTestApp(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	sess, _ := app.SessionStore.Create("admin")
+	cookie := &http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"}
+
+	pemKey := testRSAPrivateKeyPEM(t)
+	body := []byte(fmt.Sprintf(`{"id":"k1","label":"github","ssh_private_key":%q}`, pemKey))
+	req := httptest.NewRequest(http.MethodPost, "/api/ssh-keys", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("create ssh key: %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+
+	body = []byte(`{"name":"T","host":"10.0.0.1","port":22,"protocol":"ssh","group_id":"g1","ssh_key_id":"k1","ssh_username":"deploy"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/targets", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusCreated {
+		t.Fatalf("create target: %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	var created targetResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&created); err != nil {
+		t.Fatalf("decode created target: %v", err)
+	}
+	if created.SSHKeyID != "k1" {
+		t.Fatalf("expected target linked to k1, got %+v", created)
+	}
+
+	// Update the name only, with no credential_identity_id/ssh_key_id
+	// keys in the body at all -- the link must survive.
+	body = []byte(`{"name":"T-renamed","host":"10.0.0.1","port":22,"protocol":"ssh","ssh_username":"deploy"}`)
+	req = httptest.NewRequest(http.MethodPut, "/api/targets/"+created.ID, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("update (omit credential fields): %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	var afterOmit targetResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&afterOmit); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if afterOmit.SSHKeyID != "k1" {
+		t.Fatalf("credential source link was cleared despite being omitted from the update: %+v", afterOmit)
+	}
+
+	// Now switch to manual mode by explicitly sending ssh_key_id: "" --
+	// this must detach the link.
+	body = []byte(`{"name":"T-renamed","host":"10.0.0.1","port":22,"protocol":"ssh","ssh_username":"deploy","ssh_key_id":""}`)
+	req = httptest.NewRequest(http.MethodPut, "/api/targets/"+created.ID, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("update (explicit empty ssh_key_id): %d (%s)", w.Result().StatusCode, w.Body.String())
+	}
+	var afterDetach targetResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&afterDetach); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if afterDetach.SSHKeyID != "" {
+		t.Fatalf("expected credential source detached after explicit empty ssh_key_id, got %+v", afterDetach)
 	}
 }
 

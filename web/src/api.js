@@ -75,6 +75,28 @@ const API = {
   },
 
   /**
+   * Persist the current user's preferred IANA timezone. Pass an empty
+   * string to clear the preference (the SPA then falls back to the
+   * browser's local zone).
+   *
+   * @param {string} timezone - IANA zone name (e.g. `'Asia/Tokyo'`), or `''`.
+   * @returns {Promise<{timezone: string}>}
+   */
+  async updateTimezone(timezone) {
+    const res = await fetch('/api/me/timezone', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ timezone: timezone || '' }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to update timezone')
+    }
+    return res.json()
+  },
+
+  /**
    * Invalidate the current session server-side and clear the cookie.
    *
    * @returns {Promise<void>}
@@ -259,6 +281,26 @@ const API = {
     }
   },
 
+  /** 新しい SSH 鍵ペアを生成して保存する。private_key/public_key はこの応答でのみ返る。 */
+  async generateSSHKey({ id, label, key_type, passphrase }) {
+    const res = await fetch('/api/ssh-keys/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        id: id || '',
+        label: label || '',
+        key_type: key_type || '',
+        passphrase: passphrase || '',
+      }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to generate SSH key')
+    }
+    return res.json()
+  },
+
   // --- Credential identities (admin only) ---
 
   async credentialIdentities() {
@@ -352,7 +394,7 @@ const API = {
     return res.json()
   },
 
-  async updateTarget(targetId, { name, host, port, protocol, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, credential_identity_id, ssh_key_id, sftp_enabled, ftp_enabled, tftp_enabled }) {
+  async updateTarget(targetId, { name, host, port, protocol, path, group_id, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, credential_identity_id, ssh_key_id, sftp_enabled, ftp_enabled, tftp_enabled }) {
     const body = {
       name,
       host,
@@ -361,8 +403,18 @@ const API = {
       path: path || '',
       ssh_username: ssh_username || '',
     }
-    if (credential_identity_id) body.credential_identity_id = credential_identity_id
-    if (ssh_key_id) body.ssh_key_id = ssh_key_id
+    if (group_id) body.group_id = group_id
+    // Forward whenever explicitly provided (including '' to detach),
+    // not just when truthy -- the backend treats an omitted key as
+    // "leave the tracked credential source unchanged" and an explicit
+    // '' as "detach it", so dropping '' here would silently prevent
+    // ever clearing a previously linked Identity/SSH Key.
+    if (credential_identity_id !== undefined && credential_identity_id !== null) {
+      body.credential_identity_id = credential_identity_id
+    }
+    if (ssh_key_id !== undefined && ssh_key_id !== null) {
+      body.ssh_key_id = ssh_key_id
+    }
     if (typeof sftp_enabled === 'boolean') {
       body.sftp_enabled = sftp_enabled
     }
@@ -544,6 +596,39 @@ const API = {
     }
   },
 
+  /**
+   * 組み込み TFTP サーバーの書き込みウィンドウ状態変化を SSE で購読する。
+   * 接続直後に現在の状態が1件届き、以降は他タブ/他オペレーターによる
+   * open/close も含めて変化のたびに届く。
+   * @param {string} targetId
+   * @param {function(object): void} onStatus - { open, target_id, client_ip?, expires_at? }
+   * @param {function(): void} [onError] - 切断時
+   */
+  subscribeTFTPWriteWindowEvents(targetId, onStatus, onError) {
+    const url = new URL(
+      `/api/tftp/targets/${encodeURIComponent(targetId)}/write-window/events`,
+      window.location.origin,
+    ).toString()
+    const es = new window.EventSource(url)
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data || '{}')
+        if (data && typeof onStatus === 'function') onStatus(data)
+      } catch {
+        /* ignore */
+      }
+    }
+    es.onerror = () => {
+      es.close()
+      if (typeof onError === 'function') onError()
+    }
+    return {
+      close() {
+        es.close()
+      },
+    }
+  },
+
   /** 監査ログ（管理者のみ） */
   async auditLogs({ limit = 200, event = '', user_id = '', from = '', to = '', exclude_event = '', after_id = '' } = {}) {
     const q = new URLSearchParams()
@@ -662,6 +747,56 @@ const API = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
       throw new Error(err.message || 'Failed to delete TFTP file')
+    }
+  },
+
+  /**
+   * 組み込み TFTP サーバー — 書き込みウィンドウの現在の状態を取得。
+   * 常に { open, target_id, client_ip?, expires_at? } を返す
+   * （サーバー未起動でも 200 + open:false）。
+   */
+  async tftpServerGetWriteWindow(targetId) {
+    const res = await fetch(`/api/tftp/targets/${encodeURIComponent(targetId)}/write-window`, {
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to get TFTP write window status')
+    }
+    return res.json()
+  },
+
+  /**
+   * 組み込み TFTP サーバー — 実 TFTP プロトコル経由の書き込み（WRQ）を許可する
+   * 時限ウィンドウを開く。許可される送信元 IP はターゲットに設定された Host
+   * 固定（サーバー側で決定・偽装不可）であり、呼び出し側は指定できない。
+   * ttlSeconds 省略時はサーバー側デフォルト（5分、最大30分）。
+   */
+  async tftpServerOpenWriteWindow(targetId, ttlSeconds) {
+    const body = {}
+    if (ttlSeconds) body.ttl_seconds = ttlSeconds
+    const res = await fetch(`/api/tftp/targets/${encodeURIComponent(targetId)}/write-window`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to open TFTP write window')
+    }
+    return res.json()
+  },
+
+  /** 組み込み TFTP サーバー — 開いている書き込みウィンドウを閉じる */
+  async tftpServerCloseWriteWindow(targetId) {
+    const res = await fetch(`/api/tftp/targets/${encodeURIComponent(targetId)}/write-window`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to close TFTP write window')
     }
   },
 

@@ -1,6 +1,7 @@
 import API from './api.js'
 import { setActiveNav } from './nav.js'
 import { getLocale, setLocale, SUPPORTED_LOCALES, t } from './i18n.js'
+import { detectBrowserTimezone, getTimezone, setTimezone, SUPPORTED_TIMEZONES } from './timezone.js'
 
 function esc(s) {
   return String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
@@ -14,6 +15,14 @@ export async function renderSettingsPage(container) {
       `<option value="${l.code}"${l.code === current ? ' selected' : ''}>${t(l.labelKey)}</option>`,
   ).join('')
 
+  const currentTz = getTimezone()
+  const browserTz = detectBrowserTimezone()
+  const tzOptions =
+    `<option value=""${currentTz === '' ? ' selected' : ''}>${esc(t('settings.timezoneAuto', { tz: browserTz || 'UTC' }))}</option>` +
+    SUPPORTED_TIMEZONES.map(
+      (tz) => `<option value="${esc(tz)}"${tz === currentTz ? ' selected' : ''}>${esc(tz)}</option>`,
+    ).join('')
+
   container.innerHTML = `
     <div class="w-full max-w-5xl flex-1 flex flex-col">
       <div class="flex items-center justify-between">
@@ -25,6 +34,14 @@ export async function renderSettingsPage(container) {
         <p class="text-xs text-slate-500 mb-3">${t('settings.languageHint')}</p>
         <select id="settings-language" class="w-full sm:w-64 rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 bg-white">
           ${langOptions}
+        </select>
+      </div>
+
+      <div class="mt-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 class="text-sm font-semibold text-slate-800 mb-2">${t('settings.sectionTimezone')}</h3>
+        <p class="text-xs text-slate-500 mb-3">${t('settings.timezoneHint')}</p>
+        <select id="settings-timezone" class="w-full sm:w-64 rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 bg-white">
+          ${tzOptions}
         </select>
       </div>
 
@@ -71,6 +88,13 @@ export async function renderSettingsPage(container) {
   if (languageEl) {
     languageEl.addEventListener('change', () => {
       setLocale(languageEl.value)
+    })
+  }
+
+  const timezoneEl = container.querySelector('#settings-timezone')
+  if (timezoneEl) {
+    timezoneEl.addEventListener('change', () => {
+      setTimezone(timezoneEl.value)
     })
   }
 

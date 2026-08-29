@@ -189,6 +189,9 @@ func (a *App) sharingService() *sharing.Service {
 	return &sharing.Service{
 		Store:    a.SharingStore,
 		Registry: a.SharingRegistry,
+		Access: func(ctx context.Context, userID, targetID string) (bool, error) {
+			return a.userCanAccessTarget(ctx, userID, access.TargetID(targetID))
+		},
 		Bridges: func(sessionID string) (sharing.BridgeControl, bool) {
 			if a.SharingBridges == nil {
 				return nil, false

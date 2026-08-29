@@ -100,7 +100,10 @@ func (s *SQLiteSSHKeyStore) Create(ctx context.Context, id SSHKeyID, label, sshP
 	_, err = s.db.ExecContext(ctx, `INSERT INTO ssh_keys (id, label, key_type, ssh_private_key, ssh_private_key_passphrase) VALUES (?, ?, ?, ?, ?)`,
 		string(id), strings.TrimSpace(label), keyType, storedKey, storedPass)
 	if err != nil {
-		return nil, ErrSSHKeyExists
+		if isUniqueConstraintErr(err) {
+			return nil, ErrSSHKeyExists
+		}
+		return nil, err
 	}
 	return &SSHKeySummary{
 		ID:            id,
@@ -199,6 +202,18 @@ func (s *SQLiteSSHKeyStore) Delete(ctx context.Context, id SSHKeyID) error {
 	defer cancel()
 	var n int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM credential_identities WHERE ssh_key_id = ?`, string(id)).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrSSHKeyInUse
+	}
+	// Targets can also link directly to a key (credMode "key", tracked
+	// via targets.ssh_key_id since this session's credential-source
+	// tracking work) without going through a credential_identities row.
+	// Without this check, deleting such a key silently orphans the
+	// target's tracked link even though the connect-time secrets it
+	// already copied are unaffected.
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM targets WHERE ssh_key_id = ?`, string(id)).Scan(&n); err != nil {
 		return err
 	}
 	if n > 0 {

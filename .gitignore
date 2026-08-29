@@ -76,3 +76,6 @@ coverage-*.html
 # Recording exports
 *.webm
 
+
+# Claude Code conversation export (may contain secrets)
+handoff.md

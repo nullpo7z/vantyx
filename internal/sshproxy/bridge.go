@@ -162,6 +162,20 @@ func (f StdinRecorderFunc) RecordInput(p []byte) {
 	f(p)
 }
 
+// ResizeRecorder is called when the target PTY is resized (e.g. from a
+// client's window-change), so a recording can capture the resize as an
+// asciicast "r" event. May be nil.
+type ResizeRecorder interface {
+	RecordResize(cols, rows int)
+}
+
+// ResizeRecorderFunc adapts a function to ResizeRecorder.
+type ResizeRecorderFunc func(cols, rows int)
+
+func (f ResizeRecorderFunc) RecordResize(cols, rows int) {
+	f(cols, rows)
+}
+
 // AuthMethods builds SSH auth methods from password and/or PEM private key (with optional passphrase).
 // Key is tried first when present. Used by bridge and by internal/sftp.
 func AuthMethods(password, privateKeyPEM, keyPassphrase string) ([]ssh.AuthMethod, error) {
@@ -550,7 +564,7 @@ func RunBridgeDetachable(ctx context.Context, endMsg string, host string, port u
 		doCleanup()
 	}()
 
-	bridge := newSSHDetachableBridge(ctx, endMsg, stdin, output, windowChange, touch, tee, stdinRecorder, attachCh, externalResize)
+	bridge := newSSHDetachableBridge(ctx, endMsg, stdin, output, windowChange, touch, tee, stdinRecorder, attachCh, externalResize, o.resizeRecorder)
 	if o.controlSink != nil {
 		o.controlSink.Register(bridge)
 	}

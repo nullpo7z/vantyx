@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/i18n"
 	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/recording"
 	"github.com/nullpo7z/vantyx/internal/session"
@@ -30,6 +31,23 @@ func supportsDetachableTerminal(p access.Protocol) bool {
 	return p == access.ProtocolSSH || p == access.ProtocolTelnet
 }
 
+// closeWSGracefully performs a proper WebSocket closing handshake
+// (a Close control frame) instead of just dropping the TCP connection.
+// Use this whenever a text frame (e.g. "error: ...") was just written and
+// must reliably reach the client before the socket goes away: a bare
+// conn.Close() right after WriteMessage can race with delivery of that
+// frame and/or read as an abnormal closure, which browsers surface as a
+// WebSocket "error" event — the frontend then shows a generic "can't
+// reach the backend" message that overwrites or races with the real one
+// that was just sent, even though the server behaved correctly and the
+// failure was something specific (e.g. wrong credentials).
+func closeWSGracefully(conn *websocket.Conn) {
+	_ = conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		time.Now().Add(2*time.Second))
+	_ = conn.Close()
+}
+
 // listTerminalSessions is satisfied by [*session.Manager] for
 // GET /api/terminal/sessions.
 type listTerminalSessions interface {
@@ -42,7 +60,10 @@ type terminalSessionStarter interface {
 	Start(id session.ID, opts session.StartOptions, fn func(context.Context, *session.Session)) (*session.Session, error)
 	Get(id session.ID) (*session.Session, bool)
 	Touch(id session.ID)
-	Stop(id session.ID)
+	// Stop cancels and waits for the session's goroutine to exit,
+	// reporting false if it had to be force-removed after timing out
+	// (see [session.Manager.Stop]).
+	Stop(id session.ID) bool
 }
 
 // writeJSON serialises v as JSON to w. Caller should not have written
@@ -121,7 +142,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 			"error":     err.Error(),
 		})
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+terminalCredentialErrorMessage(r, err)))
-		_ = conn.Close()
+		closeWSGracefully(conn)
 		return
 	}
 	audit("terminal_ws_credentials_ok", auditFields{
@@ -166,7 +187,15 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 			rows = n
 		}
 	}
+	// The session goroutine's context is a fresh context.Background()
+	// derivative (see session.Manager.Start) so it outlives this
+	// request -- but that also means it loses the request's resolved
+	// locale, silently reverting any bridge error text sent later
+	// (auth failures, etc.) to English regardless of the user's saved
+	// preference. Carry the locale forward explicitly.
+	requestLocale := i18n.FromContext(r.Context())
 	_, err = a.TerminalSessionManager.Start(id, opts, func(ctx context.Context, termSess *session.Session) {
+		ctx = i18n.WithLocale(ctx, requestLocale)
 		a.runDetachableBridge(ctx, termSess, a.TerminalSessionManager, id, conn, target, creds, cols, rows)
 		if a.SessionEventBroker != nil {
 			a.SessionEventBroker.Broadcast()
@@ -259,7 +288,7 @@ func (a *App) handleTerminalAttach(w http.ResponseWriter, r *http.Request, userI
 		}
 	default:
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: session attach slot busy"))
-		_ = conn.Close()
+		closeWSGracefully(conn)
 	}
 }
 
@@ -424,14 +453,23 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 		return
 	}
-	a.TerminalSessionManager.Stop(id)
+	stoppedClean := a.TerminalSessionManager.Stop(id)
 	if a.SharingRegistry != nil {
 		a.SharingRegistry.Remove(sessionID)
 	}
-	audit("terminal_session_stop", auditFields{
+	auditFieldsForStop := auditFields{
 		"session_id": sessionID,
 		"user_id":    userID,
-	})
+	}
+	if !stoppedClean {
+		// The bridge goroutine didn't exit within the manager's stop
+		// timeout and was force-removed anyway; its resources (PTY,
+		// socket) may still be leaking. Surface it in the audit trail
+		// since the session.Manager layer has no way to escalate
+		// further on its own.
+		auditFieldsForStop["clean_stop"] = false
+	}
+	audit("terminal_session_stop", auditFieldsForStop)
 	if a.SessionEventBroker != nil {
 		a.SessionEventBroker.Broadcast()
 	}
@@ -457,7 +495,7 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 	}{SessionID: string(id)})
 	touch := func() { manager.Touch(id) }
 
-	tee, stdinRecorder, recordingCloser := a.setupRecording(ctx, termSess, id, cols, rows)
+	tee, stdinRecorder, resizeRecorder, recordingCloser := a.setupRecording(ctx, termSess, id, cols, rows)
 	if recordingCloser != nil {
 		defer recordingCloser()
 	}
@@ -487,11 +525,11 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		if a.SharingBridges != nil {
 			sink = telnetBridgeSink{id: id, br: a.SharingBridges}
 		}
-		bridgeErr = telnetproxy.RunBridgeDetachable(ctx, endMsg, target.Host, target.Port, creds.Username, creds.Password, termSess.Output, termSess.AttachCh, ownerAttach, touch, tee, telStdin, cols, rows, nil, sink)
+		bridgeErr = telnetproxy.RunBridgeDetachable(ctx, endMsg, target.Host, target.Port, creds.Username, creds.Password, termSess.Output, termSess.AttachCh, ownerAttach, touch, tee, telStdin, cols, rows, nil, sink, resizeRecorder)
 	default:
 		endReason = "ssh_session_closed"
 		endMsg = "session_ended: SSH session closed"
-		opts := sshBridgeOptions(target, sshproxy.WithBridgeControlSink(sshBridgeSink{id: id, br: a.SharingBridges}))
+		opts := sshBridgeOptions(target, sshproxy.WithBridgeControlSink(sshBridgeSink{id: id, br: a.SharingBridges}), sshproxy.WithResizeRecorder(resizeRecorder))
 		bridgeErr = sshproxy.RunBridgeDetachable(ctx, endMsg, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, ownerAttach, touch, tee, stdinRecorder, cols, rows, nil, opts...)
 	}
 	if bridgeErr != nil {
@@ -517,7 +555,7 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		})
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(endMsg))
 	}
-	_ = conn.Close()
+	closeWSGracefully(conn)
 	// Returning from this callback lets the Manager goroutine close
 	// sess.done and call delete(m.sessions, id). Calling
 	// manager.Stop(id) here would deadlock because Stop waits on
@@ -529,10 +567,10 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 // recorder, and a closer that flushes / closes the cast file and
 // updates the recordings table. When recording is disabled all three
 // return values are zero.
-func (a *App) setupRecording(ctx context.Context, termSess *session.Session, id session.ID, cols, rows int) (io.Writer, sshproxy.StdinRecorder, func()) {
+func (a *App) setupRecording(ctx context.Context, termSess *session.Session, id session.ID, cols, rows int) (io.Writer, sshproxy.StdinRecorder, sshproxy.ResizeRecorder, func()) {
 	recordingDir := os.Getenv("VANTYX_RECORDINGS_DIR")
 	if recordingDir == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	_ = os.MkdirAll(recordingDir, 0750) // #nosec G703 -- path from env, dir is admin-configured.
 	// Session IDs are RFC3339Nano timestamps containing colons. Replace
@@ -550,7 +588,7 @@ func (a *App) setupRecording(ctx context.Context, termSess *session.Session, id 
 			"path":       castPath,
 			"error":      err.Error(),
 		})
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	startedAt := time.Now().UTC()
 	w, h := cols, rows
@@ -579,7 +617,7 @@ func (a *App) setupRecording(ctx context.Context, termSess *session.Session, id 
 			_, _ = a.DB.ExecContext(context.Background(), `UPDATE recordings SET ended_at = ? WHERE id = ?`, time.Now().UTC().Format("2006-01-02 15:04:05"), string(id))
 		}
 	}
-	return asc, asc, closer
+	return asc, asc, asc, closer
 }
 
 // wrapWithCommandLog adds a command-log recorder on top of an existing

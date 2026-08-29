@@ -1,5 +1,6 @@
 import API from './api.js'
 import { t } from './i18n.js'
+import { formatDateTime } from './datetime.js'
 import { validateOptionalUserId } from './validation.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
 
@@ -323,7 +324,7 @@ async function showUserSSHKeysModal({ userId, username, escapeHtml }) {
             <span class="font-mono text-slate-700 truncate flex-1" title="${escapeHtml(
               k.key_line || '',
             )}">${escapeHtml(keyDisplay)}</span>
-            <span class="text-xs text-slate-400 shrink-0">${escapeHtml(k.created_at || '')}</span>
+            <span class="text-xs text-slate-400 shrink-0">${escapeHtml(formatDateTime(k.created_at))}</span>
             <button type="button" class="user-ssh-key-del-btn rounded border border-red-200 px-2 py-0.5 text-xs text-red-700 hover:bg-red-50 shrink-0" data-key-id="${escapeHtml(
               String(k.id),
             )}">${t('users.keyDelete')}</button>

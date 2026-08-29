@@ -55,6 +55,11 @@ type AccessGroupStore interface {
 	AddTargetToGroup(ctx context.Context, groupID GroupID, targetID TargetID) error
 	// RemoveTargetFromGroup revokes the group's access to the target.
 	RemoveTargetFromGroup(ctx context.Context, groupID GroupID, targetID TargetID) error
+	// GroupIDsForTarget returns every group the target is directly
+	// assigned to via group_targets, independent of any user's
+	// visibility. Used to move a target between groups (remove from all
+	// current groups, then add to the new one).
+	GroupIDsForTarget(ctx context.Context, targetID TargetID) ([]GroupID, error)
 	GroupIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]GroupID, error)
 	TargetIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]TargetID, error)
 	TargetIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]TargetID, error)
@@ -72,4 +77,13 @@ type AccessGroupStore interface {
 var (
 	ErrGroupExists   = errors.New("access group already exists")
 	ErrGroupNotFound = errors.New("access group not found")
+	// ErrGroupNotEmpty is returned by Delete when the group still has
+	// targets directly assigned to it, or still has child groups (by
+	// the "parent/child" ID naming convention). Deleting it anyway
+	// would silently orphan those targets: group_targets rows cascade-
+	// delete with the group, so a target with no other group
+	// assignment would vanish from every tree view without being
+	// deleted itself. The caller must move or remove the targets /
+	// child groups first.
+	ErrGroupNotEmpty = errors.New("access group still has targets or child groups assigned")
 )

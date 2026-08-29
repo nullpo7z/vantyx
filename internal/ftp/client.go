@@ -1,7 +1,6 @@
 package ftp
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -174,22 +173,25 @@ func (c *Client) Open(p string) (io.ReadCloser, error) {
 	return &ftpFile{rc: rc, info: info}, nil
 }
 
-// ftpWriter buffers content locally and uploads on Close via STOR.
+// ftpWriter streams content to the remote file via STOR as it's written,
+// instead of buffering the whole upload in memory first: Write() feeds an
+// io.Pipe that a background goroutine reads from inside Stor, so memory use
+// stays bounded regardless of file size (a multi-GB upload no longer holds
+// the entire file in the server process's RAM).
 type ftpWriter struct {
-	client *Client
-	path   string
-	buf    *bytes.Buffer
+	pw   *io.PipeWriter
+	done chan error
 }
 
 func (w *ftpWriter) Write(p []byte) (int, error) {
-	return w.buf.Write(p)
+	return w.pw.Write(p)
 }
 
 func (w *ftpWriter) Close() error {
-	if w.client == nil || w.client.conn == nil {
-		return nil
-	}
-	return w.client.conn.Stor(w.path, bytes.NewReader(w.buf.Bytes()))
+	// Signals EOF to the STOR goroutine so it finishes reading and
+	// completes the upload; the real outcome comes back on done.
+	_ = w.pw.Close()
+	return <-w.done
 }
 
 // Create creates or truncates a remote file and returns a WriteCloser.
@@ -197,11 +199,21 @@ func (c *Client) Create(p string) (io.WriteCloser, error) {
 	if p == "" {
 		return nil, ErrPathRequired
 	}
-	return &ftpWriter{
-		client: c,
-		path:   p,
-		buf:    &bytes.Buffer{},
-	}, nil
+	if c.conn == nil {
+		return nil, errors.New("ftp: not connected")
+	}
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		err := c.conn.Stor(p, pr)
+		// If Stor returns early (e.g. a network error mid-transfer),
+		// this unblocks/fails any Write() still in flight instead of
+		// leaving it blocked forever with nobody left reading from the
+		// pipe.
+		_ = pr.CloseWithError(err)
+		done <- err
+	}()
+	return &ftpWriter{pw: pw, done: done}, nil
 }
 
 // RemoveAll removes a file or directory tree.

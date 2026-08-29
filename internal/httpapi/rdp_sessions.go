@@ -61,7 +61,14 @@ func (a *App) startRDPBridgeProxyIfNeeded(rdpSess *rdpvnc.Session) {
 		return
 	}
 	targetAddr := fmt.Sprintf("127.0.0.1:%d", rdpSess.Bridge.VNCPort())
-	go a.runRDPDetachableVNCBridge(rdpSess, targetAddr)
+	// Guard against duplicate bridge-proxy goroutines: this is called on
+	// every attach to the session (owner reconnect, viewer join), not just
+	// creation. A second goroutine would race the first for AttachCh
+	// messages and orphan the first's clients from SharingBridges, making
+	// kick/write-token control silently no-op for them.
+	rdpSess.StartBridgeProxyOnce(func() {
+		go a.runRDPDetachableVNCBridge(rdpSess, targetAddr)
+	})
 }
 
 func (a *App) runRDPDetachableVNCBridge(rdpSess *rdpvnc.Session, targetAddr string) {

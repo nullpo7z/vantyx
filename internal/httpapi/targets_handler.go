@@ -24,8 +24,11 @@ type targetResponse struct {
 	SSHUsername           string   `json:"ssh_username,omitempty"`
 	HasStoredCredentials  bool     `json:"has_stored_credentials,omitempty"`
 	HasSSHKey             bool     `json:"has_ssh_key,omitempty"`
+	HasPassphrase         bool     `json:"has_passphrase,omitempty"`   // private key has a stored passphrase already (no prompt needed at connect).
 	NeedsPassword         bool     `json:"needs_password,omitempty"`   // username stored but no password; SPA prompts at connect.
 	NeedsPassphrase       bool     `json:"needs_passphrase,omitempty"` // encrypted private key stored but no passphrase; SPA prompts at connect.
+	CredentialIdentityID  string   `json:"credential_identity_id,omitempty"` // set when credentials were last applied from this Identity; empty = manual entry.
+	SSHKeyID              string   `json:"ssh_key_id,omitempty"`             // set when credentials were last applied from this SSH Key; empty = manual entry.
 	Tags                  []string `json:"tags,omitempty"`
 	SFTPEnabled           bool     `json:"sftp_enabled"`
 	FTPEnabled            bool     `json:"ftp_enabled"`
@@ -63,8 +66,9 @@ type updateTargetRequest struct {
 	Port                    uint16  `json:"port"`
 	Protocol                string  `json:"protocol"`
 	Path                    string  `json:"path"`
-	CredentialIdentityID    string  `json:"credential_identity_id,omitempty"`
-	SSHKeyID                string  `json:"ssh_key_id,omitempty"`
+	GroupID                 *string `json:"group_id,omitempty"` // nil = leave unchanged; non-empty = move to this group.
+	CredentialIdentityID    *string `json:"credential_identity_id,omitempty"` // nil = leave unchanged; "" = detach (manual entry); non-empty = link to this Identity.
+	SSHKeyID                *string `json:"ssh_key_id,omitempty"`             // nil = leave unchanged; "" = detach (manual entry); non-empty = link to this SSH Key.
 	SSHUsername             string  `json:"ssh_username"`
 	SSHPassword             *string `json:"ssh_password,omitempty"`               // nil = leave unchanged, empty string = clear.
 	SSHPrivateKey           *string `json:"ssh_private_key,omitempty"`            // nil = leave unchanged, empty string = clear.
@@ -179,6 +183,11 @@ func targetToResponse(t *access.Target, tags []string) targetResponse {
 	if t.SSHPrivateKey != "" {
 		r.HasSSHKey = true
 	}
+	if t.SSHPrivateKeyPassphrase != "" {
+		r.HasPassphrase = true
+	}
+	r.CredentialIdentityID = string(t.CredentialIdentityID)
+	r.SSHKeyID = string(t.SSHKeyID)
 	if t.SSHUsername != "" && t.SSHPassword == "" && t.SSHPrivateKey == "" {
 		r.NeedsPassword = true
 	}
@@ -394,6 +403,9 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		writeJSONErrorKey(w, r, "targets.assignFailed", http.StatusInternalServerError)
 		return
 	}
+	if req.CredentialIdentityID != "" || req.SSHKeyID != "" {
+		_ = a.TargetStore.SetCredentialSource(ctx, access.TargetID(id), access.CredentialIdentityID(req.CredentialIdentityID), access.SSHKeyID(req.SSHKeyID))
+	}
 	// Inherit group tags on creation so tag-based access matches group membership by default.
 	if tags, err := a.AccessGroupStore.TagsForGroup(ctx, access.GroupID(req.GroupID)); err == nil && len(tags) > 0 {
 		_ = a.TargetStore.SetTargetTags(ctx, access.TargetID(id), tags)
@@ -432,7 +444,7 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	targetID := chi.URLParam(r, "target_id")
-	_, cur, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
+	userID, cur, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
 	if !ok {
 		return
 	}
@@ -445,11 +457,61 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Host = strings.TrimSpace(req.Host)
 	req.Path = normalizeTargetPath(req.Path)
-	req.CredentialIdentityID = strings.TrimSpace(req.CredentialIdentityID)
-	req.SSHKeyID = strings.TrimSpace(req.SSHKeyID)
+	// credentialIdentityID / sshKeyID resolve the *string "leave
+	// unchanged vs explicit" request fields down to plain strings for
+	// the rest of the handler; changingCredentialSource records whether
+	// the caller touched either field at all, so SetCredentialSource
+	// (below) only runs -- and only then overwrites the tracked link --
+	// when the request actually said something about it.
+	credentialIdentityID := ""
+	if req.CredentialIdentityID != nil {
+		credentialIdentityID = strings.TrimSpace(*req.CredentialIdentityID)
+	}
+	sshKeyID := ""
+	if req.SSHKeyID != nil {
+		sshKeyID = strings.TrimSpace(*req.SSHKeyID)
+	}
+	changingCredentialSource := req.CredentialIdentityID != nil || req.SSHKeyID != nil
 	if req.Name == "" || req.Host == "" {
 		writeJSONErrorKey(w, r, "targets.nameHostRequired", http.StatusBadRequest)
 		return
+	}
+	// A non-nil GroupID means the caller wants to move the target to a
+	// different access group. Validated up front (same rule as create:
+	// the acting admin must themselves have access to the destination
+	// group) so a failure here doesn't leave the rest of the update
+	// half-applied; the actual group_targets move happens after
+	// TargetStore.Update succeeds, below.
+	var newGroupID access.GroupID
+	changingGroup := false
+	if req.GroupID != nil {
+		gid := strings.TrimSpace(*req.GroupID)
+		if gid == "" {
+			writeJSONErrorKey(w, r, "targets.groupIDRequired", http.StatusBadRequest)
+			return
+		}
+		if _, err := a.AccessGroupStore.Get(ctx, access.GroupID(gid)); err != nil {
+			writeJSONErrorKey(w, r, "targets.groupNotFound", http.StatusNotFound)
+			return
+		}
+		allowedGroups, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(userID), nil)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		allowed := false
+		for _, g := range allowedGroups {
+			if g == access.GroupID(gid) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
+			return
+		}
+		newGroupID = access.GroupID(gid)
+		changingGroup = true
 	}
 	if req.Port == 0 {
 		req.Port = 22
@@ -475,10 +537,10 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 		sshPrivateKeyPassphrase = *req.SSHPrivateKeyPassphrase
 	}
 	onlyIfEmpty := true
-	if req.CredentialIdentityID != "" || req.SSHKeyID != "" {
+	if credentialIdentityID != "" || sshKeyID != "" {
 		onlyIfEmpty = req.SSHPassword == nil && req.SSHPrivateKey == nil && req.SSHPrivateKeyPassphrase == nil
 	}
-	if err := a.applyStoredCredentials(ctx, req.CredentialIdentityID, req.SSHKeyID,
+	if err := a.applyStoredCredentials(ctx, credentialIdentityID, sshKeyID,
 		&req.SSHUsername, &sshPassword, &sshPrivateKey, &sshPrivateKeyPassphrase, onlyIfEmpty); err != nil {
 		if errors.Is(err, access.ErrCredentialIdentityNotFound) {
 			writeJSONErrorKey(w, r, "credentialIdentities.notFound", http.StatusNotFound)
@@ -522,6 +584,57 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 		}
 		writeInternalError(w, err)
 		return
+	}
+	// Only overwrite the tracked credential-source link when the caller
+	// actually said something about it -- credential_identity_id / ssh_key_id
+	// are "leave unchanged when omitted" like every other field here, not
+	// "always explicit" like req.CredentialIdentityID/SSHKeyID used to
+	// be. A PUT that only changes e.g. the name must not silently detach
+	// a target from its linked Identity/SSH Key.
+	if changingCredentialSource {
+		_ = a.TargetStore.SetCredentialSource(ctx, t.ID, access.CredentialIdentityID(credentialIdentityID), access.SSHKeyID(sshKeyID))
+		t.CredentialIdentityID = access.CredentialIdentityID(credentialIdentityID)
+		t.SSHKeyID = access.SSHKeyID(sshKeyID)
+	}
+	// Keep the embedded TFTP server's refcount in sync when an edit
+	// changes the protocol to/from tftp. handleCreateTarget /
+	// handleDeleteTarget already do this on create/delete; without it
+	// here, switching a target's protocol to tftp never starts the
+	// server (refCount never incremented) and switching away from tftp
+	// leaves refCount permanently inflated by one.
+	if cur != nil && cur.Protocol != protocol {
+		tftp.NotifyTargetDeleted(cur.Protocol)
+		tftp.NotifyTargetCreated(ctx, a.TargetStore, protocol)
+	}
+	if changingGroup {
+		currentGroups, err := a.AccessGroupStore.GroupIDsForTarget(ctx, t.ID)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		alreadyInNewGroup := false
+		for _, g := range currentGroups {
+			if g == newGroupID {
+				alreadyInNewGroup = true
+				continue
+			}
+			if err := a.AccessGroupStore.RemoveTargetFromGroup(ctx, g, t.ID); err != nil {
+				writeInternalError(w, err)
+				return
+			}
+		}
+		if !alreadyInNewGroup {
+			if err := a.AccessGroupStore.AddTargetToGroup(ctx, newGroupID, t.ID); err != nil {
+				writeJSONErrorKey(w, r, "targets.assignFailed", http.StatusInternalServerError)
+				return
+			}
+		}
+		audit("target_group_changed", auditFields{
+			"user_id":      userID,
+			"target_id":    string(t.ID),
+			"new_group_id": string(newGroupID),
+			"prior_groups": currentGroups,
+		})
 	}
 	tags, _ := a.TargetStore.TagsForTarget(ctx, t.ID)
 	w.Header().Set("Content-Type", "application/json")
@@ -580,6 +693,15 @@ func (a *App) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cur != nil {
+		// Close any open write window for this target before the
+		// notify call below can shut the server down (last TFTP
+		// target deleted) and drop the reference tftp.Current() would
+		// need -- otherwise a stale window can outlive the target
+		// record for up to its TTL with no way for an admin to see or
+		// clear it.
+		if srv := tftp.Current(); srv != nil {
+			srv.CloseWriteWindow(cur.ID)
+		}
 		tftp.NotifyTargetDeleted(cur.Protocol)
 	}
 	w.WriteHeader(http.StatusNoContent)

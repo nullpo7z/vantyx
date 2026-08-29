@@ -39,7 +39,7 @@ type SessionLister interface {
 // SessionStopper is the optional interface implemented by
 // [*session.Manager] that lets the CLI end background bridges.
 type SessionStopper interface {
-	Stop(id session.ID)
+	Stop(id session.ID) bool
 }
 
 // RecordingStore persists recording metadata when CLI sessions are

@@ -33,6 +33,9 @@ type bridgeOptions struct {
 	// Register exactly once after the SSH session is set up; nil sinks
 	// are ignored.
 	controlSink BridgeControlSink
+	// resizeRecorder, when set, is notified of every PTY resize so
+	// recordings can capture asciicast "r" events (see ResizeRecorder).
+	resizeRecorder ResizeRecorder
 }
 
 // WithHostKeyFingerprint sets the expected SHA-256 host-key fingerprint
@@ -67,6 +70,14 @@ func WithTargetInsecureSkipVerify() BridgeOption {
 // to wire up the collaborative-session writer / viewer hand-off.
 func WithBridgeControlSink(sink BridgeControlSink) BridgeOption {
 	return func(o *bridgeOptions) { o.controlSink = sink }
+}
+
+// WithResizeRecorder registers a recorder that is notified whenever the
+// target PTY is resized, so a recording can replay at the terminal
+// geometry the session actually ran at instead of the fixed size baked
+// into the cast header at start time.
+func WithResizeRecorder(rr ResizeRecorder) BridgeOption {
+	return func(o *bridgeOptions) { o.resizeRecorder = rr }
 }
 
 // WithCapturedFingerprint configures the bridge / host-key callback to

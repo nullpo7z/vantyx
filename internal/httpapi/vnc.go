@@ -75,7 +75,14 @@ func (a *App) handleVNCWebSocket(w http.ResponseWriter, r *http.Request) {
 	id := session.ID(idStr)
 	targetAddr := target.Host + ":" + strconv.Itoa(int(target.Port))
 
-	a.startVNCVideoRecording(r.Context(), idStr, userID, targetID, target.Host, int(target.Port), target.SSHPassword)
+	// Detached background context: r.Context() is canceled as soon as
+	// this handler returns (shortly after, once the WebSocket is
+	// upgraded/hijacked), which would otherwise kill the just-started
+	// ffmpeg recording via exec.CommandContext before it captures any
+	// real video (see the matching fix in rdp.go). Recording lifecycle
+	// is tied to the VNC session itself via the deferred
+	// finishVideoRecording below, not to this request.
+	a.startVNCVideoRecording(context.Background(), idStr, userID, targetID, target.Host, int(target.Port), target.SSHPassword)
 
 	_, err = a.VNCSessionManager.Start(id, session.StartOptions{
 		UserID: userID, TargetID: targetID, TargetName: target.Name,

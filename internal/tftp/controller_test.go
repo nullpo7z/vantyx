@@ -9,6 +9,15 @@ import (
 	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
 )
 
+func TestCurrent_NilWhenNotRunning(t *testing.T) {
+	// No test in this package starts the process-wide controller (that
+	// would bind a real UDP listener), so it should still report "not
+	// running" here.
+	if srv := Current(); srv != nil {
+		t.Fatalf("expected Current() to be nil when the controller was never started, got %v", srv)
+	}
+}
+
 func TestIsEmbeddedCompanionTarget(t *testing.T) {
 	ssh := &access.Target{ID: "s1", Host: "10.0.0.1", Protocol: access.ProtocolSSH, TFTPEnabled: true}
 	standalone := &access.Target{ID: "t1", Host: "192.168.1.50", Protocol: access.ProtocolTFTP}

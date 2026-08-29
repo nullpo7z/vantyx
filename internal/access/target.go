@@ -49,6 +49,15 @@ type Target struct {
 	SFTPEnabled bool
 	FTPEnabled  bool
 	TFTPEnabled bool
+	// CredentialIdentityID / SSHKeyID record which entry in the
+	// Identities / SSH Keys library (if any) this target's credentials
+	// were last set from. The secrets themselves are always copied onto
+	// the target's own fields (above) at create/update time; these IDs
+	// are kept only so the edit UI can show which source is in effect
+	// instead of always falling back to "manual entry". Empty when the
+	// credentials were entered manually.
+	CredentialIdentityID CredentialIdentityID
+	SSHKeyID             SSHKeyID
 }
 
 // TargetStore defines the behavior required for managing targets.
@@ -73,6 +82,11 @@ type TargetStore interface {
 	// host key for this target. Use only when the operator
 	// explicitly accepts the MITM risk.
 	SetSSHHostKeyInsecureSkipVerify(ctx context.Context, targetID TargetID, skip bool) error
+	// SetCredentialSource records which Identity / SSH Key library entry
+	// (if any) the target's credentials were last set from, for the
+	// edit UI's benefit. Pass "" for whichever of the two is not in
+	// use; both empty clears the link (manual entry).
+	SetCredentialSource(ctx context.Context, targetID TargetID, credentialIdentityID CredentialIdentityID, sshKeyID SSHKeyID) error
 }
 
 var (

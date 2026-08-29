@@ -1,6 +1,7 @@
 package recording
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -12,6 +13,14 @@ import (
 
 const defaultVideoFPS = 8
 
+// x11GrabStartGrace is how long StartX11Grab waits after forking ffmpeg
+// before treating the start as successful. exec.Cmd.Start only confirms
+// the process was forked, not that it's actually capturing -- without
+// this check, a DB recording row can end up pointing at an mp4 file
+// that was never written (e.g. ffmpeg rejecting the geometry/display)
+// while every read of it 404s.
+const x11GrabStartGrace = 700 * time.Millisecond
+
 var vncDisplayCounter int64 = 149
 
 func nextVNCDisplay() int {
@@ -22,6 +31,10 @@ func nextVNCDisplay() int {
 type VideoRecorder struct {
 	cmd  *exec.Cmd
 	path string
+	// done receives cmd.Wait()'s result exactly once, from the single
+	// goroutine started in StartX11Grab. Stop() reads from it instead
+	// of calling Wait() again (which is invalid once already called).
+	done chan error
 }
 
 // StartX11Grab begins ffmpeg screen capture on the given X display number.
@@ -57,10 +70,19 @@ func StartX11Grab(ctx context.Context, display, width, height, fps, ffmpegThread
 	}
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...) // #nosec G204 -- fixed tool, validated paths.
 	cmd.Env = append(os.Environ(), "DISPLAY="+displayStr)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start ffmpeg: %w", err)
 	}
-	return &VideoRecorder{cmd: cmd, path: outputPath}, nil
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return nil, fmt.Errorf("ffmpeg exited immediately: %w: %s", err, stderr.String())
+	case <-time.After(x11GrabStartGrace):
+	}
+	return &VideoRecorder{cmd: cmd, path: outputPath, done: done}, nil
 }
 
 // Path returns the output file path.
@@ -77,13 +99,11 @@ func (r *VideoRecorder) Stop() error {
 		return nil
 	}
 	_ = r.cmd.Process.Signal(os.Interrupt)
-	done := make(chan error, 1)
-	go func() { done <- r.cmd.Wait() }()
 	select {
-	case err := <-done:
+	case err := <-r.done:
 		return err
 	case <-time.After(15 * time.Second):
 		_ = r.cmd.Process.Kill()
-		return r.cmd.Wait()
+		return <-r.done
 	}
 }

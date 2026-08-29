@@ -2,6 +2,7 @@ package recording
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -94,6 +95,31 @@ func (a *AsciinemaWriter) RecordInput(p []byte) {
 	_ = a.writeHeader()
 	ts := time.Since(a.start).Seconds()
 	line, err := json.Marshal([]interface{}{ts, "i", string(p)})
+	if err != nil {
+		return
+	}
+	_, _ = a.w.Write(append(line, '\n'))
+}
+
+// RecordResize records a terminal resize ("r") event so playback can
+// replay the session at the terminal geometry it actually ran at. Without
+// this, output written for a size that differs from the cast header's
+// fixed width/height (e.g. after a client resizes mid-session) is
+// misinterpreted by the player: full-screen redraws from curses apps like
+// vim can come out with wrapping/cursor-position collapsed onto a single
+// line once the size drifts from what the header declared.
+// See https://github.com/asciinema/asciinema/blob/main/doc/asciicast-v2.md#r-event
+func (a *AsciinemaWriter) RecordResize(cols, rows int) {
+	if cols <= 0 || rows <= 0 {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := a.writeHeader(); err != nil {
+		return
+	}
+	ts := time.Since(a.start).Seconds()
+	line, err := json.Marshal([]interface{}{ts, "r", fmt.Sprintf("%dx%d", cols, rows)})
 	if err != nil {
 		return
 	}

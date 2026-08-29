@@ -828,7 +828,7 @@ func TestServer_BackgroundSession_RemainsActive(t *testing.T) {
 		TargetName: "telnet-echo",
 	}
 	_, err := mgr.Start(id, opts, func(ctx context.Context, sess *session.Session) {
-		_ = telnetproxy.RunBridgeDetachable(ctx, "session_ended: Telnet session closed", "127.0.0.1", port, "", "", sess.Output, sess.AttachCh, nil, nil, nil, nil, 80, 24, nil, nil)
+		_ = telnetproxy.RunBridgeDetachable(ctx, "session_ended: Telnet session closed", "127.0.0.1", port, "", "", sess.Output, sess.AttachCh, nil, nil, nil, nil, 80, 24, nil, nil, nil)
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -866,7 +866,7 @@ func TestServer_Resume_CtrlBracket_Detaches(t *testing.T) {
 		TargetName: "telnet-echo",
 	}
 	_, err := mgr.Start(id, opts, func(ctx context.Context, sess *session.Session) {
-		_ = telnetproxy.RunBridgeDetachable(ctx, "session_ended: Telnet session closed", "127.0.0.1", port, "", "", sess.Output, sess.AttachCh, nil, nil, nil, nil, 80, 24, nil, nil)
+		_ = telnetproxy.RunBridgeDetachable(ctx, "session_ended: Telnet session closed", "127.0.0.1", port, "", "", sess.Output, sess.AttachCh, nil, nil, nil, nil, 80, 24, nil, nil, nil)
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)

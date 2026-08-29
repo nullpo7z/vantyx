@@ -5,6 +5,7 @@
 
 import API from './api.js'
 import { t } from './i18n.js'
+import { formatDate } from './datetime.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
 import { createRealtimeWatcher, POLL_MS, shouldRefreshInviteList } from './sharing_events.js'
 
@@ -59,7 +60,7 @@ function parseApiTime(value) {
 function fmtDate(value) {
   const d = parseApiTime(value)
   if (!d) return '—'
-  return d.toLocaleString()
+  return formatDate(d)
 }
 
 function isInvitationExpired(inv) {

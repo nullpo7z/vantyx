@@ -2,6 +2,7 @@ import API from './api.js'
 import * as AsciinemaPlayer from 'asciinema-player'
 import 'asciinema-player/dist/bundle/asciinema-player.css'
 import { t } from './i18n.js'
+import { formatDateTime } from './datetime.js'
 import { queueRecordingExportAndNotify } from './recording_exports_page.js'
 
 /** Target protocol label for tables (SSH, Telnet, …). */
@@ -56,6 +57,11 @@ export async function renderRecordingsPage({
   const fromVal = recordingsFilterFrom || dates.from
   const toVal = recordingsFilterTo || dates.to
 
+  const ZOOM_MIN_PX = 8
+  const ZOOM_MAX_PX = 40
+  const ZOOM_STEP_PX = 2
+  const ZOOM_DEFAULT_PX = 16
+
   function showRecordingPlayerModal(recordingId, label, mediaType, channelType) {
     const modal = document.getElementById('recording-player-modal')
     if (!modal) return
@@ -66,12 +72,26 @@ export async function renderRecordingsPage({
       ? `/api/recordings/${encodeURIComponent(recordingId)}/file?format=mp4`
       : `/api/recordings/${encodeURIComponent(recordingId)}/file`
 
+    const zoomControls = isVideo
+      ? ''
+      : `
+        <div class="flex items-center gap-1">
+          <button id="recording-player-zoom-out" type="button" title="${escapeHtml(t('recordings.zoomOut'))}" class="rounded border border-slate-600 bg-slate-700 w-7 h-7 text-slate-200 hover:bg-slate-600 leading-none">−</button>
+          <span id="recording-player-zoom-level" class="w-12 text-center text-xs text-slate-400 select-none"></span>
+          <button id="recording-player-zoom-in" type="button" title="${escapeHtml(t('recordings.zoomIn'))}" class="rounded border border-slate-600 bg-slate-700 w-7 h-7 text-slate-200 hover:bg-slate-600 leading-none">+</button>
+          <button id="recording-player-zoom-reset" type="button" title="${escapeHtml(t('recordings.zoomReset'))}" class="ml-1 rounded border border-slate-600 bg-slate-700 px-2 h-7 text-xs text-slate-200 hover:bg-slate-600">${escapeHtml(t('recordings.zoomReset'))}</button>
+        </div>
+      `
+
     modal.innerHTML = `
       <div id="recording-player-backdrop" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
         <div class="bg-slate-900 rounded-lg shadow-xl w-full max-w-4xl mx-4 overflow-hidden border border-slate-700 flex flex-col max-h-[90vh]">
-          <div class="px-5 py-3 border-b border-slate-700 flex items-center justify-between bg-slate-800 shrink-0">
-            <h3 class="font-semibold text-slate-200">${escapeHtml(t('recordings.playerTitle', { label: label || recordingId }))}</h3>
-            <button id="recording-player-close" class="text-slate-400 hover:text-white text-2xl leading-none transition-colors">&times;</button>
+          <div class="px-5 py-3 border-b border-slate-700 flex items-center justify-between gap-3 bg-slate-800 shrink-0">
+            <h3 class="font-semibold text-slate-200 truncate min-w-0">${escapeHtml(t('recordings.playerTitle', { label: label || recordingId }))}</h3>
+            <div class="flex items-center gap-3 shrink-0">
+              ${zoomControls}
+              <button id="recording-player-close" class="text-slate-400 hover:text-white text-2xl leading-none transition-colors">&times;</button>
+            </div>
           </div>
           <div id="recording-player-wrapper" class="p-4 overflow-auto flex-1 min-h-0 min-h-[60vh]">
             <div id="recording-player-container"></div>
@@ -81,14 +101,75 @@ export async function renderRecordingsPage({
     `
     const container = modal.querySelector('#recording-player-container')
     let player = null
-    if (isVideo) {
-      container.innerHTML = `<video id="recording-video-player" class="w-full max-h-[70vh] bg-black" controls playsinline src="${escapeHtml(fileUrl)}"></video>`
-    } else {
+    // null = auto-fit (asciinema-player's default "fit" scaling); once the
+    // user zooms in/out we switch to a fixed pixel size they control.
+    let zoomPx = null
+
+    function disposePlayer() {
+      if (player && typeof player.dispose === 'function') {
+        try {
+          player.dispose()
+        } catch {
+          /* ignore */
+        }
+      }
+      player = null
+    }
+
+    function createPlayer(startAt) {
+      container.innerHTML = ''
+      const opts = startAt ? { startAt } : {}
+      if (zoomPx != null) {
+        opts.fit = false
+        opts.terminalFontSize = `${zoomPx}px`
+      }
       try {
-        player = AsciinemaPlayer.create(fileUrl, container, {})
+        player = AsciinemaPlayer.create(fileUrl, container, opts)
       } catch (err) {
         container.innerHTML = `<p class="text-sm text-red-400">${escapeHtml(t('recordings.loadingPlayer', { error: err.message || String(err) }))}</p>`
       }
+    }
+
+    const zoomLevelEl = modal.querySelector('#recording-player-zoom-level')
+    function updateZoomLabel() {
+      if (!zoomLevelEl) return
+      zoomLevelEl.textContent = zoomPx == null ? t('recordings.zoomFit') : `${zoomPx}px`
+    }
+
+    async function applyZoom(nextZoomPx) {
+      if (!player) {
+        zoomPx = nextZoomPx
+        updateZoomLabel()
+        return
+      }
+      let startAt = 0
+      try {
+        startAt = (await player.getCurrentTime()) || 0
+      } catch {
+        /* keep 0 */
+      }
+      zoomPx = nextZoomPx
+      disposePlayer()
+      createPlayer(startAt)
+      updateZoomLabel()
+    }
+
+    if (isVideo) {
+      container.innerHTML = `<video id="recording-video-player" class="w-full max-h-[70vh] bg-black" controls playsinline src="${escapeHtml(fileUrl)}"></video>`
+    } else {
+      createPlayer()
+      updateZoomLabel()
+      modal.querySelector('#recording-player-zoom-in')?.addEventListener('click', () => {
+        const base = zoomPx == null ? ZOOM_DEFAULT_PX : zoomPx
+        void applyZoom(Math.min(ZOOM_MAX_PX, base + ZOOM_STEP_PX))
+      })
+      modal.querySelector('#recording-player-zoom-out')?.addEventListener('click', () => {
+        const base = zoomPx == null ? ZOOM_DEFAULT_PX : zoomPx
+        void applyZoom(Math.max(ZOOM_MIN_PX, base - ZOOM_STEP_PX))
+      })
+      modal.querySelector('#recording-player-zoom-reset')?.addEventListener('click', () => {
+        void applyZoom(null)
+      })
     }
 
     const close = () => {
@@ -102,13 +183,7 @@ export async function renderRecordingsPage({
           /* ignore */
         }
       }
-      if (player && typeof player.dispose === 'function') {
-        try {
-          player.dispose()
-        } catch {
-          /* ignore */
-        }
-      }
+      disposePlayer()
       modal.classList.add('hidden')
       modal.innerHTML = ''
     }
@@ -167,7 +242,7 @@ export async function renderRecordingsPage({
       const items = (res && res.items) || []
       const rows = items
         .map((r) => {
-          const label = [r.started_at || '', r.target_id || ''].filter(Boolean).join(' — ') || r.id
+          const label = [formatDateTime(r.started_at, undefined, ''), r.target_id || ''].filter(Boolean).join(' — ') || r.id
           const isVideo = r.media_type === 'video'
           const castLink = !isVideo
             ? `<a href="/api/recordings/${encodeURIComponent(r.id)}/file?format=cast" download="${escapeHtml(
@@ -190,13 +265,13 @@ export async function renderRecordingsPage({
           )}" data-format="gif" title="${escapeHtml(gifHint)}">GIF</button>`
           return `
           <tr class="border-b border-slate-200 hover:bg-slate-50">
-            <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(r.started_at || '')}</td>
-            <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(r.ended_at || '—')}</td>
-            <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(r.session_name || '—')}</td>
-            <td class="px-4 py-2 text-sm text-slate-600 max-w-[12rem] truncate" title="${escapeHtml(
+            <td class="px-4 py-2 text-sm text-slate-700 whitespace-nowrap">${escapeHtml(formatDateTime(r.started_at))}</td>
+            <td class="px-4 py-2 text-sm text-slate-700 whitespace-nowrap">${escapeHtml(formatDateTime(r.ended_at))}</td>
+            <td class="px-4 py-2 text-sm font-medium text-slate-900 truncate" title="${escapeHtml(r.session_name || '')}">${escapeHtml(r.session_name || '—')}</td>
+            <td class="px-4 py-2 text-sm text-slate-600 truncate" title="${escapeHtml(
               r.session_description || '',
             )}">${escapeHtml(r.session_description || '—')}</td>
-            <td class="px-4 py-2 text-sm text-slate-600">${escapeHtml(r.channel_type || '')}</td>
+            <td class="px-4 py-2 text-sm text-slate-600 whitespace-nowrap">${escapeHtml(r.channel_type || '')}</td>
             <td class="px-4 py-2">
               <div class="flex items-center gap-2 flex-wrap">
                 <button type="button" class="recording-play-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50" data-id="${escapeHtml(
@@ -258,15 +333,15 @@ export async function renderRecordingsPage({
             <button type="button" id="rec-filter-apply" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('recordings.filterApply')}</button>
           </div>
           <div class="overflow-x-auto flex-1 min-h-0">
-            <table class="min-w-full text-left text-sm">
+            <table class="min-w-full text-left text-sm table-fixed">
               <thead class="bg-slate-50 border-b border-slate-200">
                 <tr>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerStarted')}</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerEnded')}</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerSessionName')}</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerDescription')}</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerChannel')}</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerActions')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[14%]">${t('recordings.headerStarted')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[14%]">${t('recordings.headerEnded')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[16%]">${t('recordings.headerSessionName')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[20%]">${t('recordings.headerDescription')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[10%]">${t('recordings.headerChannel')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[26%]">${t('recordings.headerActions')}</th>
                 </tr>
               </thead>
               <tbody>${
@@ -285,7 +360,7 @@ export async function renderRecordingsPage({
             <td class="px-4 py-2 text-sm text-slate-600 font-mono">${escapeHtml(tg.host || '')}</td>
             <td class="px-4 py-2 text-sm text-slate-500">${escapeHtml(formatTargetProtocol(tg.protocol))}</td>
             <td class="px-4 py-2">
-              <button type="button" class="recordings-view-target-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700" data-target-id="${escapeHtml(
+              <button type="button" class="recordings-view-target-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 w-[140px] text-center whitespace-nowrap" data-target-id="${escapeHtml(
                 tg.id,
               )}" data-target-name="${escapeHtml(tg.name || tg.id || '')}">${t('recordings.viewRecordings')}</button>
             </td>
@@ -299,13 +374,13 @@ export async function renderRecordingsPage({
         `
       sectionContent = `
           <div class="overflow-x-auto flex-1 min-h-0">
-            <table class="min-w-full text-left text-sm">
+            <table class="min-w-full text-left text-sm table-fixed">
               <thead class="bg-slate-50 border-b border-slate-200">
                 <tr>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerServer')}</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerHost')}</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerProtocol')}</th>
-                  <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('recordings.headerActions')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[30%]">${t('recordings.headerServer')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[30%]">${t('recordings.headerHost')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[15%]">${t('recordings.headerProtocol')}</th>
+                  <th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[25%]">${t('recordings.headerActions')}</th>
                 </tr>
               </thead>
               <tbody>${targetRows}</tbody>

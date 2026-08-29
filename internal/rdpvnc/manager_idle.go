@@ -3,7 +3,14 @@ package rdpvnc
 import "time"
 
 // LastSeen returns the last activity timestamp (updated by Touch on VNC I/O).
-func (s *Session) LastSeen() time.Time { return s.lastSeen }
+func (s *Session) LastSeen() time.Time {
+	if s.lastSeenMu == nil {
+		return s.lastSeen
+	}
+	s.lastSeenMu.RLock()
+	defer s.lastSeenMu.RUnlock()
+	return s.lastSeen
+}
 
 // SetIdleWarnAfter sets how long without Touch before IsIdle returns true. Zero disables idle detection.
 func (m *Manager) SetIdleWarnAfter(d time.Duration) {
@@ -25,10 +32,9 @@ func (m *Manager) IdleDuration(sess *Session) time.Duration {
 		return 0
 	}
 	m.mu.Lock()
-	last := sess.lastSeen
 	nowFn := m.now
 	m.mu.Unlock()
-	return nowFn().Sub(last)
+	return nowFn().Sub(sess.LastSeen())
 }
 
 // IsIdle reports whether the session has exceeded the idle warning threshold.
@@ -58,6 +64,13 @@ func (m *Manager) Touch(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s, ok := m.sessionsByID[sessionID]; ok {
-		s.lastSeen = m.now()
+		now := m.now()
+		if s.lastSeenMu != nil {
+			s.lastSeenMu.Lock()
+			s.lastSeen = now
+			s.lastSeenMu.Unlock()
+		} else {
+			s.lastSeen = now
+		}
 	}
 }

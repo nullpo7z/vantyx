@@ -33,6 +33,13 @@ var (
 	ErrCannotKickOwner    = errors.New("the session owner cannot be removed")
 	ErrCannotKickSelf     = errors.New("you cannot kick yourself")
 	ErrUserKicked         = errors.New("user was removed from the session and cannot rejoin")
+	// ErrInviterNoTargetAccess is returned when the session owner has lost
+	// access to the underlying target since the invitation was created
+	// (stale-access guard). ErrJoinerNoTargetAccess is returned when the
+	// joining user does not have target access of their own -- a valid
+	// invitation token is never sufficient without it.
+	ErrInviterNoTargetAccess = errors.New("session owner no longer has access to the target")
+	ErrJoinerNoTargetAccess  = errors.New("user does not have access to the target")
 )
 
 // WriteRequestStatus tracks the lifecycle of a control-handoff request.

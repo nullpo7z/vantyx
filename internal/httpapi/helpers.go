@@ -233,12 +233,26 @@ func writeAccessValidationError(w http.ResponseWriter, r *http.Request, err erro
 		writeJSONErrorKey(w, r, "targets.hostKeyFingerprintInvalid", http.StatusBadRequest)
 	case errors.Is(err, access.ErrSSHKeyLabelReq), errors.Is(err, access.ErrCredentialIdentityLabelReq):
 		writeJSONErrorKey(w, r, "validation.nameEmpty", http.StatusBadRequest)
+	case errors.Is(err, access.ErrSSHKeyIDEmpty):
+		writeJSONErrorKey(w, r, "sshKeys.idRequired", http.StatusBadRequest)
+	case errors.Is(err, access.ErrSSHKeyIDTooLong):
+		writeJSONErrorKey(w, r, "validation.sshKeyIDTooLong", http.StatusBadRequest)
+	case errors.Is(err, access.ErrSSHKeyIDInvalid):
+		writeJSONErrorKey(w, r, "validation.sshKeyIDInvalid", http.StatusBadRequest)
+	case errors.Is(err, access.ErrCredentialIdentityIDEmpty):
+		writeJSONErrorKey(w, r, "credentialIdentities.idRequired", http.StatusBadRequest)
+	case errors.Is(err, access.ErrCredentialIdentityIDTooLong):
+		writeJSONErrorKey(w, r, "validation.credentialIdentityIDTooLong", http.StatusBadRequest)
+	case errors.Is(err, access.ErrCredentialIdentityIDInvalid):
+		writeJSONErrorKey(w, r, "validation.credentialIdentityIDInvalid", http.StatusBadRequest)
 	case errors.Is(err, access.ErrSSHKeyPrivateReq):
 		writeJSONErrorKey(w, r, "sshKeys.privateKeyRequired", http.StatusBadRequest)
 	case errors.Is(err, access.ErrCredentialIdentityUserReq):
 		writeJSONErrorKey(w, r, "credentialIdentities.usernameRequired", http.StatusBadRequest)
 	case errors.Is(err, access.ErrCredentialIdentityAuthReq):
 		writeJSONErrorKey(w, r, "credentialIdentities.authRequired", http.StatusBadRequest)
+	case errors.Is(err, access.ErrGroupNotEmpty):
+		writeJSONErrorKey(w, r, "groups.notEmpty", http.StatusConflict)
 	default:
 		return false
 	}

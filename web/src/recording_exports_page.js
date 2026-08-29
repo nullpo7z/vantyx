@@ -1,5 +1,6 @@
 import API from './api.js'
 import { t } from './i18n.js'
+import { formatDateTime } from './datetime.js'
 import { safeUrl } from './dom_helpers.js'
 import { targetFullPathForDisplay } from './session_list_shared.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
@@ -41,9 +42,7 @@ function exportStateClass(state) {
 function formatDisplayTime(iso) {
   const v = String(iso || '').trim()
   if (!v) return '—'
-  const d = new Date(v)
-  if (Number.isNaN(d.getTime())) return v
-  return d.toLocaleString()
+  return formatDateTime(v, undefined, v)
 }
 
 function abbreviateRecordingId(id) {

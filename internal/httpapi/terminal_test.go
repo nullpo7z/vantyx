@@ -482,6 +482,81 @@ func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
 	srv.CloseClientConnections()
 }
 
+// TestHandleSSHWebSocket_BridgeErrorRespectsUserLocale guards against a
+// regression where the bridge's error text (sent over the WS "error: "
+// frame after e.g. a failed dial/auth) silently reverted to English
+// regardless of the user's saved locale. The bridge runs inside the
+// session goroutine's own long-lived context (see session.Manager.Start),
+// which starts from a fresh context.Background() and therefore does not
+// automatically inherit the locale that sessionMiddleware resolved onto
+// the original request's context -- that must be carried over explicitly.
+func TestHandleSSHWebSocket_BridgeErrorRespectsUserLocale(t *testing.T) {
+	app := newTestAppForTerminal(t)
+	router := app.NewRouter()
+
+	ctx := context.Background()
+	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
+	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
+
+	if err := app.UserStore.UpdateLocale("admin", "ja"); err != nil {
+		t.Fatalf("UpdateLocale: %v", err)
+	}
+
+	httpSess, err := app.SessionStore.Create("admin")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+	defer srv.CloseClientConnections()
+
+	u := url.URL{Scheme: "ws", Host: srv.Listener.Addr().String(), Path: "/ws/ssh", RawQuery: "target_id=demo"}
+	header := http.Header{}
+	header.Set("Origin", "http://"+srv.Listener.Addr().String())
+	header.Add("Cookie", (&http.Cookie{Name: "vantyx_session", Value: httpSess.ID, Path: "/"}).String())
+
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)
+	if err != nil {
+		t.Fatalf("WebSocket dial failed: %v", err)
+	}
+	defer conn.Close()
+
+	// #nosec G101 -- test-only dummy credentials
+	creds := `{"username":"root","password":"test"}`
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(creds)); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	// Nothing listens on 127.0.0.1:22 in the test environment, so the
+	// dial fails (connection refused / timeout) and the bridge reports
+	// it back over the WS as an "error: " text frame.
+	var errMsg string
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		if strings.HasPrefix(string(msg), "error:") {
+			errMsg = string(msg)
+			break
+		}
+	}
+	if errMsg == "" {
+		t.Fatal("did not receive an error: frame from the bridge")
+	}
+	if strings.Contains(errMsg, "Connection to") || strings.Contains(errMsg, "Failed to connect") || strings.Contains(errMsg, "timed out") {
+		t.Fatalf("bridge error message was English despite the user's saved ja locale: %q", errMsg)
+	}
+	if !strings.Contains(errMsg, "接続") {
+		t.Fatalf("expected a Japanese bridge error message, got %q", errMsg)
+	}
+}
+
 // startFailingStub implements terminalSessionStarter and makes Start return an error.
 type startFailingStub struct{}
 
@@ -493,7 +568,7 @@ func (startFailingStub) Get(session.ID) (*session.Session, bool) { return nil, f
 
 func (startFailingStub) Touch(session.ID) {}
 
-func (startFailingStub) Stop(session.ID) {}
+func (startFailingStub) Stop(session.ID) bool { return true }
 
 func TestHandleSSHWebSocket_StartFailsReturns500(t *testing.T) {
 	app := newTestAppForTerminal(t)

@@ -1,5 +1,6 @@
 import API from './api.js'
 import { t } from './i18n.js'
+import { formatDateTime } from './datetime.js'
 
 function escapeHtml(s) {
   const div = document.createElement('div')
@@ -7,12 +8,8 @@ function escapeHtml(s) {
   return div.innerHTML
 }
 
-function fmtTime(t) {
-  try {
-    return new Date(t).toLocaleString()
-  } catch {
-    return String(t || '')
-  }
+function fmtTime(raw) {
+  return formatDateTime(raw, undefined, String(raw || ''))
 }
 
 function fieldsToText(fields) {

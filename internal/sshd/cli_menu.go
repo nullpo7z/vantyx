@@ -35,12 +35,15 @@ func helpLines() []string {
 		"=== Vantyx CLI ===",
 		"The top of the screen shows PWD, Groups, and Hosts (after cd).",
 		"Quick start: cd <group#>  →  connect <server#>",
-		"             or connect <group#> <server#> from root",
+		"             or connect <group#> <server#> from root (top-level group only)",
 		"",
 		"Commands:",
 		"  cd <n> | cd ..     Enter subgroup/folder or go up (cd .. / cd 0)",
 		"  connect <n>        Connect (in group: server index n)",
-		"  connect <g> <n>    Connect from root",
+		"  connect <g> <n>    Connect from root: g is a TOP-LEVEL group index",
+		"                     only (see \"Groups\" at the vantyx:/ prompt). For a",
+		"                     server nested deeper (e.g. group/sub/sub2), cd into",
+		"                     each subgroup in turn, then run connect <n> there.",
 		"  ls                 Reload and refresh header",
 		"  list               Show active sessions below header",
 		"  resume [n]         Attach to background session",
@@ -146,12 +149,11 @@ func (s *Server) runMenu(ctx context.Context, channel ssh.Channel, userID string
 	redrawScreen := func(extraLines []string) {
 		_, _ = wr.Write([]byte(cliClearScreen))
 		sessionLines := formatCLIActiveSessionLines(activeSessionsForScope(), cliSessionMgr)
-		combined := append(sessionLines, extraLines...)
 		_ = writeCLIScreen(wr, cliScreenState{
 			AllGroups: allGroups,
 			Location:  navLoc,
 			Cols:      screenCols,
-		}, combined)
+		}, sessionLines, extraLines)
 	}
 
 	getPrompt := func() string {
@@ -633,6 +635,7 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 		}
 		var tee io.Writer
 		var stdinRecorder sshproxy.StdinRecorder
+		var resizeRecorder sshproxy.ResizeRecorder
 		if s.recordingDir != "" && s.recordingStore != nil {
 			_ = os.MkdirAll(s.recordingDir, 0750)
 			safeName := strings.ReplaceAll(string(sessionID), ":", "-")
@@ -651,6 +654,7 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 				asc := recording.NewAsciinemaWriter(f, sessionCols, sessionRows)
 				tee = asc
 				stdinRecorder = asc
+				resizeRecorder = asc
 				startedAt := time.Now().UTC().Format("2006-01-02 15:04:05")
 				if insertErr := s.recordingStore.InsertRecording(bridgeCtx, string(sessionID), userID, string(target.ID), string(sessionID), "cli", castPath, startedAt, sessionName, sessionDesc); insertErr != nil {
 					slog.Warn("CLI recording insert failed", "session_id", sessionID, "error", insertErr)
@@ -677,10 +681,10 @@ func (s *Server) handleConnectCommand(wr io.Writer, inputCh <-chan byte, args []
 			if s.sharingBridges != nil {
 				sink = telnetBridgeSinkCLI{id: sessionID, reg: s.sharingBridges}
 			}
-			bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, endMsg, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, ownerAttach, touch, tee, telStdin, sessionCols, sessionRows, bridgeResize, sink)
+			bridgeErr = telnetproxy.RunBridgeDetachable(bridgeCtx, endMsg, target.Host, target.Port, targetUser, targetPass, sess.Output, sess.AttachCh, ownerAttach, touch, tee, telStdin, sessionCols, sessionRows, bridgeResize, sink, resizeRecorder)
 		default:
 			endMsg := "session_ended: SSH session closed"
-			opts := []sshproxy.BridgeOption{sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint)}
+			opts := []sshproxy.BridgeOption{sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint), sshproxy.WithResizeRecorder(resizeRecorder)}
 			if target.SSHHostKeyInsecureSkipVerify {
 				opts = append(opts, sshproxy.WithTargetInsecureSkipVerify())
 			}

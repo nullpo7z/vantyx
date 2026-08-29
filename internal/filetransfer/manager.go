@@ -285,17 +285,40 @@ func (m *Manager) Cancel(id, userID string) error {
 	return nil
 }
 
+// isTerminalState reports whether state is a final job state. Once a job
+// reaches one, Cancel() and SetState() both treat it as sticky: nothing
+// transitions it further.
+func isTerminalState(state State) bool {
+	switch state {
+	case StateCompleted, StateFailed, StateCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 // SetState updates job state and optional error message and persists the change.
 // On a successful completion the in-memory progress is also normalised to total
 // (since progressCopy may have written `progress == total` after the throttled
 // DB write, leaving the DB row stuck at a sub-100% value). The latest progress
 // is then flushed to the DB unconditionally so history rows are consistent.
+//
+// No-ops if the job is already in a terminal state: Cancel() writes
+// StateCancelled directly to the store without waiting for the transfer
+// goroutine to observe its cancel signal, so that goroutine can still be
+// mid-flight when it finishes its own I/O and calls SetState(StateCompleted,
+// ...) afterward. Without this guard, "last write wins" could silently
+// flip a job the user explicitly cancelled back to Completed.
 func (j *Job) SetState(state State, errMsg string) {
 	if j == nil || j.mgr == nil {
 		return
 	}
 	now := j.mgr.now()
 	j.mu.Lock()
+	if isTerminalState(j.State) {
+		j.mu.Unlock()
+		return
+	}
 	j.State = state
 	j.Error = errMsg
 	j.UpdatedAt = now

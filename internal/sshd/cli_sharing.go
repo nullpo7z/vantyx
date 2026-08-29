@@ -46,6 +46,7 @@ func (s *Server) sharingService() *sharing.Service {
 	return &sharing.Service{
 		Store:    s.sharingStore,
 		Registry: s.sharingRegistry,
+		Access:   s.userCanAccessTarget,
 		Bridges: func(sessionID string) (sharing.BridgeControl, bool) {
 			if s.sharingBridges == nil {
 				return nil, false
@@ -53,6 +54,27 @@ func (s *Server) sharingService() *sharing.Service {
 			return s.sharingBridges.Get(session.ID(sessionID))
 		},
 	}
+}
+
+// userCanAccessTarget reports whether userID may reach targetID via their
+// group/tag ACL grants. It mirrors the HTTP layer's check of the same
+// name so the CLI collaborative-join path enforces the identical target
+// access control (a valid invitation token is never sufficient on its
+// own). Fails closed when the group store is unavailable.
+func (s *Server) userCanAccessTarget(ctx context.Context, userID, targetID string) (bool, error) {
+	if s.groupStore == nil {
+		return false, nil
+	}
+	ids, err := s.groupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range ids {
+		if string(id) == targetID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *Server) listJoinableSessions(userID string) []*session.Session {
@@ -163,6 +185,17 @@ func (s *Server) handleWatchCommand(wr io.Writer, inputCh <-chan byte, args []st
 		return status
 	}
 	termSess := joinable[n-1]
+	// Defense-in-depth: re-check target ACL at attach time, mirroring the
+	// HTTP viewer-attach path. Room participation is stored in-memory, so
+	// a user who has lost target access since joining must not be able to
+	// (re-)attach to the live session.
+	if ok, err := s.userCanAccessTarget(context.Background(), userID, termSess.TargetID); err != nil {
+		add(fmt.Sprintf("Error: %v", err))
+		return status
+	} else if !ok {
+		add("You no longer have access to this target.")
+		return status
+	}
 	proto := access.ProtocolSSH
 	if t, err := s.targetStore.Get(context.Background(), access.TargetID(termSess.TargetID)); err == nil {
 		proto = t.Protocol

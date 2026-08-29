@@ -51,7 +51,9 @@ func TestManager_StartAndStopSession(t *testing.T) {
 		t.Fatalf("ActiveSessionsForUser(alice) = %d, want 0", len(active))
 	}
 
-	m.Stop("s1")
+	if clean := m.Stop("s1"); !clean {
+		t.Fatalf("expected clean stop, got false")
+	}
 
 	if got := len(m.ActiveIDs()); got != 0 {
 		t.Fatalf("expected 0 active sessions after stop, got %d", got)
@@ -105,10 +107,43 @@ func TestManager_TouchUpdatesLastSeen(t *testing.T) {
 func TestManager_StopUnknownIDNoOp(t *testing.T) {
 	m := NewManager()
 	// Stop with non-existent ID must not block or panic.
-	m.Stop("nonexistent")
+	if clean := m.Stop("nonexistent"); !clean {
+		t.Fatalf("expected Stop on an unknown ID to report clean (true), got false")
+	}
 	if n := len(m.ActiveIDs()); n != 0 {
 		t.Fatalf("expected 0 active sessions, got %d", n)
 	}
+}
+
+// TestManager_StopReportsFalseWhenGoroutineHangs guards the fix for a
+// session goroutine that doesn't react to context cancellation (e.g. its
+// own cleanup call hung): Stop() must still force-remove the session
+// after stopTimeout instead of blocking forever, and must report false
+// so callers can audit/alert on the leak instead of it staying silent.
+func TestManager_StopReportsFalseWhenGoroutineHangs(t *testing.T) {
+	m := NewManager()
+	m.stopTimeout = 20 * time.Millisecond
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	_, err := m.Start("hung", StartOptions{}, func(ctx context.Context, _ *Session) {
+		close(started)
+		// Deliberately ignores ctx.Done() to simulate a goroutine
+		// blocked in a call that isn't context-aware.
+		<-release
+	})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	<-started
+
+	if clean := m.Stop("hung"); clean {
+		t.Fatalf("expected Stop to report false for a goroutine that outlives stopTimeout")
+	}
+	if n := len(m.ActiveIDs()); n != 0 {
+		t.Fatalf("expected session removed from the active set despite the goroutine still running, got %d active", n)
+	}
+	close(release) // let the leaked goroutine finish so the test doesn't leak past its own lifetime
 }
 
 func TestManager_IsIdle(t *testing.T) {

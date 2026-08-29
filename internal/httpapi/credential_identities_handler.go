@@ -175,6 +175,8 @@ func (a *App) handleCredentialIdentitiesDelete(w http.ResponseWriter, r *http.Re
 		switch err {
 		case access.ErrCredentialIdentityNotFound:
 			writeJSONErrorKey(w, r, "credentialIdentities.notFound", http.StatusNotFound)
+		case access.ErrCredentialIdentityInUse:
+			writeJSONErrorKey(w, r, "credentialIdentities.inUse", http.StatusConflict)
 		default:
 			writeInternalError(w, err)
 		}

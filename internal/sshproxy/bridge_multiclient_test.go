@@ -211,6 +211,74 @@ func TestBridgeSetWriterTransfersControl(t *testing.T) {
 	}
 }
 
+// TestBridgeSecondWriterAttachDemotesFirst covers the case that
+// motivated demoteOtherWritersLocked: a second client attaches with
+// Mode: AttachModeWriter (e.g. the same session resumed from the SSH
+// CLI console while it's already open in a browser tab, or the
+// reverse) without going through the explicit SetWriter promotion
+// flow used by the sharing/invite feature. Only the most recently
+// attached writer's stdin may reach the target; the first must be
+// silently downgraded to read-only, not left able to write
+// concurrently.
+func TestBridgeSecondWriterAttachDemotesFirst(t *testing.T) {
+	server, err := mock.NewSSHEchoServer("test", "test")
+	if err != nil {
+		t.Fatalf("NewSSHEchoServer: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Close()
+
+	output := session.NewRingBuffer(8192)
+	attachCh := make(chan session.AttachReq, 4)
+
+	first := newRecordingStreamAttach("first")
+	second := newRecordingStreamAttach("second")
+
+	bridgeErrCh := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		bridgeErrCh <- RunBridgeDetachable(ctx, "session_ended: SSH session closed",
+			"127.0.0.1", server.Port(), "test", "test", "", "",
+			output, attachCh,
+			session.AttachReq{Conn: first.toStreamAttach(), UserID: "alice", Mode: session.AttachModeWriter},
+			nil, nil, nil, 0, 0, nil)
+	}()
+
+	select {
+	case <-first.starter:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first attach not started")
+	}
+
+	// Second client attaches as writer too -- plain reattach, not a
+	// SetWriter promotion (mirrors SSH-console + browser both resuming
+	// the same session).
+	attachCh <- session.AttachReq{Conn: second.toStreamAttach(), UserID: "alice", Mode: session.AttachModeWriter}
+	select {
+	case <-second.starter:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second attach not started")
+	}
+
+	first.stdinIn <- []byte("from-first-writer\n")
+	second.stdinIn <- []byte("from-second-writer\n")
+
+	deadline := time.After(3 * time.Second)
+	for !bytes.Contains(second.written.Bytes(), []byte("from-second-writer")) {
+		select {
+		case <-deadline:
+			t.Fatalf("second (current) writer's input did not echo back: %q", second.written.String())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if bytes.Contains(second.written.Bytes(), []byte("from-first-writer")) {
+		t.Fatalf("first writer must be demoted once the second attaches: %q", second.written.String())
+	}
+}
+
 // TestBridgeDetachUser closes only the targeted user's connection.
 func TestBridgeDetachUser(t *testing.T) {
 	server, err := mock.NewSSHEchoServer("test", "test")

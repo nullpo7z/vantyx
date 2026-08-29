@@ -303,3 +303,60 @@ func TestHandleFileTransferEvents_SendsInitialSnapshot(t *testing.T) {
 		t.Fatalf("expected initial snapshot in body, got: %s", body)
 	}
 }
+
+func TestTFTPWriteWindowEventBroker_Publish(t *testing.T) {
+	b := NewTFTPWriteWindowEventBroker()
+	ch := b.Subscribe("t1")
+	defer b.Unsubscribe(ch)
+
+	b.Publish("t1", []byte(`{"open":true,"target_id":"t1"}`))
+
+	select {
+	case msg := <-ch:
+		if !strings.Contains(string(msg), `"target_id":"t1"`) {
+			t.Fatalf("msg=%s", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for publish")
+	}
+}
+
+func TestTFTPWriteWindowEventBroker_FiltersByTarget(t *testing.T) {
+	b := NewTFTPWriteWindowEventBroker()
+	chA := b.Subscribe("target-a")
+	chB := b.Subscribe("target-b")
+	defer b.Unsubscribe(chA)
+	defer b.Unsubscribe(chB)
+
+	b.Publish("target-a", []byte(`{"open":true,"target_id":"target-a"}`))
+
+	select {
+	case <-chA:
+	case <-time.After(time.Second):
+		t.Fatal("target-a subscriber should receive its own target's events")
+	}
+	select {
+	case msg := <-chB:
+		t.Fatalf("target-b subscriber must not receive target-a events: %s", msg)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestTFTPWriteWindowEventBroker_DropsSlowSubscriber(t *testing.T) {
+	b := NewTFTPWriteWindowEventBroker()
+	slow := b.Subscribe("t1")
+	for i := 0; i < 8; i++ {
+		slow <- []byte("fill")
+	}
+	fast := b.Subscribe("t1")
+	defer b.Unsubscribe(fast)
+
+	// Must not block despite the full slow subscriber channel.
+	b.Publish("t1", []byte(`{"open":false,"target_id":"t1"}`))
+
+	select {
+	case <-fast:
+	case <-time.After(time.Second):
+		t.Fatal("fast subscriber should still receive the publish")
+	}
+}

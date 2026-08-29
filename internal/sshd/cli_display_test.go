@@ -38,7 +38,7 @@ func TestWriteCLIScreen_rootHostsHint(t *testing.T) {
 		Location: cliNavLocation{},
 		Cols:     120,
 	}
-	if err := writeCLIScreen(&buf, st, nil); err != nil {
+	if err := writeCLIScreen(&buf, st, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -71,7 +71,7 @@ func TestWriteCLIScreen_inGroupShowsHosts(t *testing.T) {
 		Location: cliNavLocation{GroupPath: "g1"},
 		Cols:     120,
 	}
-	if err := writeCLIScreen(&buf, st, nil); err != nil {
+	if err := writeCLIScreen(&buf, st, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -95,7 +95,7 @@ func TestWriteCLIScreen_emptyGroupStillListed(t *testing.T) {
 		Location: cliNavLocation{},
 		Cols:     120,
 	}
-	if err := writeCLIScreen(&buf, st, nil); err != nil {
+	if err := writeCLIScreen(&buf, st, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "1: Lab") {

@@ -205,6 +205,10 @@ func mapSharingJoinError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONErrorKey(w, r, "sharing.userKicked", http.StatusForbidden)
 	case errors.Is(err, sharing.ErrInvitationNotFound):
 		writeJSONErrorKey(w, r, "sharing.invitationNotFound", http.StatusNotFound)
+	case errors.Is(err, sharing.ErrInviterNoTargetAccess):
+		writeJSONErrorKey(w, r, "sharing.invitationStaleAccess", http.StatusForbidden)
+	case errors.Is(err, sharing.ErrJoinerNoTargetAccess):
+		writeJSONErrorKey(w, r, "sharing.inviteeNoTargetAccess", http.StatusForbidden)
 	default:
 		writeInternalError(w, err)
 	}

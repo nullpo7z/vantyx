@@ -24,7 +24,7 @@ info:
     - SSH ホスト鍵 TOFU: POST /api/targets/probe-host-key、PUT /api/targets/{id}/ssh-host-key。接続時は WebSocket フレーム host_key_unknown / host_key_mismatch。
     - VNC WebSocket (GET /ws/vnc)。認証後、protocol=vnc のターゲットへ noVNC 用に RFB をブリッジ。クエリ target_id 必須。
     - ファイル転送: GET /api/targets/{target_id}/files（一覧・クエリ path）、GET /api/targets/{target_id}/files/download（ダウンロード・クエリ path）、POST /api/targets/{target_id}/files/upload（multipart: path, file）、DELETE /api/targets/{target_id}/files（削除・クエリ path）。SSH ターゲットは SFTP（保存済み認証必須）、リモート TFTP ターゲットは TFTP クライアント（認証不要・一覧・削除未対応）。
-    - 組み込み TFTP サーバー（Vantyx 内蔵）: GET /api/tftp/targets/{target_id}/files/*。protocol=tftp のターゲット向け。ローカルディスク（VANTYX_TFTP_ROOT）上のファイルを操作。
+    - 組み込み TFTP サーバー（Vantyx 内蔵）: GET /api/tftp/targets/{target_id}/files/*。protocol=tftp のターゲット向け。ローカルディスク（VANTYX_TFTP_ROOT）上のファイルを操作。実際の TFTP プロトコル経由の書き込み（WRQ）は POST/DELETE /api/tftp/targets/{target_id}/write-window で開閉する時限ウィンドウが無いと拒否される（送信元 IP は偽装可能なため、IP 一致だけでは許可しない）。
     - バックグラウンドファイル転送: GET /api/file-transfers（自分のジョブ一覧）、GET /api/file-transfers/{transfer_id}（状態）、DELETE /api/file-transfers/{transfer_id}（キャンセル）、GET /api/file-transfers/{transfer_id}/content（完了したダウンロードの取得）、POST /api/file-transfers/download（JSON: backend, target_id, path → 202）、POST /api/file-transfers/upload（multipart: backend, target_id, path, file → 202）。backend は remote（SFTP/FTP/リモート TFTP）または tftp_server（組み込み TFTP）。ジョブは SQLite（file_transfer_jobs）に永続化。単一ファイル上限 64MB。アップロードは receiving（ブラウザ→Vantyx 受信）中に離脱すると失敗しうる。
     - 録画: GET /api/recordings（メタデータ一覧。クエリ target_id でフィルタ可）。GET /api/recordings/{recording_id}/file でファイル取得。クエリ format=cast|gif|mp4（省略時 cast）。cast=Asciinema 形式またはネイティブ MP4。gif/mp4 変換は 202 Accepted でバックグラウンドキュー（GET /api/recordings/exports で進捗確認）。RDP/VNC 画面録画は MP4（H.264）で保存。ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象。
     - CLI SSH ゲートウェイ: VANTYX_SSH_LISTEN で有効化。ssh user@vantyx でログイン後、メニューからターゲット選択してプロキシ接続。VANTYX_RECORDINGS_DIR 設定時は CLI 接続も録画対象。
@@ -1398,7 +1398,10 @@ paths:
   /api/targets/{target_id}:
     put:
       summary: ターゲット（ホスト）の更新
-      description: 認証済みユーザーが、アクセス権のあるターゲットの名前・ホスト・ポート・プロトコル・パス・SSH認証情報を更新します。target_id は変更されません。
+      description: |
+        認証済みユーザーが、アクセス権のあるターゲットの名前・ホスト・ポート・プロトコル・パス・SSH認証情報を更新します。target_id は変更されません。
+        group_id を指定すると、ターゲットの所属アクセスグループも変更します（省略時は変更なし）。移動先グループは
+        実在し、かつ操作者自身がそのグループへのアクセス権を持っている必要があります（作成時と同じ制約）。
       security:
         - cookieAuth: []
       parameters:
@@ -1430,6 +1433,9 @@ paths:
                   default: ssh
                 path:
                   type: string
+                group_id:
+                  type: string
+                  description: 省略で変更なし。指定する場合は空文字不可（実在するグループで、かつ操作者自身がアクセス権を持つこと）。
                 credential_identity_id:
                   type: string
                 ssh_key_id:
@@ -1950,6 +1956,143 @@ paths:
         '400':
         '401':
         '403':
+
+  /api/tftp/targets/{target_id}/write-window:
+    get:
+      summary: 組み込み TFTP サーバー — 書き込みウィンドウの状態を取得
+      description: |
+        対象ターゲットの書き込みウィンドウが現在開いているかを返します。組み込み TFTP
+        サーバーが起動していない場合も含め、常に 200 で open:false/true を返します
+        （状態照会が「起動していないので不明」を返すことはありません）。単発の状態確認用。
+        フロントエンドは通常、下記の SSE エンドポイント（GET .../write-window/events）を
+        購読して初期状態とその後の変化を受け取ります。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 現在の状態
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  open:
+                    type: boolean
+                  target_id:
+                    type: string
+                  client_ip:
+                    type: string
+                    description: open=true の場合のみ含まれる。
+                  expires_at:
+                    type: string
+                    format: date-time
+                    description: open=true の場合のみ含まれる。
+        '400':
+        '401':
+        '403':
+    post:
+      summary: 組み込み TFTP サーバー — 書き込みウィンドウを開く
+      description: |
+        組み込み TFTP サーバーは UDP の送信元 IP が容易に偽装できるため（CWE-290）、
+        実際の TFTP プロトコル経由の書き込み（WRQ）はデフォルトで全て拒否されます。
+        このエンドポイントは、対象ターゲットに設定された Host（送信元 IP として一致が
+        必須。他の IP からの WRQ はこのウィンドウの有無にかかわらず常に拒否される）
+        からの書き込みのみを一定時間（デフォルト 5 分、最大 30 分）許可する時限ウィンドウを
+        開きます。許可対象の IP はターゲット設定から自動的に決まり、リクエストボディでは
+        指定できません。同一ターゲットへの既存ウィンドウは置き換えられます。読み取り（RRQ）
+        はこのウィンドウの対象外です（`VANTYX_TFTP_ALLOW_READ_WITHOUT_WINDOW` を参照）。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ttl_seconds:
+                  type: integer
+                  description: ウィンドウの有効時間（秒）。省略時は 300 秒、最大 1800 秒。
+      responses:
+        '200':
+          description: ウィンドウを開いた
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  target_id:
+                    type: string
+                  client_ip:
+                    type: string
+                  expires_at:
+                    type: string
+                    format: date-time
+        '400':
+        '401':
+        '403':
+        '503':
+          description: 組み込み TFTP サーバーが起動していない（有効な TFTP ターゲットが存在しない）
+    delete:
+      summary: 組み込み TFTP サーバー — 書き込みウィンドウを閉じる
+      description: 対象ターゲットの開いている書き込みウィンドウを即座に無効化します。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: ウィンドウを閉じた（元々開いていなくても成功）
+        '401':
+        '403':
+        '503':
+          description: 組み込み TFTP サーバーが起動していない（有効な TFTP ターゲットが存在しない）
+
+  /api/tftp/targets/{target_id}/write-window/events:
+    get:
+      summary: 組み込み TFTP サーバー — 書き込みウィンドウの状態変化を購読（SSE）
+      description: |
+        接続直後に現在の状態を1件送信し、以降は open/close（同一ターゲットへの
+        再オープンによる TTL リセットを含む）が起きるたびに、その操作を行った
+        タブ/オペレーターに関わらず配信します。複数のタブや複数の操作者が同じ
+        ターゲットの TFTP コンソールページを開いている場合、全員に即座に反映されます
+        （ポーリング不要）。`Content-Type: text/event-stream`。25 秒ごとにコメント行
+        (`: keep-alive`) を送信して、アイドル時にリバースプロキシのタイムアウトで
+        切断されるのを防ぎます。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: |
+            `text/event-stream`。各メッセージの `data:` は GET .../write-window と
+            同じ JSON 形式（open/target_id/client_ip?/expires_at?）。
+        '400':
+        '401':
+        '403':
+        '503':
+          description: SSE ブローカーが利用できない（通常発生しない）
 
   /api/groups:
     get:

@@ -56,6 +56,7 @@ var Messages = map[string]string{
 	"auth.sshKeyAuthorizedKeyReq": "authorized_key is required",
 	"auth.sshKeyIDInvalid":        "invalid key_id",
 	"auth.unsupportedLocale":      "unsupported locale",
+	"auth.unsupportedTimezone":    "unsupported timezone",
 	"auth.passwordChangeRequired": "password change required before using this feature",
 
 	// Users (admin management).
@@ -68,6 +69,7 @@ var Messages = map[string]string{
 	// Groups.
 	"groups.idRequired":             "group_id required",
 	"groups.notFound":               "group not found",
+	"groups.notEmpty":               "This access group still has servers or sub-groups in it and can't be deleted. Move or remove them first.",
 	"groups.nameRequired":           "name is required",
 	"groups.userIDRequired":         "user_id is required",
 	"groups.groupAndUserIDRequired": "group_id and user_id required",
@@ -157,20 +159,23 @@ var Messages = map[string]string{
 	"sshKeys.idRequired":                    "key_id required",
 	"sshKeys.notFound":                      "ssh key not found",
 	"sshKeys.exists":                        "ssh key already exists",
-	"sshKeys.inUse":                         "ssh key is referenced by an identity",
+	"sshKeys.inUse":                         "ssh key is referenced by an identity or a server",
 	"sshKeys.privateKeyRequired":            "private key required",
+	"sshKeys.unsupportedKeyType":            "unsupported key type",
 	"credentialIdentities.idRequired":       "identity_id required",
 	"credentialIdentities.notFound":         "identity not found",
+	"credentialIdentities.inUse":            "identity is referenced by a server",
 	"credentialIdentities.exists":           "identity already exists",
 	"credentialIdentities.usernameRequired": "username required",
 	"credentialIdentities.authRequired":     "password and/or ssh key required",
 
 	// RDP / VNC / TFTP capability checks.
-	"rdp.notRDP":         "target is not an RDP server",
-	"rdp.startFailed":    "failed to start RDP session",
-	"rdp.bridgeFailed":   "failed to start RDP bridge",
-	"vnc.notVNC":         "target is not a VNC server",
-	"tftp.notTFTPServer": "target is not a TFTP server",
+	"rdp.notRDP":           "target is not an RDP server",
+	"rdp.startFailed":      "failed to start RDP session",
+	"rdp.bridgeFailed":     "failed to start RDP bridge",
+	"vnc.notVNC":           "target is not a VNC server",
+	"tftp.notTFTPServer":   "target is not a TFTP server",
+	"tftp.targetHostNotIP": "target host is not a literal IP address; TFTP write windows require an IP host",
 
 	// File operations (SFTP / FTP / TFTP).
 	"files.transferOnlySSHFTPTFTP":   "file transfer only for SSH, FTP, or TFTP targets",
@@ -211,6 +216,10 @@ var Messages = map[string]string{
 	"validation.targetIDEmpty":   "target id must not be empty",
 	"validation.targetIDTooLong": "target id too long",
 	"validation.targetIDInvalid": "target id contains invalid characters",
+	"validation.sshKeyIDTooLong": "key id too long",
+	"validation.sshKeyIDInvalid": "key id contains invalid characters",
+	"validation.credentialIdentityIDTooLong": "identity id too long",
+	"validation.credentialIdentityIDInvalid": "identity id contains invalid characters",
 	"validation.nameEmpty":       "name must not be empty",
 	"validation.nameTooLong":     "name too long",
 	"validation.nameInvalid":     "name contains invalid characters",

@@ -3,6 +3,8 @@ package rdpvnc
 import (
 	"context"
 	"net"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -186,6 +188,30 @@ func TestManagerRegisterSessionGetListRemove(t *testing.T) {
 	}
 	if _, ok := m.GetSessionByKey("u:t1"); ok {
 		t.Fatal("expected key mapping removed")
+	}
+}
+
+func TestSessionStartBridgeProxyOnce(t *testing.T) {
+	m := NewManager()
+	done := make(chan struct{})
+	_, cancel := context.WithCancel(context.Background())
+	b := &Bridge{done: done, cancel: cancel, vncPort: 5902}
+	s := m.RegisterSession("u:t3", "sid3", "u", "t3", "T3", 1024, 768, b)
+
+	var calls int32
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.StartBridgeProxyOnce(func() {
+				atomic.AddInt32(&calls, 1)
+			})
+		}()
+	}
+	wg.Wait()
+	if calls != 1 {
+		t.Fatalf("expected StartBridgeProxyOnce to run exactly once across concurrent attaches, got %d calls", calls)
 	}
 }
 

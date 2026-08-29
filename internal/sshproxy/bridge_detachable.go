@@ -41,6 +41,7 @@ type sshDetachableBridge struct {
 	closeStdin     func()
 	attachCh       <-chan session.AttachReq
 	externalResize <-chan TerminalSize
+	resizeRecorder ResizeRecorder
 }
 
 func newSSHDetachableBridge(
@@ -54,6 +55,7 @@ func newSSHDetachableBridge(
 	stdinRecorder StdinRecorder,
 	attachCh <-chan session.AttachReq,
 	externalResize <-chan TerminalSize,
+	resizeRecorder ResizeRecorder,
 ) *sshDetachableBridge {
 	stdinCh := make(chan []byte, 256)
 	var stdinCloseOnce sync.Once
@@ -74,6 +76,7 @@ func newSSHDetachableBridge(
 		closeStdin:     closeStdin,
 		attachCh:       attachCh,
 		externalResize: externalResize,
+		resizeRecorder: resizeRecorder,
 	}
 	return b
 }
@@ -186,6 +189,21 @@ func (b *sshDetachableBridge) SetWriter(userID string) {
 	}
 }
 
+// demoteOtherWritersLocked downgrades every currently-attached client
+// except newEntry to read-only. Called whenever a new writer attaches
+// (browser or SSH console) so the single-active-writer invariant holds
+// even outside the explicit sharing/invite flow -- e.g. resuming the
+// same session from the SSH CLI while it's already open in a browser
+// tab (or vice versa) must not let both sides drive stdin at once.
+// Caller must hold clientMu.
+func (b *sshDetachableBridge) demoteOtherWritersLocked(newEntry *clientEntry) {
+	for c := range b.clients {
+		if c != newEntry {
+			c.canWrite = false
+		}
+	}
+}
+
 // DetachUser closes every attached client owned by userID.
 func (b *sshDetachableBridge) DetachUser(userID string) {
 	if userID == "" {
@@ -222,6 +240,9 @@ func (b *sshDetachableBridge) runExternalResize() {
 				}
 				if sz.Cols > 0 && sz.Rows > 0 {
 					_ = b.windowChange(sz.Cols, sz.Rows)
+					if b.resizeRecorder != nil {
+						b.resizeRecorder.RecordResize(sz.Cols, sz.Rows)
+					}
 				}
 			}
 		}
@@ -233,6 +254,9 @@ func (b *sshDetachableBridge) attachWebSocket(conn *websocket.Conn, mode session
 	w := &wsWriterAdapter{conn}
 	entry := &clientEntry{w: w, canWrite: mode != session.AttachModeViewer, userID: userID}
 	b.clientMu.Lock()
+	if entry.canWrite {
+		b.demoteOtherWritersLocked(entry)
+	}
 	b.clients[entry] = struct{}{}
 	b.clientMu.Unlock()
 	replay := b.output.Bytes()
@@ -282,6 +306,9 @@ func (b *sshDetachableBridge) readWebSocket(entry *clientEntry, conn *websocket.
 				b.clientMu.Unlock()
 				if canWrite {
 					_ = b.windowChange(rm.Cols, rm.Rows)
+					if b.resizeRecorder != nil {
+						b.resizeRecorder.RecordResize(rm.Cols, rm.Rows)
+					}
 				}
 				continue
 			}
@@ -307,6 +334,9 @@ func (b *sshDetachableBridge) readWebSocket(entry *clientEntry, conn *websocket.
 func (b *sshDetachableBridge) attachStream(sa *StreamAttach, mode session.AttachMode, userID string) {
 	entry := &clientEntry{w: sa, canWrite: mode != session.AttachModeViewer, userID: userID}
 	b.clientMu.Lock()
+	if entry.canWrite {
+		b.demoteOtherWritersLocked(entry)
+	}
 	b.clients[entry] = struct{}{}
 	b.clientMu.Unlock()
 	replay := b.output.Bytes()

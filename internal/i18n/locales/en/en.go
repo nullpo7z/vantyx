@@ -66,6 +66,10 @@ var Messages = map[string]string{
 	"auth.passwordChangeRequired": "password change required before using this feature",
 
 	// Users (admin management).
+	"auth.webauthnInvalid":            "the passkey response could not be verified",
+	"auth.webauthnNoPending":          "no passkey registration in progress; start again",
+	"auth.webauthnNotEnabled":         "no passkey registered for this account",
+	"auth.webauthnNotFound":           "passkey not found",
 	"auth.apiTokenReadOnly":           "this API token is read-only",
 	"auth.apiTokenNotAllowedHere":     "API tokens cannot be used for this endpoint; sign in with a browser session",
 	"auth.apiTokenNameRequired":       "token name is required (max 100 characters)",

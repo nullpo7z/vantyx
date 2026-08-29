@@ -58,6 +58,10 @@ var Messages = map[string]string{
 	"auth.passwordChangeRequired": "この機能を利用する前にパスワードを変更してください",
 
 	// Users (admin management).
+	"auth.webauthnInvalid":            "パスキーの応答を検証できませんでした",
+	"auth.webauthnNoPending":          "パスキーの登録が開始されていません。最初からやり直してください",
+	"auth.webauthnNotEnabled":         "このアカウントにはパスキーが登録されていません",
+	"auth.webauthnNotFound":           "パスキーが見つかりません",
 	"auth.apiTokenReadOnly":           "この API トークンは読み取り専用です",
 	"auth.apiTokenNotAllowedHere":     "このエンドポイントは API トークンでは利用できません。ブラウザでログインしてください",
 	"auth.apiTokenNameRequired":       "トークン名は必須です（最大 100 文字）",

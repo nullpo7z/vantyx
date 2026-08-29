@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-webauthn/webauthn/webauthn"
 	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/nullpo7z/vantyx/internal/auth"
@@ -31,6 +32,9 @@ type mfaPending struct {
 	ip       string
 	expires  time.Time
 	failures int
+	// webauthn holds the assertion challenge issued by
+	// /api/login/webauthn/begin for this login attempt.
+	webauthn *webauthn.SessionData
 }
 
 type mfaPendingStore struct {
@@ -69,6 +73,14 @@ func (s *mfaPendingStore) get(tok string) (*mfaPending, bool) {
 		return nil, false
 	}
 	return p, true
+}
+
+func (s *mfaPendingStore) setWebAuthnSession(tok string, sd *webauthn.SessionData) {
+	s.mu.Lock()
+	if p, ok := s.items[tok]; ok {
+		p.webauthn = sd
+	}
+	s.mu.Unlock()
 }
 
 func (s *mfaPendingStore) consume(tok string) {
@@ -369,17 +381,26 @@ func (a *App) handleAdminResetTOTP(w http.ResponseWriter, r *http.Request) {
 		writeJSONErrorKey(w, r, "common.serviceUnavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if err := a.TOTPStore.Disable(r.Context(), target); err != nil {
-		if errors.Is(err, auth.ErrTOTPNotEnabled) {
-			writeJSONErrorKey(w, r, "auth.totpNotEnabled", http.StatusNotFound)
+	totpErr := a.TOTPStore.Disable(r.Context(), target)
+	var passkeys int64
+	if a.WebAuthn != nil {
+		passkeys, _ = a.WebAuthn.DeleteAllForUser(r.Context(), target)
+	}
+	if totpErr != nil {
+		if errors.Is(totpErr, auth.ErrTOTPNotEnabled) {
+			if passkeys == 0 {
+				writeJSONErrorKey(w, r, "auth.totpNotEnabled", http.StatusNotFound)
+				return
+			}
+		} else {
+			writeInternalError(w, totpErr)
 			return
 		}
-		writeInternalError(w, err)
-		return
 	}
 	audit("totp_reset_by_admin", auditFields{
-		"user_id":   a.currentUserID(r),
-		"target_id": target,
+		"passkeys_removed": passkeys,
+		"user_id":          a.currentUserID(r),
+		"target_id":        target,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }

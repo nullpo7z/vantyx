@@ -55,6 +55,8 @@ eight single-use recovery codes that are shown once.
   (no password or keyboard-interactive auth), so there is no password
   entry point for TOTP to protect. Register keys under **Users → Public
   keys**.
+- **Passkeys** (WebAuthn, see below) are an alternative second factor; a
+  user may have TOTP, passkeys, or both.
 - **SSO logins** (below) are not challenged for a local TOTP — the IdP owns
   MFA for those users.
 - Users disable it with their password (`DELETE /api/me/totp`); admins can
@@ -63,6 +65,28 @@ eight single-use recovery codes that are shown once.
 - Secrets are stored AES-256-GCM encrypted with
   `VANTYX_SSH_PASSWORD_ENCRYPTION_KEY`; recovery codes are stored as SHA-256
   digests.
+
+### Passkeys / security keys (WebAuthn)
+
+Users register passkeys under **Account settings → Passkeys / security
+keys** (`POST /api/me/webauthn/register/begin|finish`, `GET/DELETE
+/api/me/webauthn[/{id}]`). A registered passkey makes password logins
+two-step exactly like TOTP: `POST /api/login` answers `mfa_required` with
+`methods` containing `webauthn` (and `totp` when both are set up), and the
+client completes with `POST /api/login/webauthn/begin` → browser
+`navigator.credentials.get()` → `POST /api/login/webauthn/finish`. Admin
+**Reset 2FA** clears passkeys together with TOTP. WebAuthn needs HTTPS (or
+`localhost`).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_WEBAUTHN_RP_ID` | request host | Relying-party ID (the site's registrable domain, e.g. `vantyx.example`). Set it behind a reverse proxy or when several hostnames serve the UI; it must match what users have in the address bar. |
+| `VANTYX_WEBAUTHN_ORIGINS` | `<scheme>://<host>` of the request | Comma-separated allowed origins for the ceremonies. |
+| `VANTYX_WEBAUTHN_RP_NAME` | `Vantyx` | Name shown by the authenticator prompt. |
+
+Audit events: `passkey_registered`, `passkey_register_failed`,
+`passkey_deleted`, `login_webauthn_ok`, `login_webauthn_failed`,
+`passkey_clone_warning`.
 
 ### API tokens (automation)
 

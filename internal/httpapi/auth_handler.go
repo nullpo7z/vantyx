@@ -33,8 +33,9 @@ type loginResponse struct {
 // meResponse extends the login payload with what the account page shows.
 type meResponse struct {
 	loginResponse
-	Tags   []string  `json:"tags"`
-	Groups []meGroup `json:"groups"`
+	Tags     []string  `json:"tags"`
+	Groups   []meGroup `json:"groups"`
+	Passkeys int       `json:"passkeys"`
 }
 
 type meGroup struct {
@@ -138,16 +139,26 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Second factor: when the account has TOTP enabled the password alone
 	// does not issue a session. Hand back a short-lived challenge token
 	// that POST /api/login/totp completes (see auth_totp.go).
-	if a.TOTPStore != nil && a.mfaPending != nil && a.TOTPStore.Enabled(r.Context(), u.ID) {
+	totpOn := a.TOTPStore != nil && a.TOTPStore.Enabled(r.Context(), u.ID)
+	passkeysOn := a.hasPasskeys(r, u.ID)
+	if a.mfaPending != nil && (totpOn || passkeysOn) {
 		tok, err := a.mfaPending.issue(u.ID, u.Username, ip)
 		if err != nil {
 			writeInternalError(w, err)
 			return
 		}
-		audit("login_mfa_required", auditFields{"user_id": u.ID})
+		methods := []string{}
+		if totpOn {
+			methods = append(methods, "totp")
+		}
+		if passkeysOn {
+			methods = append(methods, "webauthn")
+		}
+		audit("login_mfa_required", auditFields{"user_id": u.ID, "methods": methods})
 		writeJSON(w, map[string]interface{}{
 			"mfa_required": true,
 			"mfa_token":    tok,
+			"methods":      methods,
 		})
 		return
 	}
@@ -214,6 +225,9 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 		},
 		Tags:   []string{},
 		Groups: []meGroup{},
+	}
+	if a.WebAuthn != nil {
+		resp.Passkeys, _ = a.WebAuthn.Count(r.Context(), u.ID)
 	}
 	if tags, err := a.UserStore.TagsForUser(u.ID); err == nil && tags != nil {
 		resp.Tags = tags

@@ -11,6 +11,7 @@ import { formatDateTime } from './datetime.js'
 import { getLocale, setLocale, SUPPORTED_LOCALES, t } from './i18n.js'
 import { setActiveNav } from './nav.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
+import { createPasskey, webauthnSupported } from './webauthn.js'
 
 function esc(s) {
   return String(s ?? '')
@@ -122,6 +123,10 @@ export async function renderAccountPage(container, { meData, onMeChanged } = {})
         <div class="px-5 py-4 text-sm text-slate-500">${t('common.loading')}</div>
       </section>
 
+      <section id="account-passkeys" class="mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div class="px-5 py-4 text-sm text-slate-500">${t('common.loading')}</div>
+      </section>
+
       <section id="account-keys" class="mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="px-5 py-4 text-sm text-slate-500">${t('common.loading')}</div>
       </section>
@@ -166,6 +171,7 @@ export async function renderAccountPage(container, { meData, onMeChanged } = {})
 
   await Promise.all([
     renderTOTPCard(container.querySelector('#account-totp'), { meData }),
+    renderPasskeysCard(container.querySelector('#account-passkeys')),
     renderSSHKeysCard(container.querySelector('#account-keys'), { meData }),
     renderTokensCard(container.querySelector('#account-tokens')),
   ])
@@ -577,6 +583,80 @@ async function renderTokensCard(section) {
       btn.disabled = true
       try {
         await API.revokeToken(btn.dataset.id)
+        await reload()
+      } catch (err) {
+        btn.disabled = false
+        await uiAlert(err.message || t('common.errorOccurred'))
+      }
+    })
+  })
+}
+
+/* ------------------------------------------------------------------ */
+/* Passkeys (WebAuthn)                                                 */
+/* ------------------------------------------------------------------ */
+
+async function renderPasskeysCard(section) {
+  if (!section) return
+  let keys
+  try {
+    keys = (await API.passkeys()) || []
+  } catch (err) {
+    section.innerHTML = `<div class="px-5 py-4 text-sm text-red-600">${esc(err.message || t('account.passkeysLoadFailed'))}</div>`
+    return
+  }
+  const supported = webauthnSupported()
+  const rows = keys
+    .map(
+      (k) => `<li class="flex items-center justify-between gap-3 py-2">
+        <div class="min-w-0">
+          <div class="text-sm text-slate-800 font-medium">${esc(k.name)}${k.backed_up ? ` ${pill(t('account.passkeySynced'), 'bg-sky-100 text-sky-800')}` : ''}</div>
+          <div class="text-xs text-slate-500">${t('account.tokenCreated', { date: esc(formatDateTime(k.created_at)) })}${k.last_used_at ? ` · ${t('account.tokenLastUsed', { date: esc(formatDateTime(k.last_used_at)) })}` : ` · ${t('account.tokenNeverUsed')}`}</div>
+        </div>
+        <button type="button" class="passkey-delete ${BTN_DANGER} text-xs py-1" data-id="${esc(k.id)}">${t('common.delete')}</button>
+      </li>`,
+    )
+    .join('')
+  section.innerHTML = `
+    <div class="px-5 pt-4 pb-3 border-b border-slate-100">
+      <h3 class="text-sm font-semibold text-slate-800">${t('account.passkeysTitle')}</h3>
+      <p class="mt-0.5 text-xs text-slate-500">${t('account.passkeysHint')}</p>
+    </div>
+    <div class="px-5 py-4">
+      ${keys.length ? pill(t('account.totpEnabled'), 'bg-emerald-100 text-emerald-800') : pill(t('account.totpDisabled'))}
+      ${rows ? `<ul class="mt-3 divide-y divide-slate-100">${rows}</ul>` : `<p class="mt-3 text-sm text-slate-500">${t('account.passkeysNone')}</p>`}
+      ${
+        supported
+          ? `<form id="passkey-add" class="mt-4 flex flex-wrap items-end gap-2">
+              <div class="flex-1 min-w-[12rem]"><label for="passkey-name" class="block text-xs font-medium text-slate-600 mb-1">${t('account.passkeyName')}</label><input id="passkey-name" maxlength="100" class="${INPUT}" placeholder="${t('account.passkeyNamePlaceholder')}" /></div>
+              <button type="submit" class="${BTN_PRIMARY}">${t('account.passkeyAdd')}</button>
+              <p id="passkey-add-error" class="w-full text-sm text-red-600 hidden"></p>
+            </form>`
+          : `<p class="mt-3 text-xs text-amber-700">${t('account.passkeysUnsupported')}</p>`
+      }
+    </div>`
+  const reload = () => renderPasskeysCard(section)
+  section.querySelector('#passkey-add')?.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const errEl = section.querySelector('#passkey-add-error')
+    errEl.classList.add('hidden')
+    const name = section.querySelector('#passkey-name').value.trim() || t('account.passkeyDefaultName')
+    try {
+      const options = await API.passkeyRegisterBegin()
+      const credential = await createPasskey(options)
+      await API.passkeyRegisterFinish(name, credential)
+      await reload()
+    } catch (err) {
+      errEl.textContent = err && err.name === 'NotAllowedError' ? t('login.passkeyCancelled') : err.message || t('common.errorOccurred')
+      errEl.classList.remove('hidden')
+    }
+  })
+  section.querySelectorAll('.passkey-delete').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!(await uiConfirm(t('account.passkeyConfirmDelete'), { danger: true }))) return
+      btn.disabled = true
+      try {
+        await API.passkeyDelete(btn.dataset.id)
         await reload()
       } catch (err) {
         btn.disabled = false

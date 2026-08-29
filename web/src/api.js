@@ -146,6 +146,75 @@ const API = {
     }
   },
 
+  /** Passkeys (WebAuthn) registered as a second factor. */
+  async passkeys() {
+    const res = await fetch('/api/me/webauthn', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load passkeys')
+    }
+    return res.json()
+  },
+
+  async passkeyRegisterBegin() {
+    const res = await fetch('/api/me/webauthn/register/begin', { method: 'POST', credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to start passkey registration')
+    }
+    return res.json()
+  },
+
+  async passkeyRegisterFinish(name, credential) {
+    const res = await fetch('/api/me/webauthn/register/finish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ name, credential }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Passkey registration failed')
+    }
+    return res.json()
+  },
+
+  async passkeyDelete(id) {
+    const res = await fetch(`/api/me/webauthn/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'include' })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete the passkey')
+    }
+  },
+
+  async loginWebAuthnBegin(mfaToken) {
+    const res = await fetch('/api/login/webauthn/begin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ mfa_token: mfaToken }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to start passkey verification')
+    }
+    return res.json()
+  },
+
+  async loginWebAuthnFinish(mfaToken, credential) {
+    const res = await fetch('/api/login/webauthn/finish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ mfa_token: mfaToken, credential }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Passkey verification failed')
+    }
+    return res.json()
+  },
+
   /** Current user's API tokens (plain values are never returned). */
   async myTokens() {
     const res = await fetch('/api/me/tokens', { credentials: 'include' })

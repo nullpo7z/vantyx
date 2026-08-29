@@ -21,6 +21,8 @@ type userResponse struct {
 	// TOTPEnabled lets the admin list show who has a second factor so
 	// the "reset 2FA" action is offered only where it applies.
 	TOTPEnabled bool `json:"totp_enabled"`
+	// Passkeys counts registered WebAuthn credentials (second factor).
+	Passkeys int `json:"passkeys"`
 }
 
 type createUserRequest struct {
@@ -67,7 +69,11 @@ func (a *App) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		if a.TOTPStore != nil {
 			totpEnabled = a.TOTPStore.Enabled(r.Context(), u.ID)
 		}
-		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role, Locale: u.Locale, Tags: tags, TOTPEnabled: totpEnabled})
+		passkeys := 0
+		if a.WebAuthn != nil {
+			passkeys, _ = a.WebAuthn.Count(r.Context(), u.ID)
+		}
+		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role, Locale: u.Locale, Tags: tags, TOTPEnabled: totpEnabled, Passkeys: passkeys})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

@@ -56,7 +56,7 @@ export async function renderUsersPage({
                 ${t('users.delete')}
               </button>
               ${
-                u.totp_enabled
+                u.totp_enabled || u.passkeys > 0
                   ? `<button type="button"
                 class="reset-totp-btn shrink-0 rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-50"
                 data-user-id="${escapeHtml(u.id)}"

@@ -314,6 +314,12 @@ components:
           enum: [true]
         mfa_token:
           type: string
+        methods:
+          type: array
+          items:
+            type: string
+            enum: [totp, webauthn]
+          description: 利用可能な第二要素
       required: [mfa_required, mfa_token]
     TOTPStatus:
       type: object
@@ -1223,6 +1229,88 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/me/webauthn:
+    get:
+      summary: 自分のパスキー一覧
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: パスキー一覧（id, name, created_at, last_used_at, transports, backed_up）
+
+  /api/me/webauthn/register/begin:
+    post:
+      summary: パスキー登録開始
+      description: WebAuthn の PublicKeyCredentialCreationOptions（challenge は base64url）を返します。5 分以内に finish してください。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: 作成オプション
+
+  /api/me/webauthn/register/finish:
+    post:
+      summary: パスキー登録完了
+      description: '`{"name": "...", "credential": <navigator.credentials.create() の結果を base64url で JSON 化したもの>}`。監査イベント `passkey_registered`。'
+      security:
+        - cookieAuth: []
+      responses:
+        '201':
+          description: 登録したパスキー
+        '400':
+          description: 検証失敗、または登録が開始されていない
+
+  /api/me/webauthn/{id}:
+    delete:
+      summary: パスキーを削除
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 削除完了
+        '404':
+          description: 存在しない
+
+  /api/login/webauthn/begin:
+    post:
+      summary: パスキーによる二要素確認の開始
+      description: '`POST /api/login` が `methods` に `webauthn` を含む `mfa_required` を返したあと、`{"mfa_token": "..."}` で PublicKeyCredentialRequestOptions を取得します。'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mfa_token]
+              properties:
+                mfa_token:
+                  type: string
+      responses:
+        '200':
+          description: 要求オプション
+        '401':
+          description: mfa_token が無効
+
+  /api/login/webauthn/finish:
+    post:
+      summary: パスキーによる二要素確認の完了
+      description: '`{"mfa_token": "...", "credential": <navigator.credentials.get() の結果>}`。成功時に `vantyx_session` Cookie を発行します。監査イベント `login_webauthn_ok` / `login_webauthn_failed`。'
+      responses:
+        '200':
+          description: 認証成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: 検証失敗
 
   /api/me/tokens:
     get:

@@ -7,6 +7,7 @@ import API from './api.js'
 import { captureNextQueryParam, consumePostLoginRedirect } from './auth_redirect.js'
 import { applyServerLocale, t } from './i18n.js'
 import { applyServerTimezone } from './timezone.js'
+import { getPasskeyAssertion, webauthnSupported } from './webauthn.js'
 
 /**
  * Render the "you must change your password" screen.
@@ -140,7 +141,7 @@ export function renderLogin(container) {
     try {
       const data = await API.login(username, password)
       if (data && data.mfa_required && data.mfa_token) {
-        renderTOTPStep(container, data.mfa_token)
+        renderTOTPStep(container, data.mfa_token, Array.isArray(data.methods) ? data.methods : ['totp'])
         return
       }
       await finishLogin(container, data)
@@ -180,14 +181,23 @@ async function finishLogin(container, data) {
  * already accepted and the server handed back a short-lived token that
  * must be paired with an authenticator or recovery code.
  */
-function renderTOTPStep(container, mfaToken) {
+function renderTOTPStep(container, mfaToken, methods = ['totp']) {
+  const hasTotp = methods.includes('totp')
+  const hasPasskey = methods.includes('webauthn') && webauthnSupported()
   container.innerHTML = `
     <div class="flex-1 flex items-center justify-center p-4">
       <div class="w-full max-w-sm bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
         <div class="px-5 py-6">
           <h1 class="text-xl font-semibold text-slate-800 text-center mb-2">${t('login.totpTitle')}</h1>
-          <p class="text-sm text-slate-600 text-center mb-5">${t('login.totpIntro')}</p>
-          <form id="totp-form" class="space-y-5">
+          <p class="text-sm text-slate-600 text-center mb-5">${hasTotp ? t('login.totpIntro') : t('login.passkeyIntro')}</p>
+          ${
+            hasPasskey
+              ? `<button type="button" id="passkey-btn" class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors mb-4">${t('login.passkeyButton')}</button>
+                 <p id="passkey-error" class="text-sm text-red-600 hidden mb-3"></p>
+                 ${hasTotp ? `<div class="text-center text-xs text-slate-400 mb-3">${t('login.orUseCode')}</div>` : ''}`
+              : ''
+          }
+          <form id="totp-form" class="space-y-5${hasTotp ? '' : ' hidden'}">
             <div>
               <label for="totp-code" class="block text-xs font-medium text-slate-600 mb-1.5">${t('login.totpCode')}</label>
               <input type="text" id="totp-code" name="code" required inputmode="numeric" autocomplete="one-time-code"
@@ -213,7 +223,28 @@ function renderTOTPStep(container, mfaToken) {
   const errorEl = document.getElementById('totp-error')
   const btn = document.getElementById('totp-btn')
   const input = document.getElementById('totp-code')
-  input.focus()
+  if (hasTotp) input.focus()
+
+  const passkeyBtn = document.getElementById('passkey-btn')
+  if (passkeyBtn) {
+    const passkeyErr = document.getElementById('passkey-error')
+    const runPasskey = async () => {
+      passkeyErr.classList.add('hidden')
+      passkeyBtn.disabled = true
+      try {
+        const options = await API.loginWebAuthnBegin(mfaToken)
+        const credential = await getPasskeyAssertion(options)
+        const data = await API.loginWebAuthnFinish(mfaToken, credential)
+        await finishLogin(container, data)
+      } catch (err) {
+        passkeyErr.textContent = err && err.name === 'NotAllowedError' ? t('login.passkeyCancelled') : err.message || t('login.passkeyFailed')
+        passkeyErr.classList.remove('hidden')
+        passkeyBtn.disabled = false
+      }
+    }
+    passkeyBtn.addEventListener('click', runPasskey)
+    if (!hasTotp) runPasskey()
+  }
 
   document.getElementById('totp-back').addEventListener('click', () => renderLogin(container))
 

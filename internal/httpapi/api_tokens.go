@@ -58,7 +58,7 @@ func (a *App) apiTokenMiddleware(next http.Handler) http.Handler {
 			writeJSONErrorKey(w, r, "auth.apiTokenReadOnly", http.StatusForbidden)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/me/tokens") || strings.HasPrefix(r.URL.Path, "/api/login") || r.URL.Path == "/api/logout" || strings.HasPrefix(r.URL.Path, "/api/me/password") || strings.HasPrefix(r.URL.Path, "/api/me/totp") {
+		if strings.HasPrefix(r.URL.Path, "/api/me/tokens") || strings.HasPrefix(r.URL.Path, "/api/login") || r.URL.Path == "/api/logout" || strings.HasPrefix(r.URL.Path, "/api/me/password") || strings.HasPrefix(r.URL.Path, "/api/me/totp") || strings.HasPrefix(r.URL.Path, "/api/me/webauthn") {
 			writeJSONErrorKey(w, r, "auth.apiTokenNotAllowedHere", http.StatusForbidden)
 			return
 		}

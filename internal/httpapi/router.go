@@ -13,9 +13,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
@@ -54,6 +56,10 @@ type App struct {
 	AccessGroupStore access.AccessGroupStore
 	AccessRequests   access.AccessRequestStore
 	APITokens        auth.APITokenStore
+	WebAuthn         auth.WebAuthnStore
+	webauthnRegs     webauthnRegistrations
+	webauthnMu       sync.Mutex
+	webauthnRPs      map[string]*webauthn.WebAuthn
 	// retention holds the age-based purge policy and its last report.
 	retention *retentionState
 	// backups holds the backup policy, last snapshot and staged restore.
@@ -302,6 +308,7 @@ func NewApp() *App {
 		AccessGroupStore:        groupStore,
 		AccessRequests:          access.NewSQLiteAccessRequestStore(db),
 		APITokens:               auth.NewSQLiteAPITokenStore(db),
+		WebAuthn:                auth.NewSQLiteWebAuthnStore(db),
 		SSHKeyStore:             sshKeyStore,
 		CredentialIdentityStore: credIdentityStore,
 		TerminalSessionManager:  terminalSessions,
@@ -395,6 +402,8 @@ func (a *App) NewRouter() http.Handler {
 	// Authentication.
 	r.Post("/api/login", a.handleLogin)
 	r.Post("/api/login/totp", a.handleLoginTOTP)
+	r.Post("/api/login/webauthn/begin", a.handleLoginWebAuthnBegin)
+	r.Post("/api/login/webauthn/finish", a.handleLoginWebAuthnFinish)
 	r.Get("/api/auth/methods", a.handleAuthMethods)
 	r.Get("/api/auth/oidc/login", a.handleOIDCLogin)
 	r.Get("/api/auth/oidc/callback", a.handleOIDCCallback)
@@ -406,6 +415,10 @@ func (a *App) NewRouter() http.Handler {
 	r.Post("/api/me/totp/setup", a.handleTOTPSetup)
 	r.Post("/api/me/totp/confirm", a.handleTOTPConfirm)
 	r.Delete("/api/me/totp", a.handleTOTPDisable)
+	r.Get("/api/me/webauthn", a.handleListPasskeys)
+	r.Post("/api/me/webauthn/register/begin", a.handlePasskeyRegisterBegin)
+	r.Post("/api/me/webauthn/register/finish", a.handlePasskeyRegisterFinish)
+	r.Delete("/api/me/webauthn/{id}", a.handlePasskeyDelete)
 	r.Get("/api/me/tokens", a.handleListMyTokens)
 	r.Post("/api/me/tokens", a.handleCreateMyToken)
 	r.Delete("/api/me/tokens/{id}", a.handleRevokeMyToken)

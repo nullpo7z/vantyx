@@ -314,6 +314,23 @@ func Migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_access_requests_user ON access_requests(user_id, created_at)`,
 		// API tokens (bearer credentials for automation); only the SHA-256
 		// of the token is stored.
+		// WebAuthn / passkey credentials (second factor); public keys only.
+		`CREATE TABLE IF NOT EXISTS user_webauthn_credentials (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			public_key BLOB NOT NULL,
+			attestation_type TEXT NOT NULL DEFAULT '',
+			aaguid BLOB,
+			sign_count INTEGER NOT NULL DEFAULT 0,
+			transports TEXT NOT NULL DEFAULT '[]',
+			backup_eligible INTEGER NOT NULL DEFAULT 0,
+			backed_up INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			last_used_at INTEGER,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_webauthn_user ON user_webauthn_credentials(user_id)`,
 		`CREATE TABLE IF NOT EXISTS api_tokens (
 			id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL,

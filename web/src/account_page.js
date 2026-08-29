@@ -429,7 +429,8 @@ async function renderSSHKeysCard(section, { meData }) {
   section.innerHTML = `
     <div class="px-5 pt-4 pb-3 border-b border-slate-100">
       <h3 class="text-sm font-semibold text-slate-800">${t('account.keysTitle')}</h3>
-      <p class="mt-0.5 text-xs text-slate-500">${t('account.keysHint')} <code class="font-mono">ssh -p 2222 ${esc(meData.username)}@${esc(host)}</code></p>
+      <p class="mt-0.5 text-xs text-slate-500">${t('account.keysHint')}</p>
+      <code class="mt-1.5 inline-block rounded bg-slate-50 border border-slate-200 px-2 py-1 font-mono text-xs text-slate-800">ssh -p 2222 ${esc(meData.username)}@${esc(host)}</code>
     </div>
     <div class="px-5 py-4">
       ${loadError ? `<p class="text-sm text-red-600">${esc(loadError)}</p>` : ''}

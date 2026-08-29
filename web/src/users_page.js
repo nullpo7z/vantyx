@@ -30,7 +30,7 @@ export async function renderUsersPage({
         <tr class="border-b border-slate-200 hover:bg-slate-50">
           <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(u.id)}</td>
           <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(u.username)}</td>
-          <td class="px-4 py-2 text-sm text-slate-600">${escapeHtml(u.role || 'user')}</td>
+          <td class="px-4 py-2 text-sm text-slate-600">${u.role === 'admin' ? t('users.roleAdmin') : t('users.roleUser')}</td>
           <td class="px-4 py-2">
             <button type="button"
               class="user-ssh-keys-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 shrink-0"

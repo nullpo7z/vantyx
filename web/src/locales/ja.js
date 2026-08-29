@@ -419,7 +419,7 @@ const ja = {
     totpDisabledNow: '二要素認証を無効にしました。',
     totpDisableFailed: '無効化に失敗しました',
     keysTitle: 'SSH 公開鍵（CLI ゲートウェイ用）',
-    keysHint: 'CLI ゲートウェイは公開鍵認証のみです。接続に使う鍵を登録してから次のコマンドで接続します:',
+    keysHint: 'CLI ゲートウェイは公開鍵認証のみです。接続に使う鍵を登録してから、次のコマンドで接続します。',
     keysNone: '公開鍵が登録されていません。登録するまで CLI ゲートウェイは利用できません。',
     keysLoadFailed: '公開鍵の取得に失敗しました',
     keyAdd: '公開鍵を追加（authorized_keys 形式の1行）',

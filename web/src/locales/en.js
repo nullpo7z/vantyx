@@ -442,7 +442,7 @@ const en = {
     totpDisabledNow: 'Two-factor authentication has been disabled.',
     totpDisableFailed: 'Failed to disable two-factor authentication.',
     keysTitle: 'SSH public keys (CLI gateway)',
-    keysHint: 'The CLI gateway accepts public keys only. Register the key you connect with, then run',
+    keysHint: 'The CLI gateway accepts public keys only. Register the key you connect with, then connect with:',
     keysNone: 'No public keys registered — you cannot use the CLI gateway yet.',
     keysLoadFailed: 'Failed to load the public keys.',
     keyAdd: 'Add a public key (one authorized_keys line)',

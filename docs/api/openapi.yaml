@@ -3107,6 +3107,110 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/targets/export:
+    get:
+      summary: ターゲット一覧のエクスポート（管理者のみ）
+      description: 全ターゲットを CSV（既定）または JSON（`format=json`）でダウンロードします。パスワード・秘密鍵は含まれません。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [csv, json]
+      responses:
+        '200':
+          description: 添付ファイル
+
+  /api/targets/import:
+    post:
+      summary: ターゲットの一括インポート（管理者のみ）
+      description: |
+        multipart（`file`: CSV または JSON、`dry_run`: 1/0）か JSON（`{"targets":[...],"dry_run":bool}`）で最大 2000 件を作成します。
+        CSV 列: name, host, port, protocol, group_id, tags（空白/;区切り）, ssh_username, ssh_password, sftp_enabled, ftp_enabled, tftp_enabled, ssh_host_key_fingerprint, credential_identity_id, ssh_key_id。
+        同一グループに同じ host:port:protocol があれば skipped。監査イベント `targets_imported`。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: 行ごとの結果（created / skipped / error / valid）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dry_run:
+                    type: boolean
+                  rows:
+                    type: integer
+                  created:
+                    type: integer
+                  skipped:
+                    type: integer
+                  failed:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        row:
+                          type: integer
+                        name:
+                          type: string
+                        status:
+                          type: string
+                        id:
+                          type: string
+                        error:
+                          type: string
+
+  /api/targets/check:
+    post:
+      summary: ターゲットの到達性確認（管理者のみ）
+      description: 指定した（省略時は全）ターゲットに TCP 接続を試み、到達可否とレイテンシを返します（UDP の TFTP は対象外）。
+      security:
+        - cookieAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: 結果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checked_at:
+                    type: string
+                    format: date-time
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        host:
+                          type: string
+                        port:
+                          type: integer
+                        reachable:
+                          type: boolean
+                        latency_ms:
+                          type: integer
+                        error:
+                          type: string
+
   /api/admin/sessions:
     get:
       summary: 全ライブセッション一覧（管理者のみ）

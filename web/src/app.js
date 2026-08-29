@@ -491,6 +491,64 @@ export function renderApp(container) {
     })
   }
 
+  function showImportTargetsModal() {
+    const modal = document.getElementById('change-password-modal')
+    if (!modal) return
+    const close = () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    modal.classList.remove('hidden')
+    modal.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 overflow-hidden border border-slate-200/50 max-h-[90vh] flex flex-col">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+            <h3 class="font-semibold text-slate-800">${t('targets.importTitle')}</h3>
+            <button id="imp-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <div class="px-6 py-5 overflow-auto space-y-4">
+            <p class="text-sm text-slate-600">${t('targets.importIntro')}</p>
+            <pre class="rounded bg-slate-50 border border-slate-200 px-3 py-2 text-[11px] font-mono text-slate-700 overflow-x-auto">name,host,port,protocol,group_id,tags,ssh_username,ssh_password,sftp_enabled,ftp_enabled,tftp_enabled,ssh_host_key_fingerprint,credential_identity_id,ssh_key_id
+router1,10.0.0.1,22,ssh,net/tokyo,core edge,admin,,true,false,false,,,</pre>
+            <div class="flex flex-wrap items-center gap-3">
+              <input type="file" id="imp-file" accept=".csv,.json,text/csv,application/json" class="text-sm" />
+              <label class="flex items-center gap-1.5 text-sm text-slate-700"><input type="checkbox" id="imp-dry" class="h-4 w-4" checked /> ${t('targets.importDryRun')}</label>
+              <button type="button" id="imp-run" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm disabled:opacity-50">${t('targets.importRun')}</button>
+              <span id="imp-status" class="text-xs text-slate-600"></span>
+            </div>
+            <div id="imp-results"></div>
+          </div>
+        </div>
+      </div>`
+    modal.querySelector('#imp-close').addEventListener('click', async () => {
+      close()
+      groupsCache = null
+      await showTreeView('manage', true)
+    })
+    const statusEl = modal.querySelector('#imp-status')
+    const resultsEl = modal.querySelector('#imp-results')
+    modal.querySelector('#imp-run').addEventListener('click', async (e) => {
+      const file = modal.querySelector('#imp-file').files[0]
+      if (!file) return
+      const dryRun = modal.querySelector('#imp-dry').checked
+      e.currentTarget.disabled = true
+      statusEl.textContent = t('targets.importRunning')
+      try {
+        const res = await API.targetsImport(file, { dryRun })
+        statusEl.textContent = t(dryRun ? 'targets.importDryResult' : 'targets.importResult', { rows: res.rows, created: res.created, skipped: res.skipped, failed: res.failed })
+        const cls = { created: 'text-emerald-700', valid: 'text-emerald-700', skipped: 'text-amber-700', error: 'text-red-600' }
+        resultsEl.innerHTML = `<table class="min-w-full text-left text-xs"><thead class="bg-slate-50 border-b border-slate-200"><tr><th class="px-2 py-1">#</th><th class="px-2 py-1">${t('common.name')}</th><th class="px-2 py-1">${t('common.status')}</th><th class="px-2 py-1">${t('targets.importDetail')}</th></tr></thead><tbody>${(res.results || [])
+          .map((r) => `<tr class="border-b border-slate-100"><td class="px-2 py-1 text-slate-500">${r.row}</td><td class="px-2 py-1">${escapeHtml(r.name || '')}</td><td class="px-2 py-1 font-medium ${cls[r.status] || ''}">${escapeHtml(r.status)}</td><td class="px-2 py-1 text-slate-600">${escapeHtml(r.error || r.id || '')}</td></tr>`)
+          .join('')}</tbody></table>`
+        if (!dryRun) groupsCache = null
+      } catch (err) {
+        statusEl.textContent = err.message || t('common.errorOccurred')
+      } finally {
+        e.currentTarget.disabled = false
+      }
+    })
+  }
+
   function showAddGroupModal() {
     const modal = document.getElementById('add-target-modal')
     modal.classList.remove('hidden')
@@ -1043,11 +1101,17 @@ export function renderApp(container) {
       const label = selectedGroupId || 'root'
 
       const addGroupBtnHtml = isManageMode
-        ? `<button type="button" id="btn-add-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.addBtn')}</button>`
+        ? `<div class="flex items-center gap-1.5">
+            <a href="/api/targets/export?format=csv" class="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50" title="${t('targets.exportCsvTitle')}">CSV</a>
+            <a href="/api/targets/export?format=json" class="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50" title="${t('targets.exportJsonTitle')}">JSON</a>
+            <button type="button" id="btn-import-targets" class="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50">${t('targets.importBtn')}</button>
+            <button type="button" id="btn-add-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.addBtn')}</button>
+          </div>`
         : ''
 
       const addTargetBtnHtml = isManageMode
-        ? `<button type="button" id="btn-add-target-in-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50" ${selectedGroupId ? '' : 'disabled'}>${t('app.addTargetBtn')}</button>`
+        ? `<button type="button" id="btn-check-targets" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors disabled:opacity-50" ${targets.length ? '' : 'disabled'}>${t('targets.checkBtn')}</button>
+           <button type="button" id="btn-add-target-in-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50" ${selectedGroupId ? '' : 'disabled'}>${t('app.addTargetBtn')}</button>`
         : `<button type="button" id="btn-request-access" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('access.requestBtn')}</button>`
       const showMembersSection = isManageMode && isAdminRole && selectedGroupId
 
@@ -1191,6 +1255,40 @@ export function renderApp(container) {
 
       if (isManageMode) {
         mainContent.querySelector('#btn-add-group')?.addEventListener('click', showAddGroupModal)
+        mainContent.querySelector('#btn-import-targets')?.addEventListener('click', () => showImportTargetsModal())
+        mainContent.querySelector('#btn-check-targets')?.addEventListener('click', async (e) => {
+          const btn = e.currentTarget
+          const cells = [...mainContent.querySelectorAll('.reach-status')]
+          const ids = cells.map((c) => c.dataset.reachId).filter(Boolean)
+          if (!ids.length) return
+          btn.disabled = true
+          cells.forEach((c) => { c.textContent = '…'; c.className = 'reach-status text-slate-400' })
+          try {
+            const res = await API.targetsCheck(ids)
+            const byId = {}
+            ;(res.results || []).forEach((r) => { byId[r.id] = r })
+            cells.forEach((c) => {
+              const r = byId[c.dataset.reachId]
+              if (!r) return
+              if (r.reachable) {
+                c.textContent = `✓ ${r.latency_ms} ms`
+                c.className = 'reach-status text-emerald-700'
+              } else if (r.error && r.error.startsWith('udp')) {
+                c.textContent = t('targets.reachSkipped')
+                c.className = 'reach-status text-slate-400'
+                c.title = r.error
+              } else {
+                c.textContent = `✗ ${t('targets.reachUnreachable')}`
+                c.className = 'reach-status text-red-600'
+                c.title = r.error || ''
+              }
+            })
+          } catch (err) {
+            await uiAlert(err.message || t('common.errorOccurred'))
+          } finally {
+            btn.disabled = false
+          }
+        })
         mainContent.querySelector('#btn-request-access')?.addEventListener('click', () => {
           showAccessRequestModal({
             onCreated: () => renderMyAccessRequests(mainContent.querySelector('#my-access-requests')),
@@ -1624,6 +1722,40 @@ export function renderApp(container) {
       `
       if (isManageMode) {
         mainContent.querySelector('#btn-add-group')?.addEventListener('click', showAddGroupModal)
+        mainContent.querySelector('#btn-import-targets')?.addEventListener('click', () => showImportTargetsModal())
+        mainContent.querySelector('#btn-check-targets')?.addEventListener('click', async (e) => {
+          const btn = e.currentTarget
+          const cells = [...mainContent.querySelectorAll('.reach-status')]
+          const ids = cells.map((c) => c.dataset.reachId).filter(Boolean)
+          if (!ids.length) return
+          btn.disabled = true
+          cells.forEach((c) => { c.textContent = '…'; c.className = 'reach-status text-slate-400' })
+          try {
+            const res = await API.targetsCheck(ids)
+            const byId = {}
+            ;(res.results || []).forEach((r) => { byId[r.id] = r })
+            cells.forEach((c) => {
+              const r = byId[c.dataset.reachId]
+              if (!r) return
+              if (r.reachable) {
+                c.textContent = `✓ ${r.latency_ms} ms`
+                c.className = 'reach-status text-emerald-700'
+              } else if (r.error && r.error.startsWith('udp')) {
+                c.textContent = t('targets.reachSkipped')
+                c.className = 'reach-status text-slate-400'
+                c.title = r.error
+              } else {
+                c.textContent = `✗ ${t('targets.reachUnreachable')}`
+                c.className = 'reach-status text-red-600'
+                c.title = r.error || ''
+              }
+            })
+          } catch (err) {
+            await uiAlert(err.message || t('common.errorOccurred'))
+          } finally {
+            btn.disabled = false
+          }
+        })
       }
     }
   }

@@ -59,6 +59,8 @@ var Messages = map[string]string{
 
 	// Users (admin management).
 	"settings.backupNotFound":         "バックアップが見つかりません",
+	"targets.importEmpty":             "インポートするターゲットがありません",
+	"targets.importTooMany":           "行数が多すぎます（最大 2000）",
 	"settings.webhookTooMany":         "Webhook エンドポイントが多すぎます（最大 20）",
 	"settings.webhookDuplicateID":     "Webhook エンドポイント ID が重複しています",
 	"settings.webhookNotFound":        "Webhook エンドポイントが見つかりません",

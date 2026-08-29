@@ -1051,6 +1051,34 @@ const API = {
     return res.json()
   },
 
+  /** Admin: import targets from a CSV/JSON File (dry_run validates only). */
+  async targetsImport(file, { dryRun = false } = {}) {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('dry_run', dryRun ? '1' : '0')
+    const res = await fetch('/api/targets/import', { method: 'POST', credentials: 'include', body: fd })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Import failed')
+    }
+    return res.json()
+  },
+
+  /** Admin: TCP reachability of targets (empty ids = all). */
+  async targetsCheck(ids = []) {
+    const res = await fetch('/api/targets/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ ids }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Reachability check failed')
+    }
+    return res.json()
+  },
+
   /** Admin: backup policy + stored backups. */
   async backupsGet() {
     const res = await fetch('/api/settings/backups', { credentials: 'include' })

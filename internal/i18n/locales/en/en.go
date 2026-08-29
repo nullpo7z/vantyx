@@ -67,6 +67,8 @@ var Messages = map[string]string{
 
 	// Users (admin management).
 	"settings.backupNotFound":         "backup not found",
+	"targets.importEmpty":             "no targets to import",
+	"targets.importTooMany":           "too many rows (max 2000)",
 	"settings.webhookTooMany":         "too many webhook endpoints (max 20)",
 	"settings.webhookDuplicateID":     "duplicate webhook endpoint id",
 	"settings.webhookNotFound":        "webhook endpoint not found",

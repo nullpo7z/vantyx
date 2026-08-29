@@ -137,7 +137,7 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
             isManageMode
               ? `<td class="px-4 py-2"><div class="flex flex-wrap items-center gap-2">${
                   tags.length ? renderTagPills(tags) : '<span class="text-xs text-slate-400">—</span>'
-                }</div></td>`
+                }</div></td><td class="px-2 py-2 text-xs whitespace-nowrap"><span class="reach-status text-slate-400" data-reach-id="${escapeHtml(t.id)}">—</span></td>`
               : ''
           }
           <td class="px-4 py-2 text-right">
@@ -200,7 +200,9 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
       `
     })
     .join('')
-  const theadTags = isManageMode ? `<th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[22%]">${tr('common.tags')}</th>` : ''
+  const theadTags = isManageMode
+    ? `<th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[22%]">${tr('common.tags')}</th><th class="px-2 py-2 text-xs font-semibold text-slate-700 whitespace-nowrap">${tr('targets.reachHeader')}</th>`
+    : ''
   return `
       <div class="overflow-x-auto">
         <table class="min-w-full text-left text-sm table-fixed">

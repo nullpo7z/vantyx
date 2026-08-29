@@ -469,6 +469,10 @@ func (a *App) NewRouter() http.Handler {
 	// Targets.
 	r.Get("/api/targets", a.handleTargets)
 	r.Post("/api/targets", a.handleCreateTarget)
+	// Bulk inventory management (admin).
+	r.Get("/api/targets/export", a.handleExportTargets)
+	r.Post("/api/targets/import", a.handleImportTargets)
+	r.Post("/api/targets/check", a.handleCheckTargets)
 	r.Put("/api/targets/{target_id}", a.handleUpdateTarget)
 	r.Delete("/api/targets/{target_id}", a.handleDeleteTarget)
 	r.Get("/api/targets/{target_id}/tags", a.handleTargetTags)

@@ -337,6 +337,7 @@ const en = {
     treeTargetCount: '{n} targets',
   },
   nav: {
+    displayTimezone: 'Times are shown in {tz} (server timezone)',
     home: 'Home',
     sessions: 'Sessions',
     recordings: 'Recordings',
@@ -454,11 +455,6 @@ const en = {
     languageHint: 'Choose the language used in the SPA. The change applies immediately.',
     languageEnglish: 'English',
     languageJapanese: '日本語 (Japanese)',
-    sectionTimezone: 'Timezone',
-    timezoneHint:
-      'Site-wide timezone used to display timestamps (recordings, audit log, sessions) for every user. Applies to other users on their next page load.',
-    timezoneAuto: 'Browser local (this browser: {tz})',
-    timezoneSaved: 'Saved. Applies to every user.',
   },
   language: {
     english: 'English',

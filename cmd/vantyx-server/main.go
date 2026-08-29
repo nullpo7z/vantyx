@@ -23,9 +23,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	// Embeds the IANA timezone database in the binary so time.LoadLocation
-	// (used to validate users' timezone preferences) works even when the
-	// container image has no system tzdata package installed.
+	// Embeds the IANA timezone database in the binary so VANTYX_TIMEZONE
+	// resolves even though the container image has no tzdata package.
 	_ "time/tzdata"
 
 	"github.com/nullpo7z/vantyx/internal/httpapi"
@@ -43,6 +42,18 @@ const (
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	// One clock for everything a person reads: container logs, the audit
+	// file / syslog forward, the web UI and the CLI. Installing it as
+	// time.Local makes every time.Now() (and slog's timestamps) carry
+	// this zone's offset; storage keeps using explicit UTC.
+	loc, err := httpapi.LoadTimezoneFromEnv()
+	if err != nil {
+		slog.Error("invalid timezone", "error", err)
+		os.Exit(1)
+	}
+	time.Local = loc
+	slog.Info("timezone", "zone", loc.String())
 
 	certFile := filepath.Clean(defaultCertFile)
 	if v := os.Getenv("VANTYX_TLS_CERT_FILE"); v != "" {

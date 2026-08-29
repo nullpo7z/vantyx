@@ -240,23 +240,6 @@ func (s *SQLiteUserStore) UpdateLocale(userID, locale string) error {
 
 const maxUserTagLen = 64
 
-// NormalizeUITimezone returns a canonical, validated IANA timezone name or
-// ErrInvalidTimezone. An empty string ("browser local") is always accepted.
-// Used by the admin-only site-wide timezone setting.
-// Validation uses time.LoadLocation, which requires zoneinfo data; the
-// server binary imports time/tzdata so this works even in minimal
-// containers without a system tzdata package.
-func NormalizeUITimezone(timezone string) (string, error) {
-	tz := strings.TrimSpace(timezone)
-	if tz == "" {
-		return "", nil
-	}
-	if _, err := time.LoadLocation(tz); err != nil {
-		return "", ErrInvalidTimezone
-	}
-	return tz, nil
-}
-
 func validateUserTag(tag string) error {
 	if tag == "" || len(tag) > maxUserTagLen {
 		return ErrTagLength

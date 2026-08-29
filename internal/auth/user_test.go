@@ -411,35 +411,6 @@ func TestNormalizeUILocale(t *testing.T) {
 	}
 }
 
-func TestNormalizeUITimezone(t *testing.T) {
-	for _, tc := range []struct {
-		in   string
-		want string
-		ok   bool
-	}{
-		{"", "", true},
-		{"  ", "", true},
-		{"UTC", "UTC", true},
-		{"Asia/Tokyo", "Asia/Tokyo", true},
-		{" America/New_York ", "America/New_York", true},
-		{"Not/AZone", "", false},
-		{"invalid tz name", "", false},
-	} {
-		got, err := NormalizeUITimezone(tc.in)
-		if tc.ok {
-			if err != nil {
-				t.Errorf("NormalizeUITimezone(%q): unexpected error %v", tc.in, err)
-				continue
-			}
-			if got != tc.want {
-				t.Errorf("NormalizeUITimezone(%q): got %q, want %q", tc.in, got, tc.want)
-			}
-		} else if err == nil {
-			t.Errorf("NormalizeUITimezone(%q): expected error, got %q", tc.in, got)
-		}
-	}
-}
-
 func TestSQLiteUserStore_TagsForUser_SetUserTags(t *testing.T) {
 	store := newTestSQLiteUserStore(t)
 	_, _ = store.CreateUser("u1", "alice", "Password1!", "")

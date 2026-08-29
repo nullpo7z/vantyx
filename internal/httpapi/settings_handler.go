@@ -5,52 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
-
-	"github.com/nullpo7z/vantyx/internal/auth"
 )
-
-type timezoneSettingResponse struct {
-	// Timezone is the site-wide IANA zone name, or "" for "browser local".
-	Timezone string `json:"timezone"`
-}
-
-// handleGetTimezoneSetting: GET /api/settings/timezone (any signed-in
-// user; the value is also embedded in GET /api/me).
-func (a *App) handleGetTimezoneSetting(w http.ResponseWriter, r *http.Request) {
-	if strings.TrimSpace(a.currentUserID(r)) == "" {
-		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
-		return
-	}
-	writeJSON(w, timezoneSettingResponse{Timezone: a.globalTimezone()})
-}
-
-// handlePutTimezoneSetting: PUT /api/settings/timezone {timezone} (admin
-// only). {"timezone":""} restores "browser local".
-func (a *App) handlePutTimezoneSetting(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAdmin(w, r) {
-		return
-	}
-	var in timezoneSettingResponse
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
-		return
-	}
-	tz, err := auth.NormalizeUITimezone(in.Timezone)
-	if err != nil {
-		writeJSONErrorKey(w, r, "auth.unsupportedTimezone", http.StatusBadRequest)
-		return
-	}
-	if err := saveTimezoneSettingToDB(a.DB, tz); err != nil {
-		writeJSONErrorKey(w, r, "settings.saveFailed", http.StatusInternalServerError)
-		return
-	}
-	audit("settings_update", auditFields{
-		"user_id":  a.currentUserID(r),
-		"key":      timezoneSettingKey,
-		"timezone": tz,
-	})
-	writeJSON(w, timezoneSettingResponse{Timezone: tz})
-}
 
 type auditForwarderSettingsResponse struct {
 	// Saved config (admin-configured). When not configured, returns env-based defaults.

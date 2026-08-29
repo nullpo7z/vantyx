@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -56,6 +57,9 @@ type App struct {
 	TerminalSessionManager terminalSessionStarter
 	LoginRateLimiter       *loginRateLimiter
 	DB                     *sql.DB
+	// Location is the server-wide timezone (VANTYX_TIMEZONE, default UTC)
+	// reported to clients; main() also installs it as time.Local.
+	Location *time.Location
 
 	// SFTPClientFactory is optional. When set (typically in tests) the
 	// file transfer handlers use it instead of dialling a real SSH
@@ -198,6 +202,11 @@ func NewApp() *App {
 	if path == "" {
 		path = dbsqlite.DefaultPath
 	}
+	loc, tzErr := LoadTimezoneFromEnv()
+	if tzErr != nil {
+		slog.Warn("invalid "+TimezoneEnv+", using UTC", "error", tzErr)
+		loc = time.UTC
+	}
 	cfg := dbsqlite.Config{Path: path}
 	open := dbsqlite.Open
 	if newAppDBOpen != nil {
@@ -291,6 +300,7 @@ func NewApp() *App {
 		SharingBridges:          newBridgeRegistry(),
 		RecordingExports:        newRecordingExportRegistry(exportDir),
 		TOTPStore:               auth.NewSQLiteTOTPStore(db, encKey),
+		Location:                loc,
 		OIDCLinks:               auth.NewSQLiteOIDCLinkStore(db),
 		mfaPending:              newMFAPendingStore(),
 		oidc:                    newOIDCServiceFromEnv(),
@@ -400,9 +410,6 @@ func (a *App) NewRouter() http.Handler {
 	// App settings (admin only).
 	r.Get("/api/settings/audit-forwarder", a.handleGetAuditForwarderSettings)
 	r.Put("/api/settings/audit-forwarder", a.handlePutAuditForwarderSettings)
-	// Site-wide display timezone: readable by every user, set by admins.
-	r.Get("/api/settings/timezone", a.handleGetTimezoneSetting)
-	r.Put("/api/settings/timezone", a.handlePutTimezoneSetting)
 	// Command logs (admin only).
 	r.Get("/api/commands", a.handleCommandLogs)
 

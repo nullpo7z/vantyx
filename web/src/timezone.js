@@ -1,9 +1,9 @@
 /**
  * @file Display timezone for the Vantyx SPA.
  *
- * The timezone is a site-wide setting chosen by an administrator
- * (PUT /api/settings/timezone) and delivered to every client in the
- * login / GET /api/me responses. It is cached in
+ * The timezone is fixed server-wide by VANTYX_TIMEZONE (the same zone
+ * the container logs and audit trail use) and delivered to every client
+ * in the login / GET /api/me responses. It is cached in
  * `localStorage['vantyx_timezone']` as an IANA zone name (e.g.
  * `'Asia/Tokyo'`), or `''` for "browser local" (formatting then omits
  * `timeZone`, i.e. `Intl`'s default), so standalone pages can format
@@ -16,43 +16,6 @@
  */
 
 const STORAGE_KEY = 'vantyx_timezone'
-
-/** Timezone names to offer in the settings dropdown, beyond "Auto". */
-export const SUPPORTED_TIMEZONES = (() => {
-  try {
-    if (typeof Intl.supportedValuesOf === 'function') {
-      const zones = Intl.supportedValuesOf('timeZone')
-      // Chrome's supportedValuesOf('timeZone') lists only region/city
-      // zones and omits plain "UTC", which is the one zone an operator
-      // most often wants for correlating with server logs. Always offer
-      // it first (Intl accepts "UTC" as a timeZone everywhere).
-      return zones.includes('UTC') ? zones : ['UTC', ...zones]
-    }
-  } catch {
-    /* not supported in this browser */
-  }
-  // Small fallback list for browsers without Intl.supportedValuesOf
-  // (e.g. older Safari/Firefox) so the dropdown isn't empty.
-  return [
-    'UTC',
-    'Asia/Tokyo',
-    'Asia/Shanghai',
-    'Asia/Singapore',
-    'Asia/Kolkata',
-    'Asia/Dubai',
-    'Europe/London',
-    'Europe/Paris',
-    'Europe/Berlin',
-    'Europe/Moscow',
-    'America/New_York',
-    'America/Chicago',
-    'America/Denver',
-    'America/Los_Angeles',
-    'America/Sao_Paulo',
-    'Australia/Sydney',
-    'Pacific/Auckland',
-  ]
-})()
 
 function isValidTimezone(tz) {
   if (!tz) return false
@@ -87,20 +50,6 @@ export function getTimezone() {
   return activeTimezone
 }
 
-/**
- * Best-effort guess at the browser's local IANA zone name, shown in the
- * admin settings dropdown next to the "browser local" option.
- *
- * @returns {string}
- */
-export function detectBrowserTimezone() {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || ''
-  } catch {
-    return ''
-  }
-}
-
 function applyTimezoneLocal(tz) {
   const next = tz === '' ? '' : (isValidTimezone(tz) ? tz : null)
   if (next === null || next === activeTimezone) {
@@ -121,8 +70,8 @@ function applyTimezoneLocal(tz) {
 }
 
 /**
- * Apply the site-wide timezone supplied by the server (login /
- * GET /api/me / PUT /api/settings/timezone response). The server value
+ * Apply the server-wide timezone supplied by the server (login /
+ * GET /api/me response). The server value
  * is authoritative: an empty string switches back to browser-local
  * time. Pass `null` / `undefined` to keep the current value (response
  * without the field).

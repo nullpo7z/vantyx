@@ -314,6 +314,7 @@ const ja = {
     treeTargetCount: '{n} 台',
   },
   nav: {
+    displayTimezone: '時刻は {tz}（サーバーのタイムゾーン）で表示しています',
     home: 'ホーム',
     sessions: 'セッション',
     recordings: '録画',
@@ -431,11 +432,6 @@ const ja = {
     languageHint: 'SPA の表示言語を選びます。変更は即時反映されます。',
     languageEnglish: 'English（英語）',
     languageJapanese: '日本語',
-    sectionTimezone: 'タイムゾーン',
-    timezoneHint:
-      '録画・監査ログ・セッション一覧などの日時表示に使う、全ユーザー共通のタイムゾーンです。他のユーザーには次回のページ読み込み時に反映されます。',
-    timezoneAuto: 'ブラウザのローカル時刻（このブラウザ: {tz}）',
-    timezoneSaved: '保存しました。全ユーザーに適用されます。',
   },
   language: {
     english: 'English',

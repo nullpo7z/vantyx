@@ -115,6 +115,19 @@ export function renderApp(container) {
 
   const mainContent = document.getElementById('main-content')
   const userNameEl = document.getElementById('user-name')
+  // Server-wide timezone badge next to the user name: every timestamp on
+  // screen is in this zone, the same one the server logs use.
+  function showDisplayTimezone(tz) {
+    const el = document.getElementById('display-timezone')
+    if (!el) return
+    if (typeof tz !== 'string' || !tz) {
+      el.classList.add('hidden')
+      return
+    }
+    el.textContent = tz
+    el.title = t('nav.displayTimezone', { tz })
+    el.classList.remove('hidden')
+  }
   const logoutBtn = document.getElementById('logout-btn')
   const navTargets = document.getElementById('nav-targets')
   const navSessions = document.getElementById('nav-sessions')
@@ -2945,6 +2958,7 @@ export function renderApp(container) {
     try {
       meData = await API.me()
       userNameEl.textContent = meData.username
+      showDisplayTimezone(meData.timezone)
       showAuthenticatedNav(meData.role === 'admin')
       setupGlobalRealtimeWatches()
     } catch {

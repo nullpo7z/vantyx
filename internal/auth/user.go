@@ -65,10 +65,6 @@ type UserStore interface {
 // that is not in the supported set (currently "", "en", "ja").
 var ErrInvalidLocale = errors.New("unsupported locale")
 
-// ErrInvalidTimezone is returned when NormalizeUITimezone receives a
-// value that is not "" or a valid IANA timezone name.
-var ErrInvalidTimezone = errors.New("unsupported timezone")
-
 var (
 	ErrUserExists        = errors.New("user already exists")
 	ErrUserNotFound      = errors.New("user not found")

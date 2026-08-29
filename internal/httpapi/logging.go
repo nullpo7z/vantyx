@@ -39,7 +39,7 @@ func audit(event string, fields auditFields) {
 		}
 		copied["event"] = event
 		auditBuffer.add(AuditEntry{
-			Time:   time.Now().UTC(),
+			Time:   time.Now(), // server zone (VANTYX_TIMEZONE)
 			Event:  event,
 			Fields: copied,
 		})

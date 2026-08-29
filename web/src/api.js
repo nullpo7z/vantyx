@@ -172,31 +172,6 @@ const API = {
    * @param {string} timezone - IANA zone name (e.g. `'Asia/Tokyo'`), or `''`.
    * @returns {Promise<{timezone: string}>}
    */
-  /** Site-wide display timezone (readable by every signed-in user). */
-  async timezoneSettingGet() {
-    const res = await fetch('/api/settings/timezone', { credentials: 'include' })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: res.statusText }))
-      throw new Error(err.message || 'Failed to load timezone')
-    }
-    return res.json()
-  },
-
-  /** Set the site-wide display timezone (admin only); '' = browser local. */
-  async timezoneSettingPut(timezone) {
-    const res = await fetch('/api/settings/timezone', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ timezone: timezone || '' }),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: res.statusText }))
-      throw new Error(err.message || 'Failed to update timezone')
-    }
-    return res.json()
-  },
-
   /**
    * Invalidate the current session server-side and clear the cookie.
    *

@@ -123,6 +123,12 @@ Audit events: `oidc_login_started`, `oidc_login_ok`, `oidc_login_failed`
 3. Without auto-create, pre-create the user with the e-mail address as
    the username; Vantyx links the Cloudflare identity to it on first login.
 
+## Time and timezone
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_TIMEZONE` | `UTC` | IANA zone name (e.g. `Asia/Tokyo`) used for **every human-facing timestamp**: container logs, the audit log file and syslog forward, the web UI and the CLI gateway all show the same clock, so an entry on screen can be matched to a log line without conversion. Timestamps are written with an explicit offset (`2026-08-30T00:07:47+09:00`); database storage stays UTC. There is deliberately no per-user or UI override. An unknown name aborts start-up. |
+
 ## Storage
 
 | Variable | Default | Description |

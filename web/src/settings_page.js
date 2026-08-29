@@ -1,7 +1,6 @@
 import API from './api.js'
 import { setActiveNav } from './nav.js'
 import { getLocale, setLocale, SUPPORTED_LOCALES, t } from './i18n.js'
-import { applyServerTimezone, detectBrowserTimezone, getTimezone, SUPPORTED_TIMEZONES } from './timezone.js'
 
 function esc(s) {
   return String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
@@ -10,21 +9,14 @@ function esc(s) {
 export async function renderSettingsPage(container, { meData } = {}) {
   if (typeof setActiveNav === 'function') setActiveNav('settings')
   // Language is a per-user preference and is shown to everyone (E-8);
-  // the timezone is site-wide and, like audit forwarding, admin-only.
+  // the audit-forwarder section is admin-only. The display timezone is
+  // fixed server-wide by VANTYX_TIMEZONE and is not a UI setting.
   const isAdmin = !!(meData && meData.role === 'admin')
   const current = getLocale()
   const langOptions = SUPPORTED_LOCALES.map(
     (l) =>
       `<option value="${l.code}"${l.code === current ? ' selected' : ''}>${t(l.labelKey)}</option>`,
   ).join('')
-
-  const currentTz = getTimezone()
-  const browserTz = detectBrowserTimezone()
-  const tzOptions =
-    `<option value=""${currentTz === '' ? ' selected' : ''}>${esc(t('settings.timezoneAuto', { tz: browserTz || 'UTC' }))}</option>` +
-    SUPPORTED_TIMEZONES.map(
-      (tz) => `<option value="${esc(tz)}"${tz === currentTz ? ' selected' : ''}>${esc(tz)}</option>`,
-    ).join('')
 
   container.innerHTML = `
     <div class="w-full max-w-5xl flex-1 flex flex-col">
@@ -43,17 +35,6 @@ export async function renderSettingsPage(container, { meData } = {}) {
       ${
         isAdmin
           ? `<div class="mt-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 class="text-sm font-semibold text-slate-800 mb-2">${t('settings.sectionTimezone')}</h3>
-        <p class="text-xs text-slate-500 mb-3">${t('settings.timezoneHint')}</p>
-        <div class="flex flex-wrap items-center gap-3">
-          <select id="settings-timezone" class="w-full sm:w-64 rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 bg-white">
-            ${tzOptions}
-          </select>
-          <span id="settings-timezone-status" class="text-sm text-slate-600"></span>
-        </div>
-      </div>
-
-      <div class="mt-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h3 class="text-sm font-semibold text-slate-800 mb-3">${t('settings.sectionAudit')}</h3>
         <div class="flex items-center gap-2">
           <input id="audit-fwd-enabled" type="checkbox" class="h-4 w-4" />
@@ -102,36 +83,6 @@ export async function renderSettingsPage(container, { meData } = {}) {
   }
 
   if (!isAdmin) return
-
-  const timezoneEl = container.querySelector('#settings-timezone')
-  const timezoneStatusEl = container.querySelector('#settings-timezone-status')
-  if (timezoneEl) {
-    // Reflect the server's current value in case this browser's cache is
-    // stale (another admin changed it, or it was set before this login).
-    API.timezoneSettingGet()
-      .then((res) => {
-        if (res && typeof res.timezone === 'string') {
-          applyServerTimezone(res.timezone)
-          timezoneEl.value = res.timezone
-        }
-      })
-      .catch(() => undefined)
-    timezoneEl.addEventListener('change', async () => {
-      const tz = timezoneEl.value
-      timezoneEl.disabled = true
-      timezoneStatusEl.textContent = t('settings.saving')
-      try {
-        const res = await API.timezoneSettingPut(tz)
-        applyServerTimezone(res && typeof res.timezone === 'string' ? res.timezone : tz)
-        timezoneStatusEl.textContent = t('settings.timezoneSaved')
-      } catch (e) {
-        timezoneEl.value = getTimezone()
-        timezoneStatusEl.textContent = t('settings.saveFailed', { error: esc(e?.message || e) })
-      } finally {
-        timezoneEl.disabled = false
-      }
-    })
-  }
 
   const enabledEl = container.querySelector('#audit-fwd-enabled')
   const protoEl = container.querySelector('#audit-fwd-proto')

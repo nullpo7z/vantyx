@@ -197,7 +197,7 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 		Username:    u.Username,
 		Role:        u.Role,
 		Locale:      u.Locale,
-		Timezone:    a.globalTimezone(),
+		Timezone:    a.displayTimezone(),
 		TOTPEnabled: totpEnabled,
 	})
 }

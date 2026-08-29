@@ -57,11 +57,15 @@ func (a *App) currentUserID(r *http.Request) string {
 // before reading the OpenAPI document.
 func (a *App) forcePasswordChangeMiddleware(next http.Handler) http.Handler {
 	whitelist := map[string]struct{}{
-		"/api/me":          {},
-		"/api/me/password": {},
-		"/api/logout":      {},
-		"/api/login":       {},
-		"/healthz":         {},
+		"/api/me":                 {},
+		"/api/me/password":        {},
+		"/api/logout":             {},
+		"/api/login":              {},
+		"/api/login/totp":         {},
+		"/api/auth/methods":       {},
+		"/api/auth/oidc/login":    {},
+		"/api/auth/oidc/callback": {},
+		"/healthz":                {},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path

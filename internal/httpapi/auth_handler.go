@@ -25,6 +25,7 @@ type loginResponse struct {
 	Locale                string `json:"locale,omitempty"`
 	Timezone              string `json:"timezone,omitempty"`
 	RequirePasswordChange bool   `json:"require_password_change,omitempty"`
+	TOTPEnabled           bool   `json:"totp_enabled,omitempty"`
 }
 
 type changePasswordRequest struct {
@@ -128,54 +129,29 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		a.LoginRateLimiter.recordSuccess(ip, req.Username)
 	}
 
-	sess, err := a.SessionStore.Create(u.ID)
-	if err != nil {
-		audit("login_failed", auditFields{
-			"username_hash": auditUsernameHash(req.Username),
-			"reason":        "session_create_failed",
-			"error":         err.Error(),
+	// Second factor: when the account has TOTP enabled the password alone
+	// does not issue a session. Hand back a short-lived challenge token
+	// that POST /api/login/totp completes (see auth_totp.go).
+	if a.TOTPStore != nil && a.mfaPending != nil && a.TOTPStore.Enabled(r.Context(), u.ID) {
+		tok, err := a.mfaPending.issue(u.ID, u.Username, ip)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		audit("login_mfa_required", auditFields{"user_id": u.ID})
+		writeJSON(w, map[string]interface{}{
+			"mfa_required": true,
+			"mfa_token":    tok,
 		})
-		writeJSONErrorKey(w, r, "auth.sessionCreateFailed", http.StatusInternalServerError)
 		return
 	}
+
 	audit("login_success", auditFields{
 		"user_id":  u.ID,
 		"username": u.Username,
 	})
-
-	// #nosec G124 -- HttpOnly, SameSite=Strict and Secure are all set;
-	// Secure is configured at runtime via cookieSecure(r) which honors
-	// X-Forwarded-Proto for TLS-terminating reverse proxies, so gosec's
-	// static check can not see the assignment.
-	cookie := &http.Cookie{
-		Name:     "vantyx_session",
-		Value:    sess.ID,
-		Path:     "/",
-		MaxAge:   24 * 3600, // 24h, matches SessionStore TTL (ASVS V2.2).
-		HttpOnly: true,
-		// SameSite=Strict tightens the previous Lax setting (L-1):
-		// the cookie is now never sent on any cross-site navigation
-		// or sub-resource request, which closes the small remaining
-		// window for top-level CSRF (the API was already protected
-		// by Origin checks, but defense in depth is cheap).
-		SameSite: http.SameSiteStrictMode,
-		Secure:   cookieSecure(r),
-	}
-	http.SetCookie(w, cookie)
-
-	if u.Role == "" {
-		u.Role = auth.RoleUser
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(loginResponse{
-		UserID:                u.ID,
-		Username:              u.Username,
-		Role:                  u.Role,
-		Locale:                u.Locale,
-		Timezone:              u.Timezone,
-		RequirePasswordChange: u.ForcePasswordChange,
-	})
+	// Session + cookie + response are shared with the TOTP / OIDC paths.
+	a.finishLogin(w, r, u, "")
 }
 
 // handleLogout invalidates the current session server-side and clears
@@ -222,12 +198,14 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	totpEnabled := a.TOTPStore != nil && a.TOTPStore.Enabled(r.Context(), u.ID)
 	_ = json.NewEncoder(w).Encode(loginResponse{
-		UserID:   u.ID,
-		Username: u.Username,
-		Role:     u.Role,
-		Locale:   u.Locale,
-		Timezone: u.Timezone,
+		UserID:      u.ID,
+		Username:    u.Username,
+		Role:        u.Role,
+		Locale:      u.Locale,
+		Timezone:    u.Timezone,
+		TOTPEnabled: totpEnabled,
 	})
 }
 

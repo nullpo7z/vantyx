@@ -106,6 +106,15 @@ type App struct {
 
 	// RecordingExports tracks background GIF/MP4 export jobs.
 	RecordingExports *recordingExportRegistry
+
+	// TOTPStore persists per-user second factors (nil disables TOTP).
+	TOTPStore auth.TOTPStore
+	// OIDCLinks maps OIDC identities to local users.
+	OIDCLinks auth.OIDCLinkStore
+	// mfaPending holds password-verified logins awaiting their TOTP.
+	mfaPending *mfaPendingStore
+	// oidc is the relying-party state; nil when OIDC is not configured.
+	oidc *oidcService
 }
 
 // newAppDBOpen, newAppMigrate, and newAppUserStore are test seams used
@@ -281,6 +290,10 @@ func NewApp() *App {
 		SharingStore:            sharing.NewSQLiteStore(db),
 		SharingBridges:          newBridgeRegistry(),
 		RecordingExports:        newRecordingExportRegistry(exportDir),
+		TOTPStore:               auth.NewSQLiteTOTPStore(db, encKey),
+		OIDCLinks:               auth.NewSQLiteOIDCLinkStore(db),
+		mfaPending:              newMFAPendingStore(),
+		oidc:                    newOIDCServiceFromEnv(),
 	}
 	// Convert pre-existing fragmented RDP/VNC recordings to faststart MP4
 	// in the background (B-1); new recordings are converted on stop.
@@ -344,11 +357,19 @@ func (a *App) NewRouter() http.Handler {
 
 	// Authentication.
 	r.Post("/api/login", a.handleLogin)
+	r.Post("/api/login/totp", a.handleLoginTOTP)
+	r.Get("/api/auth/methods", a.handleAuthMethods)
+	r.Get("/api/auth/oidc/login", a.handleOIDCLogin)
+	r.Get("/api/auth/oidc/callback", a.handleOIDCCallback)
 	r.Post("/api/logout", a.handleLogout)
 	r.Get("/api/me", a.handleMe)
 	r.Post("/api/me/password", a.handleChangePassword)
 	r.Put("/api/me/locale", a.handleUpdateLocale)
 	r.Put("/api/me/timezone", a.handleUpdateTimezone)
+	r.Get("/api/me/totp", a.handleTOTPStatus)
+	r.Post("/api/me/totp/setup", a.handleTOTPSetup)
+	r.Post("/api/me/totp/confirm", a.handleTOTPConfirm)
+	r.Delete("/api/me/totp", a.handleTOTPDisable)
 	r.Get("/api/me/ssh-keys", a.handleListSSHKeys)
 	r.Post("/api/me/ssh-keys", a.handleAddSSHKey)
 	r.Delete("/api/me/ssh-keys/{key_id}", a.handleDeleteSSHKey)
@@ -368,6 +389,7 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/api/users", a.handleListUsers)
 	r.Post("/api/users", a.handleCreateUser)
 	r.Delete("/api/users/{user_id}", a.handleDeleteUser)
+	r.Delete("/api/users/{user_id}/totp", a.handleAdminResetTOTP)
 	r.Get("/api/users/{user_id}/tags", a.handleUserTags)
 	r.Put("/api/users/{user_id}/tags", a.handleSetUserTags)
 	r.Get("/api/users/{user_id}/ssh-keys", a.handleListUserSSHKeys)

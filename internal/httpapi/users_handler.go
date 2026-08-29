@@ -18,6 +18,9 @@ type userResponse struct {
 	Role     string   `json:"role"`
 	Locale   string   `json:"locale,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
+	// TOTPEnabled lets the admin list show who has a second factor so
+	// the "reset 2FA" action is offered only where it applies.
+	TOTPEnabled bool `json:"totp_enabled"`
 }
 
 type createUserRequest struct {
@@ -60,7 +63,11 @@ func (a *App) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		if tags == nil {
 			tags = []string{}
 		}
-		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role, Locale: u.Locale, Tags: tags})
+		totpEnabled := false
+		if a.TOTPStore != nil {
+			totpEnabled = a.TOTPStore.Enabled(r.Context(), u.ID)
+		}
+		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role, Locale: u.Locale, Tags: tags, TOTPEnabled: totpEnabled})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

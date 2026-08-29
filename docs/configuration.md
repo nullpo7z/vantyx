@@ -40,6 +40,57 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 | `VANTYX_INVITATION_MAX_TTL_SECONDS` | `14400` | Maximum validity (`ttl_seconds`) for collaborative session invitations. Default TTL when omitted is 15 minutes. See [collaborative-sessions.md](collaborative-sessions.md). |
 | `VANTYX_REQUIRE_RECORDING_WITH_VIEWERS` | unset | When enabled (`1`, `true`, or `yes`), refuse collaborative invitations and joins unless `VANTYX_RECORDINGS_DIR` is set. |
 
+### Two-factor authentication (TOTP)
+
+TOTP needs no configuration: every user can enable it from **Account →
+Two-factor authentication** in the web UI (RFC 6238, SHA-1 / 30 s / 6 digits,
+compatible with Google Authenticator, Authy, 1Password, …). Enabling it issues
+eight single-use recovery codes that are shown once.
+
+- **Web UI**: `POST /api/login` answers `{"mfa_required":true,"mfa_token":…}`
+  instead of a session; the client completes with
+  `POST /api/login/totp {mfa_token, code}`. The token lives 5 minutes and is
+  discarded after 5 wrong codes (the login rate limiter applies as well).
+- **CLI gateway**: password logins switch to SSH *keyboard-interactive*
+  (`Password:` then `Verification code:`). Plain password authentication is
+  refused for users with TOTP enabled; **public-key** logins are unaffected.
+- **SSO logins** (below) are not challenged for a local TOTP — the IdP owns
+  MFA for those users.
+- Users disable it with their password (`DELETE /api/me/totp`); admins can
+  clear a locked-out user's factor with `DELETE /api/users/{id}/totp`
+  (**Users → Reset 2FA**).
+- Secrets are stored AES-256-GCM encrypted with
+  `VANTYX_SSH_PASSWORD_ENCRYPTION_KEY`; recovery codes are stored as SHA-256
+  digests.
+
+## Single sign-on (OpenID Connect)
+
+Vantyx can act as an OIDC relying party (Authorization Code flow with PKCE
+S256 and nonce). SSO is enabled when both `VANTYX_OIDC_ISSUER` and
+`VANTYX_OIDC_CLIENT_ID` are set; the login page then shows a
+"Sign in with …" button. Password login stays available.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_OIDC_ISSUER` | — | Issuer URL used for discovery (`<issuer>/.well-known/openid-configuration`), e.g. `https://keycloak.example/realms/ops`, `https://login.microsoftonline.com/<tenant>/v2.0`, `https://<org>.okta.com`. Discovery happens lazily on the first login, so an unreachable IdP does not block start-up. |
+| `VANTYX_OIDC_CLIENT_ID` | — | Client ID registered at the IdP. |
+| `VANTYX_OIDC_CLIENT_SECRET` | — | Client secret. Optional for public clients (PKCE is always used). |
+| `VANTYX_OIDC_REDIRECT_URL` | derived | Callback URL registered at the IdP. Defaults to `<scheme>://<host>/api/auth/oidc/callback` from the incoming request (honours `X-Forwarded-Proto`); set it explicitly behind a reverse proxy. |
+| `VANTYX_OIDC_SCOPES` | `openid profile email` | Space- or comma-separated scopes. `openid` is always added. |
+| `VANTYX_OIDC_USERNAME_CLAIM` | `preferred_username` | ID-token claim mapped to the Vantyx username. Falls back to `preferred_username`, then `email`. |
+| `VANTYX_OIDC_AUTO_CREATE_USERS` | `0` | `1`/`true`: create unknown users as role `user` with an unusable random password. Otherwise unknown identities are rejected with `not_provisioned`. |
+| `VANTYX_OIDC_DISPLAY_NAME` | `SSO` | Label for the login button ("Sign in with *name*"). |
+
+Identity mapping on each login, in order: an existing link (`issuer`,
+`sub`) → a local user whose username equals the username claim
+(case-insensitive; the link is stored on first use) → auto-create when
+enabled. Links survive username changes at the IdP. Deleting the local user
+removes its links. Deep links (`/?next=/terminal?…`) are carried through the
+IdP round trip; only same-origin paths are honoured.
+
+Audit events: `oidc_login_started`, `oidc_login_ok`, `oidc_login_failed`
+(with `reason`), `oidc_user_created`.
+
 ## Storage
 
 | Variable | Default | Description |
@@ -75,7 +126,7 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VANTYX_SSH_LISTEN` | — | When set (for example `:2222`), the binary starts the CLI SSH gateway on this address. Leave unset to disable the gateway. |
+| `VANTYX_SSH_LISTEN` | — | When set (for example `:2222`), the binary starts the CLI SSH gateway on this address. Leave unset to disable the gateway. Users with TOTP enabled must authenticate with keyboard-interactive (password + verification code) or a public key. |
 
 ## Audit forwarder
 

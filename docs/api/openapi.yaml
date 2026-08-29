@@ -213,9 +213,39 @@ components:
         require_password_change:
           type: boolean
           description: 初期 admin パスワード等で要強制変更の場合 true。
+        totp_enabled:
+          type: boolean
+          description: GET /api/me で返る。二要素認証（TOTP）が有効なら true。
       required:
         - user_id
         - username
+    MFARequiredResponse:
+      type: object
+      description: |
+        POST /api/login でパスワードは正しいが二要素認証（TOTP）が有効なユーザーの応答。
+        Cookie は発行されず、`mfa_token` を POST /api/login/totp に渡して完了する。
+        `mfa_token` の有効期限は 5 分、誤コード 5 回で破棄される。
+      properties:
+        mfa_required:
+          type: boolean
+          enum: [true]
+        mfa_token:
+          type: string
+      required: [mfa_required, mfa_token]
+    TOTPStatus:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        pending:
+          type: boolean
+          description: setup 済みだが confirm 前
+        recovery_codes_left:
+          type: integer
+        confirmed_at:
+          type: string
+          format: date-time
+      required: [enabled, pending, recovery_codes_left]
     SSHKeyItem:
       type: object
       description: Vantyx ログイン用に登録した SSH 公開鍵 1 件。管理者のみ登録・一覧・削除可能。
@@ -351,6 +381,9 @@ components:
           items:
             type: string
           description: 一覧で返る。ユーザーに付与されたタグ。
+        totp_enabled:
+          type: boolean
+          description: 一覧で返る。二要素認証（TOTP）が有効なら true。
       required:
         - id
         - username
@@ -760,7 +793,10 @@ paths:
   /api/login:
     post:
       summary: ログイン
-      description: ユーザー名とパスワードでログインし、`vantyx_session` Cookie を発行します。
+      description: |
+        ユーザー名とパスワードでログインし、`vantyx_session` Cookie を発行します。
+        二要素認証（TOTP）が有効なユーザーには Cookie を発行せず `MFARequiredResponse` を返すので、
+        `POST /api/login/totp` で完了してください。
       requestBody:
         required: true
         content:
@@ -769,16 +805,18 @@ paths:
               $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
-          description: 認証成功
+          description: 認証成功（または二要素認証が必要）
           headers:
             Set-Cookie:
-              description: vantyx_session を含む Set-Cookie ヘッダ
+              description: vantyx_session を含む Set-Cookie ヘッダ（MFA 要求時は無し）
               schema:
                 type: string
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LoginResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/LoginResponse'
+                  - $ref: '#/components/schemas/MFARequiredResponse'
         '400':
           description: リクエストボディ不正
           content:
@@ -797,6 +835,112 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/login/totp:
+    post:
+      summary: 二要素認証コードでログインを完了
+      description: |
+        `POST /api/login` が `mfa_required` を返した後、認証アプリの 6 桁コードまたは未使用のリカバリーコードで
+        ログインを完了し、`vantyx_session` Cookie を発行します。同一オリジンからの呼び出しのみ受け付けます。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mfa_token, code]
+              properties:
+                mfa_token:
+                  type: string
+                code:
+                  type: string
+                  description: TOTP 6 桁、または `xxxxx-xxxxx` 形式のリカバリーコード
+      responses:
+        '200':
+          description: 認証成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: mfa_token が無効・期限切れ、またはコード不一致
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: 試行回数超過
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/methods:
+    get:
+      summary: 利用可能なログイン方式（公開）
+      description: ログイン画面が SSO ボタンを表示するかどうかを判断するために使います。
+      security: []
+      responses:
+        '200':
+          description: ログイン方式
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  password:
+                    type: boolean
+                  oidc:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                      display_name:
+                        type: string
+
+  /api/auth/oidc/login:
+    get:
+      summary: OIDC ログイン開始
+      description: |
+        OpenID Connect の Authorization Code（PKCE S256 + nonce）フローを開始し、IdP の認可エンドポイントへ 302 リダイレクトします。
+        `VANTYX_OIDC_ISSUER` / `VANTYX_OIDC_CLIENT_ID` が未設定なら 404。
+      security: []
+      parameters:
+        - in: query
+          name: next
+          schema:
+            type: string
+          description: ログイン後に戻る同一オリジンのパス（`/terminal?...` など）。外部 URL は無視。
+      responses:
+        '302':
+          description: IdP へリダイレクト（`vantyx_oidc_state` Cookie を発行）
+        '404':
+          description: OIDC 未設定
+
+  /api/auth/oidc/callback:
+    get:
+      summary: OIDC コールバック
+      description: |
+        IdP からの戻り。state Cookie・PKCE・ID トークン署名・nonce・aud を検証し、
+        ローカルユーザーへ対応付けて `vantyx_session` Cookie を発行し `next` へ 302 します。
+        失敗時は `/?oidc_error=<denied|state|provider_unavailable|exchange|token|not_provisioned|resolve|session>` へ 302 します。
+      security: []
+      parameters:
+        - in: query
+          name: code
+          schema:
+            type: string
+        - in: query
+          name: state
+          schema:
+            type: string
+        - in: query
+          name: error
+          schema:
+            type: string
+      responses:
+        '302':
+          description: ログイン完了またはエラー付きでログイン画面へ
 
   /api/me:
     get:
@@ -851,6 +995,105 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/me/totp:
+    get:
+      summary: 自分の二要素認証（TOTP）状態
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: 状態
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TOTPStatus'
+        '401':
+          description: 未認証
+    delete:
+      summary: 二要素認証を無効化
+      description: 現在のパスワードで再認証したうえで TOTP 秘密鍵とリカバリーコードを削除します。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password:
+                  type: string
+      responses:
+        '204':
+          description: 無効化完了
+        '403':
+          description: パスワード不一致
+        '404':
+          description: TOTP が有効ではない
+
+  /api/me/totp/setup:
+    post:
+      summary: 二要素認証の登録開始
+      description: |
+        新しい TOTP 秘密鍵を生成して未確認状態で保存し、認証アプリ用の otpauth URL・手入力用シークレット・QR コード（PNG data URL）を返します。
+        `POST /api/me/totp/confirm` で確認するまでログインには要求されません。既に有効な場合は 409。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: 登録情報
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  otpauth_url:
+                    type: string
+                  secret:
+                    type: string
+                    description: Base32 シークレット
+                  qr_png:
+                    type: string
+                    description: '`data:image/png;base64,...`'
+        '409':
+          description: 既に有効（先に無効化が必要）
+
+  /api/me/totp/confirm:
+    post:
+      summary: 二要素認証の登録確認
+      description: 認証アプリの最初のコードで登録を確定し、1 回限り表示されるリカバリーコード（8 個）を返します。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+      responses:
+        '200':
+          description: 有効化完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  recovery_codes:
+                    type: array
+                    items:
+                      type: string
+        '400':
+          description: コード不一致、または setup 未実施
+        '409':
+          description: 既に有効
 
   /api/me/locale:
     put:
@@ -2524,6 +2767,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/users/{user_id}/totp:
+    delete:
+      summary: ユーザーの二要素認証をリセット（管理者）
+      description: 端末紛失などでロックアウトされたユーザーの TOTP を管理者が解除します。監査イベント `totp_reset_by_admin` を記録します。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: リセット完了
+        '401':
+          description: 未認証
+        '403':
+          description: 管理者以外
+        '404':
+          description: 対象ユーザーに TOTP が設定されていない
 
   /api/users/{user_id}/tags:
     get:

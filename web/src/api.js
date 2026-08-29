@@ -34,6 +34,96 @@ const API = {
   },
 
   /**
+   * Complete a login whose password was accepted but which requires a
+   * second factor. `code` is a TOTP or an unused recovery code.
+   *
+   * @param {string} mfaToken - Token from the `mfa_required` login response.
+   * @param {string} code
+   * @returns {Promise<{user_id: string, username: string, role: string, require_password_change?: boolean}>}
+   */
+  async loginTotp(mfaToken, code) {
+    const res = await fetch('/api/login/totp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mfa_token: mfaToken, code }),
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Verification failed')
+    }
+    return res.json()
+  },
+
+  /** Which sign-in methods the server offers (public). */
+  async authMethods() {
+    const res = await fetch('/api/auth/methods', { credentials: 'include' })
+    if (!res.ok) return { password: true, oidc: { enabled: false } }
+    return res.json()
+  },
+
+  /** Current user's two-factor status. */
+  async totpStatus() {
+    const res = await fetch('/api/me/totp', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load two-factor status')
+    }
+    return res.json()
+  },
+
+  /** Start two-factor enrolment: returns otpauth_url, secret and a QR PNG data URL. */
+  async totpSetup() {
+    const res = await fetch('/api/me/totp/setup', { method: 'POST', credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to start two-factor setup')
+    }
+    return res.json()
+  },
+
+  /** Confirm enrolment with the first code; returns the one-time recovery codes. */
+  async totpConfirm(code) {
+    const res = await fetch('/api/me/totp/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ code }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to confirm two-factor setup')
+    }
+    return res.json()
+  },
+
+  /** Disable two-factor authentication (re-authenticates with the password). */
+  async totpDisable(password) {
+    const res = await fetch('/api/me/totp', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ password }),
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to disable two-factor authentication')
+    }
+  },
+
+  /** Admin: clear a user's second factor (lockout recovery). */
+  async adminResetTotp(userId) {
+    const res = await fetch(`/api/users/${encodeURIComponent(userId)}/totp`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to reset two-factor authentication')
+    }
+  },
+
+  /**
    * Rotate the current user's password.
    *
    * @param {string} currentPassword

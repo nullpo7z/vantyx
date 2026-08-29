@@ -28,6 +28,9 @@ exposes a unified REST + WebSocket API for the bundled single-page UI.
   **Identities** (username + auth). Apply to targets via Identity, Key + manual
   username, or inline entry. See [docs/credentials.md](docs/credentials.md).
 - **Tag-based access control** on groups, targets, and users.
+- **OIDC single sign-on** (Keycloak, Entra ID, Okta, … via discovery + PKCE)
+  and **TOTP two-factor** for built-in users, on both the web UI and the CLI
+  gateway. See [docs/configuration.md](docs/configuration.md#two-factor-authentication-totp).
 - **CLI gateway**: `ssh user@vantyx` and proxy to allowed targets.
 - **Session recording**: terminal/CLI sessions as asciinema `.cast`; RDP/VNC
   screen capture as H.264 `.mp4`. Playback in the UI; GIF/MP4 export via a

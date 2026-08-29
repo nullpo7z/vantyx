@@ -57,6 +57,12 @@ var Messages = map[string]string{
 	"auth.sshKeyIDInvalid":        "invalid key_id",
 	"auth.unsupportedLocale":      "unsupported locale",
 	"auth.unsupportedTimezone":    "unsupported timezone",
+	"auth.mfaTokenInvalid":        "the sign-in challenge has expired; please log in again",
+	"auth.totpInvalidCode":        "invalid verification code",
+	"auth.totpAlreadyEnabled":     "two-factor authentication is already enabled",
+	"auth.totpNotEnabled":         "two-factor authentication is not enabled",
+	"auth.totpNoPending":          "start two-factor setup first",
+	"auth.oidcDisabled":           "single sign-on is not configured",
 	"auth.passwordChangeRequired": "password change required before using this feature",
 
 	// Users (admin management).

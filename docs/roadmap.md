@@ -16,10 +16,13 @@ Remaining polish:
 
 ## External authentication
 
-- **OIDC SSO** — integration with external IdPs (Keycloak / Azure AD /
-  Okta).
-- **TOTP MFA** — second factor for the built-in users.
+OIDC SSO (Authorization Code + PKCE, any discovery-capable IdP) and TOTP
+second factor for built-in users are shipped — see
+[configuration.md](configuration.md#single-sign-on-openid-connect).
+Remaining:
+
 - **RADIUS / TACACS+ / LDAP** — external user directories.
+- **WebAuthn / passkeys** as an alternative second factor.
 
 ## Storage and deployment
 

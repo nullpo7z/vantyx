@@ -49,6 +49,12 @@ var Messages = map[string]string{
 	"auth.sshKeyIDInvalid":        "key_id が不正です",
 	"auth.unsupportedLocale":      "サポートされていない言語コードです",
 	"auth.unsupportedTimezone":    "サポートされていないタイムゾーンです",
+	"auth.mfaTokenInvalid":        "サインインの有効期限が切れました。もう一度ログインしてください",
+	"auth.totpInvalidCode":        "確認コードが正しくありません",
+	"auth.totpAlreadyEnabled":     "二要素認証は既に有効です",
+	"auth.totpNotEnabled":         "二要素認証は有効になっていません",
+	"auth.totpNoPending":          "先に二要素認証の設定を開始してください",
+	"auth.oidcDisabled":           "シングルサインオンは設定されていません",
 	"auth.passwordChangeRequired": "この機能を利用する前にパスワードを変更してください",
 
 	// Users (admin management).

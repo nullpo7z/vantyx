@@ -55,6 +55,16 @@ export async function renderUsersPage({
                 data-username="${escapeHtml(u.username)}">
                 ${t('users.delete')}
               </button>
+              ${
+                u.totp_enabled
+                  ? `<button type="button"
+                class="reset-totp-btn shrink-0 rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-50"
+                data-user-id="${escapeHtml(u.id)}"
+                data-username="${escapeHtml(u.username)}">
+                ${t('users.resetTotp')}
+              </button>`
+                  : ''
+              }
               <div class="flex flex-wrap items-center gap-2 min-w-0">
                 ${
                   userTags.length
@@ -132,6 +142,24 @@ export async function renderUsersPage({
         } catch (err) {
           btn.disabled = false
           await uiAlert(t('users.deleteFailed', { error: err.message || String(err) }))
+        }
+      })
+    })
+
+    mainContent.querySelectorAll('.reset-totp-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const userId = btn.dataset.userId || ''
+        const username = btn.dataset.username || userId
+        if (!userId) return
+        const ok = await uiConfirm(t('users.confirmResetTotp', { name: username }), { danger: true })
+        if (!ok) return
+        btn.disabled = true
+        try {
+          await API.adminResetTotp(userId)
+          reload()
+        } catch (err) {
+          btn.disabled = false
+          await uiAlert(t('users.resetTotpFailed', { error: err.message || String(err) }))
         }
       })
     })

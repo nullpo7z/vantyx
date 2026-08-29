@@ -265,6 +265,31 @@ func Migrate(db *sql.DB) error {
 			FOREIGN KEY (ssh_key_id) REFERENCES ssh_keys(id) ON DELETE SET NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_credential_identities_label ON credential_identities(label)`,
+		// Per-user TOTP second factor. secret_enc is the base32 secret
+		// encrypted with VANTYX_SSH_PASSWORD_ENCRYPTION_KEY; enabled=0
+		// means enrolment started but the first code was not confirmed
+		// yet. recovery_codes is a JSON array of SHA-256 hex digests of
+		// unused one-time recovery codes.
+		`CREATE TABLE IF NOT EXISTS user_totp (
+			user_id TEXT PRIMARY KEY,
+			secret_enc TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			recovery_codes TEXT NOT NULL DEFAULT '[]',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			confirmed_at TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		// OIDC identities linked to local users (issuer + subject is the
+		// stable identity; usernames/emails at the IdP may change).
+		`CREATE TABLE IF NOT EXISTS user_oidc_links (
+			issuer TEXT NOT NULL,
+			subject TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (issuer, subject),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_oidc_links_user ON user_oidc_links(user_id)`,
 	}
 
 	for _, stmt := range stmts {

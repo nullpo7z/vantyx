@@ -112,6 +112,10 @@ export function renderLogin(container) {
               ${t('login.submit')}
             </button>
           </form>
+          <div id="login-sso" class="hidden mt-5 pt-5 border-t border-slate-200">
+            <a id="login-sso-btn" href="/api/auth/oidc/login"
+              class="block w-full text-center rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors"></a>
+          </div>
         </div>
       </div>
     </div>
@@ -120,6 +124,9 @@ export function renderLogin(container) {
   const form = document.getElementById('login-form')
   const errorEl = document.getElementById('login-error')
   const btn = document.getElementById('login-btn')
+
+  showOIDCError(errorEl)
+  offerSSO()
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault()
@@ -131,17 +138,11 @@ export function renderLogin(container) {
     btn.disabled = true
     try {
       const data = await API.login(username, password)
-      if (data && typeof data.locale === 'string' && data.locale) {
-        applyServerLocale(data.locale)
+      if (data && data.mfa_required && data.mfa_token) {
+        renderTOTPStep(container, data.mfa_token)
+        return
       }
-      if (data.require_password_change) {
-        renderChangePassword(container)
-      } else if (consumePostLoginRedirect()) {
-        /* navigating to invitation / deep link */
-      } else {
-        const { renderApp } = await import('./app.js')
-        renderApp(container)
-      }
+      await finishLogin(container, data)
     } catch (err) {
       errorEl.textContent = err.message || t('login.failed')
       errorEl.classList.remove('hidden')
@@ -149,4 +150,136 @@ export function renderLogin(container) {
       btn.disabled = false
     }
   })
+}
+
+/**
+ * After the server has accepted the credentials (and, if applicable,
+ * the second factor), apply the user's locale and move into the app or
+ * the stored deep link.
+ */
+async function finishLogin(container, data) {
+  if (data && typeof data.locale === 'string' && data.locale) {
+    applyServerLocale(data.locale)
+  }
+  if (data && data.require_password_change) {
+    renderChangePassword(container)
+  } else if (consumePostLoginRedirect()) {
+    /* navigating to invitation / deep link */
+  } else {
+    const { renderApp } = await import('./app.js')
+    renderApp(container)
+  }
+}
+
+/**
+ * Second login step for accounts with TOTP enabled: the password was
+ * already accepted and the server handed back a short-lived token that
+ * must be paired with an authenticator or recovery code.
+ */
+function renderTOTPStep(container, mfaToken) {
+  container.innerHTML = `
+    <div class="flex-1 flex items-center justify-center p-4">
+      <div class="w-full max-w-sm bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+        <div class="px-5 py-6">
+          <h1 class="text-xl font-semibold text-slate-800 text-center mb-2">${t('login.totpTitle')}</h1>
+          <p class="text-sm text-slate-600 text-center mb-5">${t('login.totpIntro')}</p>
+          <form id="totp-form" class="space-y-5">
+            <div>
+              <label for="totp-code" class="block text-xs font-medium text-slate-600 mb-1.5">${t('login.totpCode')}</label>
+              <input type="text" id="totp-code" name="code" required inputmode="numeric" autocomplete="one-time-code"
+                class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 tracking-widest focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400"
+                placeholder="${t('login.totpPlaceholder')}" />
+              <p class="mt-1.5 text-xs text-slate-500">${t('login.totpRecoveryHint')}</p>
+            </div>
+            <p id="totp-error" class="text-sm text-red-600 hidden"></p>
+            <button type="submit" id="totp-btn"
+              class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">
+              ${t('login.totpSubmit')}
+            </button>
+            <button type="button" id="totp-back"
+              class="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">
+              ${t('login.totpBack')}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  `
+  const form = document.getElementById('totp-form')
+  const errorEl = document.getElementById('totp-error')
+  const btn = document.getElementById('totp-btn')
+  const input = document.getElementById('totp-code')
+  input.focus()
+
+  document.getElementById('totp-back').addEventListener('click', () => renderLogin(container))
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    errorEl.classList.add('hidden')
+    const code = input.value.trim()
+    if (!code) return
+    btn.disabled = true
+    try {
+      const data = await API.loginTotp(mfaToken, code)
+      await finishLogin(container, data)
+    } catch (err) {
+      errorEl.textContent = err.message || t('login.totpFailed')
+      errorEl.classList.remove('hidden')
+      input.select()
+    } finally {
+      btn.disabled = false
+    }
+  })
+}
+
+/**
+ * Show the SSO button when the server has an OIDC provider configured.
+ * The button is a plain link: the whole flow is server-side redirects.
+ */
+async function offerSSO() {
+  try {
+    const methods = await API.authMethods()
+    const oidc = methods && methods.oidc
+    if (!oidc || !oidc.enabled) return
+    const wrap = document.getElementById('login-sso')
+    const link = document.getElementById('login-sso-btn')
+    if (!wrap || !link) return
+    link.textContent = t('login.ssoButton', { name: oidc.display_name || 'SSO' })
+    // Carry the deep link the user was heading for through the IdP round trip.
+    let next = ''
+    try {
+      next = sessionStorage.getItem('vantyx_post_login_redirect') || ''
+    } catch {
+      /* storage unavailable */
+    }
+    if (next) link.href = '/api/auth/oidc/login?next=' + encodeURIComponent(next)
+    wrap.classList.remove('hidden')
+  } catch {
+    /* methods endpoint unavailable: keep the password form only */
+  }
+}
+
+/**
+ * The OIDC callback redirects back to `/?oidc_error=<reason>` when the
+ * IdP round trip fails; surface it once and clean the URL.
+ */
+function showOIDCError(errorEl) {
+  let reason
+  try {
+    reason = new URLSearchParams(window.location.search).get('oidc_error') || ''
+  } catch {
+    return
+  }
+  if (!reason) return
+  const known = ['denied', 'state', 'provider_unavailable', 'exchange', 'token', 'not_provisioned', 'resolve', 'session']
+  const key = known.includes(reason) ? `login.oidcError.${reason}` : 'login.oidcError.generic'
+  errorEl.textContent = t(key)
+  errorEl.classList.remove('hidden')
+  try {
+    const url = new URL(window.location.href)
+    url.searchParams.delete('oidc_error')
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash)
+  } catch {
+    /* ignore */
+  }
 }

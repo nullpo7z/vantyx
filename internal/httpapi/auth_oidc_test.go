@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -146,6 +147,7 @@ func newOIDCTestApp(t *testing.T, idp *fakeIdP, autoCreate bool) (*App, http.Han
 			Scopes:        []string{"openid", "profile", "email"},
 			UsernameClaim: "preferred_username",
 			AutoCreate:    autoCreate,
+			LinkExisting:  os.Getenv("VANTYX_OIDC_LINK_EXISTING_USERS") == "1",
 			DisplayName:   "Test IdP",
 		},
 		states: make(map[string]*oidcPending),
@@ -281,8 +283,9 @@ func TestOIDC_LoginAutoCreatesAndLinksUser(t *testing.T) {
 
 func TestOIDC_LinksExistingUserByUsername(t *testing.T) {
 	idp := newFakeIdP(t)
+	t.Setenv("VANTYX_OIDC_LINK_EXISTING_USERS", "1")
 	app, router := newOIDCTestApp(t, idp, false)
-	if _, err := app.UserStore.CreateUser("bob", "Bob", "Password1!", "admin"); err != nil {
+	if _, err := app.UserStore.CreateUser("bob", "Bob", "Password1!", "user"); err != nil {
 		t.Fatalf("create bob: %v", err)
 	}
 	// Case-insensitive username match, no auto-create needed.
@@ -581,4 +584,57 @@ func TestOIDCConfigFromEnv(t *testing.T) {
 	if strings.Join(cfg.Scopes, " ") != "openid profile groups" {
 		t.Fatalf("scopes = %v; openid must be prepended", cfg.Scopes)
 	}
+}
+
+// Attaching an unlinked IdP identity to a local account by username is
+// opt-in, never applies to admins, and honours email_verified=false:
+// otherwise whoever controls the claim at the IdP could sign in as any
+// local user.
+func TestOIDC_LinkExistingIsOptInAndNeverAdmin(t *testing.T) {
+	expectRefused := func(t *testing.T, app *App, router http.Handler, idp *fakeIdP, claims map[string]interface{}) {
+		t.Helper()
+		idp.setClaims(claims)
+		cookie, state, nonce := startOIDCLogin(t, router, "/")
+		idp.setNonce(nonce)
+		w := oidcCallback(t, router, cookie, state)
+		if w.Code != http.StatusFound || !strings.Contains(w.Header().Get("Location"), "oidc_error=not_provisioned") || sessionCookie(w) != "" {
+			t.Fatalf("expected refusal, got %d %q cookie=%q", w.Code, w.Header().Get("Location"), sessionCookie(w))
+		}
+		if _, err := app.OIDCLinks.Lookup(context.Background(), idp.srv.URL, claims["sub"].(string)); err == nil {
+			t.Fatal("link was stored although the login was refused")
+		}
+	}
+
+	t.Run("default off", func(t *testing.T) {
+		idp := newFakeIdP(t)
+		app, router := newOIDCTestApp(t, idp, false)
+		if _, err := app.UserStore.CreateUser("bob", "bob", "Password1!", "user"); err != nil {
+			t.Fatal(err)
+		}
+		expectRefused(t, app, router, idp, map[string]interface{}{"sub": "sub-bob", "preferred_username": "bob"})
+	})
+	t.Run("never admin", func(t *testing.T) {
+		idp := newFakeIdP(t)
+		t.Setenv("VANTYX_OIDC_LINK_EXISTING_USERS", "1")
+		app, router := newOIDCTestApp(t, idp, false)
+		// The seeded admin account must not be claimable through the IdP.
+		expectRefused(t, app, router, idp, map[string]interface{}{"sub": "sub-admin", "preferred_username": "ADMIN"})
+	})
+	t.Run("unverified email", func(t *testing.T) {
+		idp := newFakeIdP(t)
+		t.Setenv("VANTYX_OIDC_LINK_EXISTING_USERS", "1")
+		app, router := newOIDCTestApp(t, idp, false)
+		if _, err := app.UserStore.CreateUser("carol", "carol@example.com", "Password1!", "user"); err != nil {
+			t.Fatal(err)
+		}
+		expectRefused(t, app, router, idp, map[string]interface{}{"sub": "sub-carol", "email": "carol@example.com", "email_verified": false})
+	})
+	t.Run("auto-create does not shadow a clashing local name", func(t *testing.T) {
+		idp := newFakeIdP(t)
+		app, router := newOIDCTestApp(t, idp, true)
+		if _, err := app.UserStore.CreateUser("dave", "dave", "Password1!", "user"); err != nil {
+			t.Fatal(err)
+		}
+		expectRefused(t, app, router, idp, map[string]interface{}{"sub": "sub-dave", "preferred_username": "dave"})
+	})
 }

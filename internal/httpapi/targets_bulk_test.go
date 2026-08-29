@@ -161,3 +161,19 @@ func TestTargets_ImportExportCheck(t *testing.T) {
 		t.Fatalf("router2 should be unreachable: %s", chk)
 	}
 }
+
+func TestTargetsCSV_FormulaGuardRoundTrips(t *testing.T) {
+	for _, in := range []string{"=1+1", "+cmd", "-x", "@SUM", "\tx", "plain", "", "'quoted"} {
+		safe := csvSafe(in)
+		if in != "" && strings.ContainsAny(in[:1], "=+-@\t\r") && !strings.HasPrefix(safe, "'") {
+			t.Errorf("csvSafe(%q) = %q, not neutralised", in, safe)
+		}
+		if got := csvUnsafe(safe); got != in {
+			t.Errorf("round trip %q -> %q -> %q", in, safe, got)
+		}
+	}
+	rows, err := parseTargetCSV([]byte("name,host,group_id,path\n'=evil,10.0.0.1,g1,g1/rack\n"))
+	if err != nil || len(rows) != 1 || rows[0].Name != "=evil" || rows[0].Path != "g1/rack" {
+		t.Fatalf("rows = %+v, %v", rows, err)
+	}
+}

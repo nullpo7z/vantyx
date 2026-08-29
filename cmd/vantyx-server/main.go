@@ -158,6 +158,7 @@ func main() {
 			slog.Error("sshd setup failed", "error", err)
 			os.Exit(1)
 		}
+		app.CLISessionCloser = sshServer
 		go func() {
 			if err := sshServer.ListenAndServe(sshListen); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
 				slog.Error("sshd failed", "error", err)

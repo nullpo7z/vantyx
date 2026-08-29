@@ -265,7 +265,7 @@ func (a *App) handleAdminWatchSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminName := a.usernameFor(r.Context(), adminID)
-	room := a.SharingRegistry.EnsureRoom(sessionID, targetID, ownerID, ownerID)
+	room := a.SharingRegistry.EnsureRoom(sessionID, targetID, ownerID, a.usernameFor(r.Context(), ownerID))
 	if !room.IsParticipant(adminID) {
 		if err := room.AddViewer(adminID, adminName, "admin-watch", time.Now().UTC()); err != nil {
 			writeInternalError(w, err)

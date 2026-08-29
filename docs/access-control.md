@@ -52,7 +52,8 @@ updates the expiry; adding without one makes it permanent.
 
 Users who lack a group can ask for it from the home page (**Request
 access**): pick the group, a duration (1 hour … 30 days, or permanent) and
-an optional reason. Admins see pending requests under **Access requests**
+an optional reason. The picker lists **every** group's ID and name (not its
+targets) to every signed-in user, so group names should not carry secrets. Admins see pending requests under **Access requests**
 and approve (optionally changing the duration) or deny with a note. An
 approval creates the membership through the same path as adding a member
 by hand, so expiry and inheritance behave identically. Requesters can

@@ -154,3 +154,54 @@ func TestAPITokens_Lifecycle(t *testing.T) {
 		t.Fatalf("admin-revoked token still works: %d", w.Code)
 	}
 }
+
+// A token must never reach anything that mints or changes credentials:
+// those stay session-only whatever the scope, and user administration /
+// stored SSH keys are read-only for tokens.
+func TestAPITokens_CredentialEndpointsAreSessionOnly(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	adminSess, _ := app.SessionStore.Create("admin")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, jsonReq(t, http.MethodPost, "/api/me/tokens", map[string]interface{}{"name": "deploy", "scope": "write"}, adminSess.ID))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	writeTok, _ := decodeJSON(t, w)["token"].(string)
+	bearer := func(method, path string, body interface{}) int {
+		req := jsonReq(t, method, path, body, "")
+		req.Header.Set("Authorization", "Bearer "+writeTok)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w.Code
+	}
+	denied := []struct{ method, path string }{
+		{http.MethodPost, "/api/me/ssh-keys"},
+		{http.MethodGet, "/api/me/ssh-keys"},
+		{http.MethodGet, "/api/settings/backups"},
+		{http.MethodPost, "/api/settings/backups"},
+		{http.MethodGet, "/api/settings/backups/vantyx-20260101-000000.db"},
+		{http.MethodPut, "/api/settings/webhooks"},
+		{http.MethodGet, "/api/settings/webhooks"},
+		{http.MethodPost, "/api/users"},
+		{http.MethodPatch, "/api/users/admin"},
+		{http.MethodDelete, "/api/users/admin/totp"},
+		{http.MethodPost, "/api/users/admin/ssh-keys"},
+		{http.MethodPost, "/api/ssh-keys"},
+		{http.MethodDelete, "/api/users/admin/tokens/x"},
+	}
+	for _, d := range denied {
+		if code := bearer(d.method, d.path, map[string]interface{}{}); code != http.StatusForbidden {
+			t.Errorf("%s %s with write token: %d, want 403", d.method, d.path, code)
+		}
+	}
+	// Reads of user administration and ordinary APIs stay available.
+	for _, p := range []string{"/api/users", "/api/users/admin/tokens", "/api/ssh-keys", "/api/me", "/api/targets"} {
+		if code := bearer(http.MethodGet, p, nil); code != http.StatusOK {
+			t.Errorf("GET %s with write token: %d, want 200", p, code)
+		}
+	}
+	if !apiTokenPathAllowed(http.MethodPost, "/api/access-requests") || apiTokenPathAllowed(http.MethodGet, "/api/me/tokens") || apiTokenPathAllowed(http.MethodPost, "/api/usersx") == false {
+		t.Fatal("apiTokenPathAllowed prefix rules")
+	}
+}

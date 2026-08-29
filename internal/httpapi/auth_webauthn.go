@@ -33,6 +33,7 @@ const (
 	webauthnEnvRPName    = "VANTYX_WEBAUTHN_RP_NAME"
 	webauthnRegisterTTL  = 5 * time.Minute
 	webauthnMaxNameLen   = 100
+	webauthnMaxCachedRPs = 16
 	webauthnDefaultRPNam = "Vantyx"
 )
 
@@ -148,6 +149,11 @@ func (a *App) webauthnFor(r *http.Request) (*webauthn.WebAuthn, error) {
 		// a DNS name, which operators supply via VANTYX_WEBAUTHN_RP_ID.
 		slog.Warn("webauthn unavailable for this host", "rp_id", rpID, "origins", origins, "error", err)
 		return nil, fmt.Errorf("%w: %v", errWebAuthnConfig, err)
+	}
+	// The key derives from the request Host when no RP ID is configured,
+	// so cap the cache instead of letting arbitrary Host headers grow it.
+	if len(a.webauthnRPs) >= webauthnMaxCachedRPs {
+		a.webauthnRPs = map[string]*webauthn.WebAuthn{}
 	}
 	a.webauthnRPs[key] = w
 	return w, nil
@@ -430,17 +436,14 @@ func (a *App) handleLoginWebAuthnFinish(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	fail := func(reason string) {
-		p.failures++
-		if p.failures >= mfaMaxFailures {
-			a.mfaPending.consume(tok)
-		}
+		failures := a.mfaPending.fail(tok)
 		if a.LoginRateLimiter != nil {
 			if ip != "" {
 				a.LoginRateLimiter.recordFailureIP(ip)
 			}
 			a.LoginRateLimiter.recordFailureUser(p.username)
 		}
-		audit("login_webauthn_failed", auditFields{"user_id": p.userID, "reason": reason, "failures": p.failures})
+		audit("login_webauthn_failed", auditFields{"user_id": p.userID, "reason": reason, "failures": failures})
 		writeJSONErrorKey(w, r, "auth.webauthnInvalid", http.StatusUnauthorized)
 	}
 	parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(req.Credential))

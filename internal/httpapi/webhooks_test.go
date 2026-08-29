@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -168,5 +170,52 @@ func TestWebhooks_DeliveryFilteringAndSignature(t *testing.T) {
 	}
 	if !webhookEventMatches([]string{"access_request_*"}, "access_request_denied") || webhookEventMatches([]string{"access_request_*"}, "login_failed") {
 		t.Fatal("glob matching broken")
+	}
+}
+
+// The outbound client re-checks the *resolved* address and never follows
+// redirects, so DNS names or 3xx hops cannot reach loopback / link-local /
+// metadata addresses that the URL validation refuses.
+func TestWebhooks_DialRefusesResolvedRestrictedAddressesAndRedirects(t *testing.T) {
+	prevRestricted := os.Getenv("VANTYX_ALLOW_RESTRICTED_HOSTS")
+	t.Setenv("VANTYX_ALLOW_RESTRICTED_HOSTS", "")
+	t.Setenv(webhookAllowLoopback, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, addr := range []string{"localhost:80", "127.0.0.1:80", "169.254.169.254:80", "[::1]:80"} {
+		if _, err := webhookDialContext(ctx, "tcp", addr); err == nil || !errors.Is(err, errWebhookURL) {
+			t.Errorf("dial %s: err = %v, want restricted", addr, err)
+		}
+	}
+	t.Setenv("VANTYX_ALLOW_RESTRICTED_HOSTS", prevRestricted)
+	t.Setenv(webhookAllowLoopback, "1")
+
+	// A redirecting endpoint counts as a failed delivery: the hop is not
+	// followed, so the (would-be internal) destination never sees a request.
+	hits := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; w.WriteHeader(http.StatusNoContent) }))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+	ep := webhookEndpoint{ID: "r", Name: "r", URL: redirector.URL, Format: "generic", Events: []string{"*"}, Enabled: true}
+	status, err := globalWebhooks.deliver(ctx, ep, AuditEntry{Time: time.Now(), Event: "webhook_test", Fields: auditFields{}})
+	if err == nil || hits != 0 {
+		t.Fatalf("redirect: status=%d err=%v hits=%d; want error and no hit", status, err, hits)
+	}
+}
+
+func TestWebhooks_SlackEscaping(t *testing.T) {
+	body, err := webhookBody(webhookEndpoint{Format: "slack"}, AuditEntry{Time: time.Now(), Event: "x", Fields: auditFields{"reason": "<!channel> & <https://evil|click>"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msg map[string]string
+	if err := json.Unmarshal(body, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(msg["text"], "<!channel>") || !strings.Contains(msg["text"], "&lt;!channel&gt; &amp; &lt;https://evil|click&gt;") {
+		t.Fatalf("slack text not escaped: %q", msg["text"])
 	}
 }

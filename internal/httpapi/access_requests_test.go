@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -141,5 +142,46 @@ func TestApp_AccessRequestWorkflow(t *testing.T) {
 	}
 	if n, _ := app.AccessRequests.CountPending(ctx); n != 0 {
 		t.Fatalf("pending count = %d", n)
+	}
+}
+
+// Deleting the requester removes their requests (FK cascade), and a
+// second decision on an already-decided request is a 409, never a 500.
+func TestApp_AccessRequestDeletedRequesterAndDoubleDecision(t *testing.T) {
+	app := newTestApp(t)
+	router := app.NewRouter()
+	ctx := context.Background()
+	adminSess, _ := app.SessionStore.Create("admin")
+	if _, err := app.UserStore.CreateUser("gone", "gone", "Password1!", "user"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.AccessGroupStore.Create(ctx, "lab", "Lab"); err != nil {
+		t.Fatal(err)
+	}
+	goneSess, _ := app.SessionStore.Create("gone")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, jsonReq(t, http.MethodPost, "/api/access-requests", map[string]interface{}{"group_id": "lab", "duration_seconds": 3600}, goneSess.ID))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	id, _ := decodeJSON(t, w)["id"].(string)
+	// Decide twice through the store: the second call reports not-pending,
+	// which the handlers translate to 409 rather than 500.
+	if err := app.AccessRequests.Decide(ctx, id, access.RequestDenied, "admin", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.AccessRequests.Decide(ctx, id, access.RequestApproved, "admin", "", nil); !errors.Is(err, access.ErrRequestNotPending) {
+		t.Fatalf("second decide err = %v", err)
+	}
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, jsonReq(t, http.MethodPost, "/api/access-requests/"+id+"/approve", nil, adminSess.ID))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("approve after deny: %d %s", w.Code, w.Body.String())
+	}
+	if err := app.UserStore.DeleteUser("gone"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.AccessRequests.Get(ctx, id); !errors.Is(err, access.ErrRequestNotFound) {
+		t.Fatalf("request should be gone with its user, err = %v", err)
 	}
 }

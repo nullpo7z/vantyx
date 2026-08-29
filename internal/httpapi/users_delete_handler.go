@@ -102,8 +102,17 @@ func (a *App) countAdmins() (int, error) {
 // stopSessionsOwnedBy stops every live terminal / VNC session owned by
 // userID and returns how many were stopped. Sessions are looked up
 // through the same managers the session-list endpoints use.
+// CLISessionCloser is implemented by the SSH CLI gateway so that
+// disabling or deleting a user also drops their live CLI connections.
+type CLISessionCloser interface {
+	CloseConnectionsForUser(userID string) int
+}
+
 func (a *App) stopSessionsOwnedBy(userID string) int {
 	n := 0
+	if a.CLISessionCloser != nil {
+		n += a.CLISessionCloser.CloseConnectionsForUser(userID)
+	}
 	if mgr, ok := a.TerminalSessionManager.(*session.Manager); ok && mgr != nil {
 		for _, s := range mgr.ActiveSessionsForUser(userID) {
 			if a.SharingRegistry != nil {

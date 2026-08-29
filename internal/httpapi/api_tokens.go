@@ -16,11 +16,19 @@ import (
 // Bearer API tokens for automation. apiTokenMiddleware resolves
 // `Authorization: Bearer vtx_...` into the owning user (stored in the
 // request context, where currentUserIDWithError picks it up before
-// looking at the session cookie), enforces the read/write scope by HTTP
-// method, and marks the request so the same-origin (CSRF) check is
-// skipped -- a bearer token cannot be sent by a cross-site form. Token
-// management itself always requires a browser session: a leaked token
-// must not be able to mint more tokens or revoke others.
+// looking at the session cookie) and enforces the read/write scope by
+// HTTP method. The CSRF Origin middleware runs *before* this one, so a
+// bearer request is still held to the Origin/Referer rules (non-browser
+// clients send neither and pass; a browser cannot attach the header
+// cross-site without CORS anyway); sameOriginRequest's token bypass only
+// matters for handlers that re-check inside.
+//
+// A leaked token must never be convertible into a broader credential, so
+// everything that mints or changes credentials is session-only: token
+// management, passwords, TOTP / passkeys, the user's CLI SSH keys, user
+// administration, database backups (a snapshot contains every hash and
+// live session), webhooks (an exfiltration channel) and the OIDC flow.
+// See apiTokenPathAllowed.
 
 type apiTokenCtxKey struct{}
 
@@ -58,7 +66,8 @@ func (a *App) apiTokenMiddleware(next http.Handler) http.Handler {
 			writeJSONErrorKey(w, r, "auth.apiTokenReadOnly", http.StatusForbidden)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/me/tokens") || strings.HasPrefix(r.URL.Path, "/api/login") || r.URL.Path == "/api/logout" || strings.HasPrefix(r.URL.Path, "/api/me/password") || strings.HasPrefix(r.URL.Path, "/api/me/totp") || strings.HasPrefix(r.URL.Path, "/api/me/webauthn") {
+		if !apiTokenPathAllowed(r.Method, r.URL.Path) {
+			audit("api_token_denied_path", auditFields{"user_id": tok.UserID, "token_id": tok.ID, "method": r.Method, "path": r.URL.Path})
 			writeJSONErrorKey(w, r, "auth.apiTokenNotAllowedHere", http.StatusForbidden)
 			return
 		}
@@ -66,6 +75,51 @@ func (a *App) apiTokenMiddleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), apiTokenCtxKey{}, &apiTokenAuth{userID: tok.UserID, scope: tok.Scope, id: tok.ID})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// apiTokenSessionOnly lists path prefixes a token may never call.
+var apiTokenSessionOnly = []string{
+	"/api/me/tokens",
+	"/api/me/password",
+	"/api/me/totp",
+	"/api/me/webauthn",
+	"/api/me/ssh-keys",
+	"/api/login",
+	"/api/logout",
+	"/api/auth/oidc",
+	"/api/settings/backups",
+	"/api/settings/webhooks",
+}
+
+// apiTokenReadOnlyPrefixes lists prefixes a token may only read
+// (GET/HEAD), never modify, regardless of scope: user administration
+// (creating admins, resetting passwords / 2FA, adding SSH keys) and the
+// stored SSH key material.
+var apiTokenReadOnlyPrefixes = []string{
+	"/api/users",
+	"/api/ssh-keys",
+}
+
+func pathHasPrefix(p, prefix string) bool {
+	return p == prefix || strings.HasPrefix(p, prefix+"/")
+}
+
+// apiTokenPathAllowed applies the session-only / read-only path rules.
+func apiTokenPathAllowed(method, p string) bool {
+	for _, prefix := range apiTokenSessionOnly {
+		if pathHasPrefix(p, prefix) {
+			return false
+		}
+	}
+	if method == http.MethodGet || method == http.MethodHead {
+		return true
+	}
+	for _, prefix := range apiTokenReadOnlyPrefixes {
+		if pathHasPrefix(p, prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 /* ------------------------------ handlers ----------------------------- */

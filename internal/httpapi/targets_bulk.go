@@ -50,7 +50,7 @@ type targetExportRow struct {
 	HasStoredCredentials  bool     `json:"has_stored_credentials"`
 }
 
-var targetCSVHeader = []string{"name", "host", "port", "protocol", "group_id", "tags", "ssh_username", "ssh_password", "sftp_enabled", "ftp_enabled", "tftp_enabled", "ssh_host_key_fingerprint", "credential_identity_id", "ssh_key_id"}
+var targetCSVHeader = []string{"name", "host", "port", "protocol", "group_id", "path", "tags", "ssh_username", "ssh_password", "sftp_enabled", "ftp_enabled", "tftp_enabled", "ssh_host_key_fingerprint", "credential_identity_id", "ssh_key_id"}
 
 func (a *App) exportTargets(ctx context.Context) ([]targetExportRow, error) {
 	ids, err := a.TargetStore.AllIDs(ctx, &access.ListOpts{Limit: 10000})
@@ -115,15 +115,41 @@ func (a *App) handleExportTargets(w http.ResponseWriter, r *http.Request) {
 	_ = cw.Write(targetCSVHeader)
 	for _, t := range rows {
 		_ = cw.Write([]string{
-			t.Name, t.Host, strconv.Itoa(int(t.Port)), t.Protocol, t.GroupID, strings.Join(t.Tags, " "),
-			t.SSHUsername, "", strconv.FormatBool(t.SFTPEnabled), strconv.FormatBool(t.FTPEnabled), strconv.FormatBool(t.TFTPEnabled),
-			t.SSHHostKeyFingerprint, t.CredentialIdentityID, t.SSHKeyID,
+			csvSafe(t.Name), csvSafe(t.Host), strconv.Itoa(int(t.Port)), t.Protocol, csvSafe(t.GroupID), csvSafe(t.Path), csvSafe(strings.Join(t.Tags, " ")),
+			csvSafe(t.SSHUsername), "", strconv.FormatBool(t.SFTPEnabled), strconv.FormatBool(t.FTPEnabled), strconv.FormatBool(t.TFTPEnabled),
+			csvSafe(t.SSHHostKeyFingerprint), csvSafe(t.CredentialIdentityID), csvSafe(t.SSHKeyID),
 		})
 	}
 	cw.Flush()
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="vantyx-targets-`+stamp+`.csv"`)
 	_, _ = w.Write(buf.Bytes())
+}
+
+// csvSafe neutralises spreadsheet formula injection: a cell starting with
+// =, +, -, @ or a tab / CR would otherwise be evaluated by Excel / LibreOffice
+// when the export is opened. The leading quote is stripped again by
+// csvUnsafe on import, so our own exports round-trip unchanged.
+func csvSafe(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
+}
+
+// csvUnsafe reverses csvSafe for values that came from an export.
+func csvUnsafe(s string) string {
+	if len(s) >= 2 && s[0] == '\'' {
+		switch s[1] {
+		case '=', '+', '-', '@', '\t', '\r':
+			return s[1:]
+		}
+	}
+	return s
 }
 
 /* -------------------------------- import ------------------------------ */
@@ -134,6 +160,7 @@ type targetImportRow struct {
 	Port                  uint16   `json:"port"`
 	Protocol              string   `json:"protocol"`
 	GroupID               string   `json:"group_id"`
+	Path                  string   `json:"path"`
 	Tags                  []string `json:"tags"`
 	SSHUsername           string   `json:"ssh_username"`
 	SSHPassword           string   `json:"ssh_password"`
@@ -194,7 +221,7 @@ func parseTargetCSV(data []byte) ([]targetImportRow, error) {
 		if !ok || i >= len(rec) {
 			return ""
 		}
-		return strings.TrimSpace(rec[i])
+		return csvUnsafe(strings.TrimSpace(rec[i]))
 	}
 	var out []targetImportRow
 	for _, rec := range records[1:] {
@@ -202,7 +229,7 @@ func parseTargetCSV(data []byte) ([]targetImportRow, error) {
 			continue
 		}
 		row := targetImportRow{
-			Name: get(rec, "name"), Host: get(rec, "host"), Protocol: get(rec, "protocol"), GroupID: get(rec, "group_id"),
+			Name: get(rec, "name"), Host: get(rec, "host"), Protocol: get(rec, "protocol"), GroupID: get(rec, "group_id"), Path: get(rec, "path"),
 			SSHUsername: get(rec, "ssh_username"), SSHPassword: get(rec, "ssh_password"),
 			SSHHostKeyFingerprint: get(rec, "ssh_host_key_fingerprint"),
 			CredentialIdentityID:  get(rec, "credential_identity_id"), SSHKeyID: get(rec, "ssh_key_id"),
@@ -255,11 +282,6 @@ func (a *App) createTargetFromImport(ctx context.Context, row targetImportRow, d
 	if err := a.applyStoredCredentials(ctx, strings.TrimSpace(row.CredentialIdentityID), strings.TrimSpace(row.SSHKeyID), &sshUser, &sshPass, &sshKey, &sshPass2, true); err != nil {
 		return "", err
 	}
-	for _, tag := range row.Tags {
-		if strings.TrimSpace(tag) == "" {
-			continue
-		}
-	}
 	// Duplicate detection: same host:port:protocol already in this group.
 	if existing, err := a.AccessGroupStore.TargetIDsForGroup(ctx, access.GroupID(row.GroupID), &access.ListOpts{Limit: 10000}); err == nil {
 		if ts, err := a.TargetStore.ListByIDs(ctx, existing, &access.ListOpts{Limit: 10000}); err == nil {
@@ -284,13 +306,17 @@ func (a *App) createTargetFromImport(ctx context.Context, row targetImportRow, d
 	if row.TFTPEnabled != nil {
 		tftp = *row.TFTPEnabled
 	}
+	path := strings.TrimSpace(row.Path)
+	if path == "" {
+		path = row.GroupID
+	}
 	baseID := slugID(row.Name)
 	id := baseID
 	for i := 0; ; i++ {
 		if i > 0 {
 			id = baseID + "-" + strconv.Itoa(i)
 		}
-		_, err := a.TargetStore.CreateWithPath(ctx, access.TargetID(id), row.Name, row.Host, row.Port, protocol, access.GroupID(row.GroupID), row.GroupID, sshUser, sshPass, sshKey, sshPass2, sftp, ftp, tftp)
+		_, err := a.TargetStore.CreateWithPath(ctx, access.TargetID(id), row.Name, row.Host, row.Port, protocol, access.GroupID(row.GroupID), path, sshUser, sshPass, sshKey, sshPass2, sftp, ftp, tftp)
 		if err == nil {
 			break
 		}
@@ -299,25 +325,36 @@ func (a *App) createTargetFromImport(ctx context.Context, row targetImportRow, d
 		}
 		return "", err
 	}
-	if err := a.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID(row.GroupID), access.TargetID(id)); err != nil {
-		return id, err
-	}
-	if row.CredentialIdentityID != "" || row.SSHKeyID != "" {
-		_ = a.TargetStore.SetCredentialSource(ctx, access.TargetID(id), access.CredentialIdentityID(strings.TrimSpace(row.CredentialIdentityID)), access.SSHKeyID(strings.TrimSpace(row.SSHKeyID)))
-	}
-	tags := append([]string(nil), row.Tags...)
-	if gt, err := a.AccessGroupStore.TagsForGroup(ctx, access.GroupID(row.GroupID)); err == nil {
-		tags = append(tags, gt...)
-	}
-	if len(tags) > 0 {
-		if err := a.TargetStore.SetTargetTags(ctx, access.TargetID(id), dedupeStrings(tags)); err != nil {
-			return id, fmt.Errorf("tags: %w", err)
+	// Everything after the row exists is one unit: on failure remove the
+	// half-configured target so a re-run of the import starts clean.
+	finish := func() error {
+		if err := a.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID(row.GroupID), access.TargetID(id)); err != nil {
+			return err
 		}
-	}
-	if fp := strings.TrimSpace(row.SSHHostKeyFingerprint); fp != "" {
-		if err := a.TargetStore.SetSSHHostKeyFingerprint(ctx, access.TargetID(id), fp); err != nil {
-			return id, fmt.Errorf("host key fingerprint: %w", err)
+		if row.CredentialIdentityID != "" || row.SSHKeyID != "" {
+			if err := a.TargetStore.SetCredentialSource(ctx, access.TargetID(id), access.CredentialIdentityID(strings.TrimSpace(row.CredentialIdentityID)), access.SSHKeyID(strings.TrimSpace(row.SSHKeyID))); err != nil {
+				return fmt.Errorf("credential source: %w", err)
+			}
 		}
+		tags := append([]string(nil), row.Tags...)
+		if gt, err := a.AccessGroupStore.TagsForGroup(ctx, access.GroupID(row.GroupID)); err == nil {
+			tags = append(tags, gt...)
+		}
+		if len(tags) > 0 {
+			if err := a.TargetStore.SetTargetTags(ctx, access.TargetID(id), dedupeStrings(tags)); err != nil {
+				return fmt.Errorf("tags: %w", err)
+			}
+		}
+		if fp := strings.TrimSpace(row.SSHHostKeyFingerprint); fp != "" {
+			if err := a.TargetStore.SetSSHHostKeyFingerprint(ctx, access.TargetID(id), fp); err != nil {
+				return fmt.Errorf("host key fingerprint: %w", err)
+			}
+		}
+		return nil
+	}
+	if err := finish(); err != nil {
+		_ = a.TargetStore.Delete(ctx, access.TargetID(id))
+		return "", err
 	}
 	return id, nil
 }

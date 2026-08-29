@@ -83,6 +83,22 @@ func (s *mfaPendingStore) setWebAuthnSession(tok string, sd *webauthn.SessionDat
 	s.mu.Unlock()
 }
 
+// fail counts a wrong second factor for the pending login and discards
+// it once mfaMaxFailures is reached. Returns the new failure count.
+func (s *mfaPendingStore) fail(tok string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.items[tok]
+	if !ok {
+		return mfaMaxFailures
+	}
+	p.failures++
+	if p.failures >= mfaMaxFailures {
+		delete(s.items, tok)
+	}
+	return p.failures
+}
+
 func (s *mfaPendingStore) consume(tok string) {
 	s.mu.Lock()
 	delete(s.items, tok)
@@ -179,10 +195,7 @@ func (a *App) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	usedRecovery, err := a.TOTPStore.Verify(r.Context(), p.userID, req.Code)
 	if err != nil {
-		p.failures++
-		if p.failures >= mfaMaxFailures {
-			a.mfaPending.consume(req.MFAToken)
-		}
+		failures := a.mfaPending.fail(strings.TrimSpace(req.MFAToken))
 		if a.LoginRateLimiter != nil {
 			if ip != "" {
 				a.LoginRateLimiter.recordFailureIP(ip)
@@ -191,7 +204,7 @@ func (a *App) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		}
 		audit("login_totp_failed", auditFields{
 			"user_id":  p.userID,
-			"failures": p.failures,
+			"failures": failures,
 		})
 		writeJSONErrorKey(w, r, "auth.totpInvalidCode", http.StatusUnauthorized)
 		return

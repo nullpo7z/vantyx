@@ -66,6 +66,43 @@ type Server struct {
 	sharingRegistry *sharing.Registry
 	sharingStore    sharing.Store
 	sharingBridges  sharingBridgeRegistry
+	// conns tracks live authenticated connections by user so an admin
+	// disabling or deleting an account can cut its CLI sessions too.
+	connsMu sync.Mutex
+	conns   map[*ssh.ServerConn]string
+}
+
+// CloseConnectionsForUser drops every live CLI connection of the user
+// (closing the transport ends the menu / proxied session) and returns how
+// many were closed.
+func (s *Server) CloseConnectionsForUser(userID string) int {
+	s.connsMu.Lock()
+	var victims []*ssh.ServerConn
+	for c, uid := range s.conns {
+		if uid == userID {
+			victims = append(victims, c)
+		}
+	}
+	s.connsMu.Unlock()
+	for _, c := range victims {
+		_ = c.Close()
+	}
+	return len(victims)
+}
+
+func (s *Server) trackConn(c *ssh.ServerConn, userID string) {
+	s.connsMu.Lock()
+	if s.conns == nil {
+		s.conns = map[*ssh.ServerConn]string{}
+	}
+	s.conns[c] = userID
+	s.connsMu.Unlock()
+}
+
+func (s *Server) untrackConn(c *ssh.ServerConn) {
+	s.connsMu.Lock()
+	delete(s.conns, c)
+	s.connsMu.Unlock()
 }
 
 // Config holds the dependencies needed to build a [Server].
@@ -227,6 +264,8 @@ func (s *Server) handleConn(nconn net.Conn) {
 	if userID == "" {
 		return
 	}
+	s.trackConn(sshConn, userID)
+	defer s.untrackConn(sshConn)
 	var sessionDone sync.WaitGroup
 	for ch := range chans {
 		if ch.ChannelType() != "session" {

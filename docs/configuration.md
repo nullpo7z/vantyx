@@ -94,13 +94,23 @@ Every user can create bearer tokens under **Account settings → API tokens**
 (`POST /api/me/tokens {name, scope, expires_in_days}`; the plain token is
 returned once, only its SHA-256 is stored). Send them as
 `Authorization: Bearer vtx_…` to any `/api/...` endpoint: the request runs
-as the owning user with their role and group access, without a cookie, so
-the same-origin check does not apply. Scope `read` allows `GET`/`HEAD`
-only; `write` allows every method. Tokens can never be used to log in,
-change passwords or two-factor settings, or manage tokens. Owners revoke
-their own tokens (`DELETE /api/me/tokens/{id}`); admins list and revoke any
-user's (`GET/DELETE /api/users/{id}/tokens[/{id}]`). Audit events
-`api_token_created`, `api_token_revoked`, `api_token_auth_failed`.
+as the owning user with their role and group access, without a cookie
+(non-browser clients send no `Origin`/`Referer` and pass the CSRF check).
+Scope `read` allows `GET`/`HEAD` only; `write` allows every method.
+
+A leaked token must never turn into a broader credential, so some
+endpoints stay **session-only** whatever the scope (403
+`apiTokenNotAllowedHere`, audited as `api_token_denied_path`): login /
+logout / OIDC, `/api/me/tokens`, `/api/me/password`, `/api/me/totp`,
+`/api/me/webauthn`, `/api/me/ssh-keys`, `/api/settings/backups` (a
+snapshot contains every hash) and `/api/settings/webhooks`. User
+administration (`/api/users…`) and stored SSH keys (`/api/ssh-keys…`) are
+**read-only** for tokens: creating admins, resetting passwords / 2FA or
+adding keys needs a browser session. Owners revoke their own tokens
+(`DELETE /api/me/tokens/{id}`); admins list and revoke any user's
+(`GET/DELETE /api/users/{id}/tokens[/{id}]`). Audit events
+`api_token_created`, `api_token_revoked`, `api_token_auth_failed`,
+`api_token_denied_path`.
 
 ## Single sign-on (OpenID Connect)
 
@@ -119,21 +129,29 @@ S256 and nonce). SSO is enabled when both `VANTYX_OIDC_ISSUER` and
 | `VANTYX_OIDC_SCOPES` | `openid profile email` | Space- or comma-separated scopes. `openid` is always added. |
 | `VANTYX_OIDC_USERNAME_CLAIM` | `preferred_username` | ID-token claim mapped to the Vantyx username. Falls back to `preferred_username`, then `email`. |
 | `VANTYX_OIDC_AUTO_CREATE_USERS` | `0` | `1`/`true`: create unknown users as role `user` with an unusable random password. Otherwise unknown identities are rejected with `not_provisioned`. |
+| `VANTYX_OIDC_LINK_EXISTING_USERS` | `0` | `1`/`true`: an IdP identity that is not linked yet may attach itself to the existing local **non-admin** user whose username equals the username claim (case-insensitive). Off by default because whoever controls that claim at the IdP could then sign in as that local user; enable it only when the IdP is the sole source of truth for usernames. Admin accounts are never linked this way (link them by creating the account through SSO or keep them local), and an `email_verified: false` claim blocks email-derived matches. Refusals are audited as `oidc_link_refused` (`reason` = `link_disabled` / `admin_account` / `email_unverified`). |
 | `VANTYX_OIDC_DISPLAY_NAME` | `SSO` | Label for the login button ("Sign in with *name*"). |
 | `VANTYX_OIDC_GROUPS_CLAIM` | `groups` | ID-token claim that lists the user's IdP groups (array of strings, or objects with `name`/`id`). Add the `groups` scope to `VANTYX_OIDC_SCOPES` for IdPs that need it (Cloudflare Access, Keycloak). |
 | `VANTYX_OIDC_GROUP_MAP` | — | `idpGroup=vantyxGroup` pairs separated by `,` or `;` (repeat an IdP group to grant several Vantyx groups, e.g. `netops=net,netops=net/tokyo`). On **every** login the user's memberships are reconciled: mapped groups present in the claim are granted, groups OIDC granted earlier but no longer present are revoked. Memberships an admin added by hand are never touched; unknown Vantyx groups are skipped (audited). |
 | `VANTYX_OIDC_ADMIN_GROUPS` | — | IdP groups whose members get role `admin`; when set, OIDC users outside them are kept at `user`. The last remaining admin is never demoted (audited as `role=kept_last_admin`). |
 
 Identity mapping on each login, in order: an existing link (`issuer`,
-`sub`) → a local user whose username equals the username claim
-(case-insensitive; the link is stored on first use) → auto-create when
-enabled. Links survive username changes at the IdP. Deleting the local user
-removes its links. Deep links (`/?next=/terminal?…`) are carried through the
-IdP round trip; only same-origin paths are honoured.
+`sub`) → with `VANTYX_OIDC_LINK_EXISTING_USERS=1`, a local non-admin user
+whose username equals the username claim (case-insensitive; the link is
+stored on first use, audited as `oidc_user_linked`) → auto-create when
+enabled (a clashing local username is refused rather than shadowed). Links
+survive username changes at the IdP. Deleting the local user removes its
+links. Deep links (`/?next=/terminal?…`) are carried through the IdP round
+trip; only same-origin paths are honoured.
+
+An SSO login does **not** go through the local second factor (TOTP /
+passkeys): the IdP is trusted to have done its own MFA, so enforce it there
+(Cloudflare Access policies, Keycloak required actions, …).
 
 Audit events: `oidc_login_started`, `oidc_login_ok`, `oidc_login_failed`
-(with `reason`), `oidc_user_created`, `oidc_groups_synced` (`added`,
-`removed`, `role`, `unknown_groups`).
+(with `reason`), `oidc_user_created`, `oidc_user_linked`,
+`oidc_link_refused`, `oidc_groups_synced` (`added`, `removed`, `role`,
+`unknown_groups`).
 
 ### Example: Cloudflare Access (Zero Trust) as the IdP
 
@@ -218,6 +236,14 @@ API: `GET/POST /api/settings/backups`, `GET/DELETE
 Audit events: `backup_created`, `backup_failed`, `backup_downloaded`,
 `backup_deleted`, `restore_staged`, `restore_cancelled`, `restore_applied`.
 
+Snapshots and staged restore files never contain the `sessions` table (it
+is emptied in the copy, the live database is untouched): a backup file must
+not double as a session-hijack kit, and restoring an old snapshot must not
+bring back sessions revoked since. Everyone simply signs in again after a
+restore. Password hashes, encrypted credentials / TOTP secrets, passkey
+public keys and API-token hashes *are* in the file — treat backups as
+secrets.
+
 Backups cover the database only. Recording files
 (`VANTYX_RECORDINGS_DIR`), TLS certificates and `.env` (including
 `VANTYX_SSH_PASSWORD_ENCRYPTION_KEY`, without which stored credentials and
@@ -233,10 +259,14 @@ names (exact, `*`, or globs such as `access_request_*`) and receives either
 generic JSON — `{"event","time","source","fields"}` with
 `X-Vantyx-Event` and, when a secret is set, `X-Vantyx-Signature:
 sha256=<HMAC-SHA256 of the body>` — or a Slack/Mattermost-style
-`{"text": …}` message. Delivery is asynchronous (bounded queue, 5 s
-timeout, two retries with backoff; 4xx responses are not retried) and never
-blocks request handling. Loopback / link-local / metadata addresses are
-refused unless `VANTYX_WEBHOOK_ALLOW_RESTRICTED_HOSTS=1`.
+`{"text": …}` message (field values are escaped for Slack mrkdwn).
+Delivery is asynchronous (bounded queue, four workers, 5 s timeout, two
+retries with backoff; 4xx responses are not retried) and never blocks
+request handling. Loopback / link-local / metadata addresses are refused
+unless `VANTYX_WEBHOOK_ALLOW_RESTRICTED_HOSTS=1` — both for literal IPs in
+the URL and for whatever a host name *resolves to* at delivery time — and
+HTTP redirects are never followed, so a hop cannot lead to an internal
+address either.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

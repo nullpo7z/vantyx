@@ -35,6 +35,7 @@ import (
 const (
 	webhookSettingKey    = "webhooks"
 	webhookQueueSize     = 1000
+	webhookWorkers       = 4
 	webhookTimeout       = 5 * time.Second
 	webhookMaxRetries    = 2
 	webhookMaxEndpoints  = 20
@@ -84,11 +85,84 @@ type webhookDispatcher struct {
 var globalWebhooks = &webhookDispatcher{
 	stats:  map[string]*webhookStats{},
 	ch:     make(chan webhookDelivery, webhookQueueSize),
-	client: &http.Client{Timeout: webhookTimeout},
+	client: newWebhookClient(),
+}
+
+// newWebhookClient builds the outbound client: every connection goes
+// through webhookDialContext (which re-checks the *resolved* address, so
+// a DNS name pointing at loopback / link-local / the metadata service is
+// refused like a literal IP), and redirects are never followed (a 3xx to
+// an internal address would otherwise sidestep the check).
+func newWebhookClient() *http.Client {
+	return &http.Client{
+		Timeout: webhookTimeout,
+		Transport: &http.Transport{
+			Proxy:               http.ProxyFromEnvironment,
+			DialContext:         webhookDialContext,
+			TLSHandshakeTimeout: webhookTimeout,
+			MaxIdleConns:        8,
+			IdleConnTimeout:     30 * time.Second,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("webhook: redirects are not followed")
+		},
+	}
+}
+
+// webhookRestrictedHostsAllowed reports the lab-only override.
+func webhookRestrictedHostsAllowed() bool {
+	return strings.TrimSpace(os.Getenv(webhookAllowLoopback)) == "1"
+}
+
+// webhookDialContext resolves the host itself and refuses restricted
+// addresses before connecting, trying the remaining addresses in order.
+func webhookDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		if strings.EqualFold(host, "localhost") && !webhookRestrictedHostsAllowed() {
+			return nil, fmt.Errorf("%w: loopback", errWebhookURL)
+		}
+		resolved, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range resolved {
+			ips = append(ips, r.IP)
+		}
+	}
+	dialer := &net.Dialer{Timeout: webhookTimeout}
+	var lastErr error
+	for _, ip := range ips {
+		if !webhookRestrictedHostsAllowed() {
+			if err := access.CheckRestrictedHostIP(ip); err != nil {
+				lastErr = fmt.Errorf("%w: %s resolves to %s (%s)", errWebhookURL, host, ip, err.Error())
+				continue
+			}
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("%w: %s has no addresses", errWebhookURL, host)
+	}
+	return nil, lastErr
 }
 
 func (d *webhookDispatcher) start() {
-	d.once.Do(func() { go d.loop() })
+	d.once.Do(func() {
+		for i := 0; i < webhookWorkers; i++ {
+			go d.loop()
+		}
+	})
 }
 
 func (d *webhookDispatcher) setConfig(cfg webhookConfig) {
@@ -201,10 +275,10 @@ func webhookBody(ep webhookEndpoint, entry AuditEntry) ([]byte, error) {
 			if k == "event" {
 				continue
 			}
-			parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+			parts = append(parts, slackEscape(k)+"="+slackEscape(fmt.Sprintf("%v", v)))
 		}
 		sortStrings(parts)
-		text := fmt.Sprintf("*Vantyx* `%s` at %s\n%s", entry.Event, entry.Time.Format(time.RFC3339), strings.Join(parts, "  "))
+		text := fmt.Sprintf("*Vantyx* `%s` at %s\n%s", slackEscape(entry.Event), entry.Time.Format(time.RFC3339), strings.Join(parts, "  "))
 		return json.Marshal(map[string]string{"text": text})
 	}
 	host, _ := os.Hostname()
@@ -348,7 +422,7 @@ func validateWebhookEndpoint(ep *webhookEndpoint) error {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return errWebhookURL
 	}
-	if strings.TrimSpace(os.Getenv(webhookAllowLoopback)) != "1" {
+	if !webhookRestrictedHostsAllowed() {
 		host := u.Hostname()
 		if ip := net.ParseIP(host); ip != nil {
 			if err := access.CheckRestrictedHostIP(ip); err != nil {
@@ -489,6 +563,13 @@ func (a *App) handleTestWebhook(w http.ResponseWriter, r *http.Request) {
 		resp["error"] = err.Error()
 	}
 	writeJSON(w, resp)
+}
+
+// slackEscape applies Slack's mrkdwn control-character escaping so audit
+// field values (usernames, reasons, notes) cannot inject links, mentions
+// or formatting into the message.
+func slackEscape(s string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
 
 func sortStrings(s []string) {

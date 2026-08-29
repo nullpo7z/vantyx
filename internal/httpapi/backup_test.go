@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	dbsqlite "github.com/nullpo7z/vantyx/internal/db/sqlite"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -185,3 +186,58 @@ func TestApplyPendingRestore(t *testing.T) {
 	}
 	_ = src
 }
+
+// Snapshots and staged restores never carry the sessions table: a backup
+// file must not be a session-hijack kit, and restoring an old one must
+// not resurrect sessions revoked since.
+func TestBackups_StripSessions(t *testing.T) {
+	bdir := t.TempDir()
+	t.Setenv(backupEnvDir, bdir)
+	app := newTestAppWithDB(t, "strip-sessions.db")
+	if _, err := app.SessionStore.Create("admin"); err != nil {
+		t.Fatal(err)
+	}
+	var live int
+	if err := app.DB.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&live); err != nil || live == 0 {
+		t.Fatalf("live sessions = %d, %v", live, err)
+	}
+	info, err := app.createBackup(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("createBackup: %v", err)
+	}
+	countSessions := func(path string) int {
+		db, err := dbsqlite.Open(dbsqlite.Config{Path: path, MaxOpenConns: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := countSessions(filepath.Join(bdir, info.Name)); n != 0 {
+		t.Fatalf("backup carries %d sessions", n)
+	}
+	// The live database is untouched.
+	if err := app.DB.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&live); err != nil || live == 0 {
+		t.Fatalf("live sessions after backup = %d, %v", live, err)
+	}
+	// Staging a file that does contain sessions scrubs the staged copy.
+	src := filepath.Join(t.TempDir(), "with-sessions.db")
+	if _, err := app.DB.Exec(`VACUUM INTO ?`, src); err != nil {
+		t.Fatal(err)
+	}
+	if countSessions(src) == 0 {
+		t.Fatal("test fixture should contain sessions")
+	}
+	if err := app.stageRestore(src, "admin", "test"); err != nil {
+		t.Fatalf("stageRestore: %v", err)
+	}
+	if n := countSessions(a_pending(app)); n != 0 {
+		t.Fatalf("staged restore carries %d sessions", n)
+	}
+}
+
+func a_pending(app *App) string { return app.pendingRestorePath() }

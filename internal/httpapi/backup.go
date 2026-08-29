@@ -163,6 +163,28 @@ func verifySQLiteFile(path string) error {
 	return nil
 }
 
+// scrubSnapshot removes data that must not leave the live database in a
+// copy: the sessions table (a snapshot with live session IDs would let
+// anyone holding the file hijack those sessions, and restoring an old
+// snapshot would resurrect sessions revoked since). Runs on every backup
+// and on every staged restore file.
+func scrubSnapshot(path string) error {
+	db, err := dbsqlite.Open(dbsqlite.Config{Path: path, MaxOpenConns: 1})
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil
+	}
+	_, err = db.Exec(`DELETE FROM sessions`)
+	return err
+}
+
 // createBackup writes a verified snapshot and prunes old ones.
 func (a *App) createBackup(ctx context.Context, trigger string) (*backupInfo, error) {
 	if a.DB == nil || a.backups == nil || a.backups.dbPath == "" || a.backups.dbPath == ":memory:" {
@@ -195,6 +217,10 @@ func (a *App) createBackup(ctx context.Context, trigger string) (*backupInfo, er
 	if _, err := a.DB.ExecContext(ctx, `VACUUM INTO ?`, dest); err != nil {
 		_ = os.Remove(dest)
 		return nil, fmt.Errorf("vacuum into: %w", err)
+	}
+	if err := scrubSnapshot(dest); err != nil {
+		_ = os.Remove(dest)
+		return nil, fmt.Errorf("scrub backup: %w", err)
 	}
 	if err := verifySQLiteFile(dest); err != nil {
 		_ = os.Remove(dest)
@@ -298,6 +324,10 @@ func (a *App) stageRestore(src, adminID, origin string) error {
 	if err := out.Close(); err != nil {
 		return err
 	}
+	if err := scrubSnapshot(tmp); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
 	if err := os.Rename(tmp, pending); err != nil {
 		return err
 	}
@@ -319,6 +349,11 @@ func ApplyPendingRestore(dbPath string) (movedTo string, applied bool, err error
 		return "", false, nil
 	}
 	if err := verifySQLiteFile(pending); err != nil {
+		_ = os.Rename(pending, pending+".rejected")
+		return "", false, fmt.Errorf("staged restore rejected: %w", err)
+	}
+	// Belt and braces: never let a staged file bring sessions back.
+	if err := scrubSnapshot(pending); err != nil {
 		_ = os.Rename(pending, pending+".rejected")
 		return "", false, fmt.Errorf("staged restore rejected: %w", err)
 	}

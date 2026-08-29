@@ -55,6 +55,9 @@ type App struct {
 	TargetStore      access.TargetStore
 	AccessGroupStore access.AccessGroupStore
 	AccessRequests   access.AccessRequestStore
+	// CLISessionCloser is set by main when the SSH gateway runs, so that
+	// account disable / delete also terminates live CLI sessions.
+	CLISessionCloser CLISessionCloser
 	APITokens        auth.APITokenStore
 	WebAuthn         auth.WebAuthnStore
 	webauthnRegs     webauthnRegistrations

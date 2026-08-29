@@ -96,3 +96,51 @@ func TestServer_PasswordAuthIsNotOffered(t *testing.T) {
 		t.Fatal("unregistered key accepted")
 	}
 }
+
+// Disabling or deleting an account must also end its live CLI sessions:
+// CloseConnectionsForUser drops the tracked transport for that user only.
+func TestServer_CloseConnectionsForUser(t *testing.T) {
+	srv, addr, _ := setupServerWithTCP(t)
+	cfg := &ssh.ClientConfig{
+		User:            "admin",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(testClientSigner())},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // #nosec G106 -- test
+		Timeout:         5 * time.Second,
+	}
+	client, err := ssh.Dial("tcp", addr, cfg)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	defer sess.Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		srv.connsMu.Lock()
+		n := len(srv.conns)
+		srv.connsMu.Unlock()
+		if n == 1 || time.Now().After(deadline) {
+			if n != 1 {
+				t.Fatalf("tracked conns = %d, want 1", n)
+			}
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := srv.CloseConnectionsForUser("someone-else"); n != 0 {
+		t.Fatalf("closed %d for another user", n)
+	}
+	if n := srv.CloseConnectionsForUser("admin"); n != 1 {
+		t.Fatalf("closed %d, want 1", n)
+	}
+	done := make(chan error, 1)
+	go func() { done <- client.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("client connection still open after CloseConnectionsForUser")
+	}
+}

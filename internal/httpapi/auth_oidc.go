@@ -34,6 +34,8 @@ import (
 //	VANTYX_OIDC_SCOPES            (optional; default "openid profile email")
 //	VANTYX_OIDC_USERNAME_CLAIM    (optional; default "preferred_username", falls back to email)
 //	VANTYX_OIDC_AUTO_CREATE_USERS (optional; 1/true to create unknown users with role user)
+//	VANTYX_OIDC_LINK_EXISTING_USERS (optional; 1/true to attach unlinked IdP identities to the local
+//	                               non-admin user with the same username -- off by default)
 //	VANTYX_OIDC_DISPLAY_NAME      (optional; button label, default "SSO")
 //	VANTYX_OIDC_GROUPS_CLAIM      (optional; claim holding the IdP groups, default "groups")
 //	VANTYX_OIDC_GROUP_MAP         (optional; "idpGroup=vantyxGroup,idpGroup2=net/tokyo,..." -- memberships
@@ -48,8 +50,15 @@ type oidcConfig struct {
 	Scopes        []string
 	UsernameClaim string
 	AutoCreate    bool
-	DisplayName   string
-	GroupsClaim   string
+	// LinkExisting allows an unlinked IdP identity to attach itself to
+	// a local account whose username equals the username claim. Off by
+	// default: with it on, whoever controls that claim at the IdP can
+	// sign in as that local user, so it is only safe when the IdP is the
+	// sole source of truth for usernames. Admin accounts are never linked
+	// this way.
+	LinkExisting bool
+	DisplayName  string
+	GroupsClaim  string
 	// GroupMap: IdP group -> Vantyx group IDs it grants.
 	GroupMap map[string][]string
 	// AdminGroups: IdP groups whose members get role admin. When set,
@@ -116,6 +125,10 @@ func oidcConfigFromEnv() *oidcConfig {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("VANTYX_OIDC_AUTO_CREATE_USERS"))) {
 	case "1", "true", "yes":
 		cfg.AutoCreate = true
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("VANTYX_OIDC_LINK_EXISTING_USERS"))) {
+	case "1", "true", "yes":
+		cfg.LinkExisting = true
 	}
 	scopes := strings.Fields(strings.ReplaceAll(os.Getenv("VANTYX_OIDC_SCOPES"), ",", " "))
 	if len(scopes) == 0 {
@@ -610,32 +623,54 @@ func (a *App) resolveOIDCUser(ctx context.Context, issuer string, claims oidcCla
 		}
 	}
 	username := ""
+	fromEmail := a.oidc.cfg.UsernameClaim == "email"
 	if v, ok := raw[a.oidc.cfg.UsernameClaim].(string); ok {
 		username = strings.TrimSpace(v)
 	}
 	if username == "" {
 		username = strings.TrimSpace(claims.PreferredUsername)
+		fromEmail = false
 	}
 	if username == "" {
 		username = strings.TrimSpace(claims.Email)
+		fromEmail = true
 	}
 	if username == "" {
 		return nil, false, errOIDCNotProvisioned
 	}
-	// Match an existing local account by username (case-insensitive).
+	// An identity that is not linked yet may attach itself to an existing
+	// local account only when the operator opted in, the account is not
+	// an admin, and (for email-derived usernames) the IdP did not flag the
+	// address as unverified. Otherwise the match is refused rather than
+	// silently creating a second account with a clashing name.
 	users, err := a.UserStore.ListUsers(1000, 0)
 	if err != nil {
 		return nil, false, err
 	}
 	for _, u := range users {
-		if u != nil && strings.EqualFold(u.Username, username) {
-			if a.OIDCLinks != nil {
-				if err := a.OIDCLinks.Link(ctx, issuer, claims.Subject, u.ID); err != nil {
-					return nil, false, err
-				}
-			}
-			return u, false, nil
+		if u == nil || !strings.EqualFold(u.Username, username) {
+			continue
 		}
+		refuse := ""
+		switch {
+		case !a.oidc.cfg.LinkExisting:
+			refuse = "link_disabled"
+		case u.Role == auth.RoleAdmin:
+			refuse = "admin_account"
+		case fromEmail && emailUnverified(raw):
+			refuse = "email_unverified"
+		}
+		if refuse != "" {
+			audit("oidc_link_refused", auditFields{"user_id": u.ID, "issuer": issuer, "subject": claims.Subject, "reason": refuse})
+			return nil, false, errOIDCNotProvisioned
+		}
+		if a.OIDCLinks != nil {
+			if err := a.OIDCLinks.Link(ctx, issuer, claims.Subject, u.ID); err != nil {
+				return nil, false, err
+			}
+		}
+		audit("oidc_user_linked", auditFields{"user_id": u.ID, "issuer": issuer, "subject": claims.Subject})
+		return u, false, nil
 	}
 	if !a.oidc.cfg.AutoCreate {
 		return nil, false, errOIDCNotProvisioned
@@ -656,6 +691,18 @@ func (a *App) resolveOIDCUser(ctx context.Context, issuer string, claims oidcCla
 	}
 	audit("oidc_user_created", auditFields{"user_id": u.ID, "issuer": issuer})
 	return u, true, nil
+}
+
+// emailUnverified reports whether the ID token explicitly says the email
+// address is not verified (absent claim = no statement = allowed).
+func emailUnverified(raw map[string]interface{}) bool {
+	switch v := raw["email_verified"].(type) {
+	case bool:
+		return !v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "false")
+	}
+	return false
 }
 
 // randomUnusablePassword satisfies the local password policy but is never

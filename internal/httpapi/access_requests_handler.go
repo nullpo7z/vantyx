@@ -287,6 +287,7 @@ func (a *App) handleApproveAccessRequest(w http.ResponseWriter, r *http.Request)
 		expiresAt = &t
 	}
 	ctx := r.Context()
+	adminID := a.currentUserID(r)
 	if err := a.AccessGroupStore.AddUserToGroupUntil(ctx, ar.UserID, ar.GroupID, expiresAt); err != nil {
 		if errors.Is(err, access.ErrGroupNotFound) {
 			writeJSONErrorKey(w, r, "groups.notFound", http.StatusNotFound)
@@ -295,8 +296,13 @@ func (a *App) handleApproveAccessRequest(w http.ResponseWriter, r *http.Request)
 		writeInternalError(w, err)
 		return
 	}
-	adminID := a.currentUserID(r)
 	if err := a.AccessRequests.Decide(ctx, ar.ID, access.RequestApproved, adminID, strings.TrimSpace(req.Note), expiresAt); err != nil {
+		// Two admins deciding at once: the membership is idempotent, the
+		// second decision simply loses.
+		if errors.Is(err, access.ErrRequestNotPending) {
+			writeJSONErrorKey(w, r, "accessRequests.notPending", http.StatusConflict)
+			return
+		}
 		writeInternalError(w, err)
 		return
 	}
@@ -335,6 +341,10 @@ func (a *App) handleDenyAccessRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	adminID := a.currentUserID(r)
 	if err := a.AccessRequests.Decide(r.Context(), ar.ID, access.RequestDenied, adminID, strings.TrimSpace(req.Note), nil); err != nil {
+		if errors.Is(err, access.ErrRequestNotPending) {
+			writeJSONErrorKey(w, r, "accessRequests.notPending", http.StatusConflict)
+			return
+		}
 		writeInternalError(w, err)
 		return
 	}
@@ -369,6 +379,10 @@ func (a *App) handleCancelAccessRequest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := a.AccessRequests.Decide(r.Context(), ar.ID, access.RequestCancelled, userID, "", nil); err != nil {
+		if errors.Is(err, access.ErrRequestNotPending) {
+			writeJSONErrorKey(w, r, "accessRequests.notPending", http.StatusConflict)
+			return
+		}
 		writeInternalError(w, err)
 		return
 	}

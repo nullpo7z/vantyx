@@ -49,6 +49,12 @@ export async function renderUsersPage({
                 data-user-tags="${escapeHtml((userTags || []).join(','))}">
                 ${t('users.edit')}
               </button>
+              <button type="button"
+                class="delete-user-btn shrink-0 rounded border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+                data-user-id="${escapeHtml(u.id)}"
+                data-username="${escapeHtml(u.username)}">
+                ${t('users.delete')}
+              </button>
               <div class="flex flex-wrap items-center gap-2 min-w-0">
                 ${
                   userTags.length
@@ -108,6 +114,24 @@ export async function renderUsersPage({
         }
         if (user.id) {
           showEditUserModal({ user, escapeHtml, fillExistingTagsPicker, reload })
+        }
+      })
+    })
+
+    mainContent.querySelectorAll('.delete-user-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const userId = btn.dataset.userId || ''
+        const username = btn.dataset.username || userId
+        if (!userId) return
+        const ok = await uiConfirm(t('users.confirmDelete', { name: username }))
+        if (!ok) return
+        btn.disabled = true
+        try {
+          await API.deleteUser(userId)
+          reload()
+        } catch (err) {
+          btn.disabled = false
+          await uiAlert(t('users.deleteFailed', { error: err.message || String(err) }))
         }
       })
     })

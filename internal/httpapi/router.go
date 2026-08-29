@@ -363,6 +363,7 @@ func (a *App) NewRouter() http.Handler {
 	// Users (admin only).
 	r.Get("/api/users", a.handleListUsers)
 	r.Post("/api/users", a.handleCreateUser)
+	r.Delete("/api/users/{user_id}", a.handleDeleteUser)
 	r.Get("/api/users/{user_id}/tags", a.handleUserTags)
 	r.Put("/api/users/{user_id}/tags", a.handleSetUserTags)
 	r.Get("/api/users/{user_id}/ssh-keys", a.handleListUserSSHKeys)

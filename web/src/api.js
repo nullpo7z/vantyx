@@ -878,6 +878,18 @@ const API = {
     return res.json()
   },
 
+  /** ユーザー削除（管理者のみ。自分自身と最後の管理者は削除不可） */
+  async deleteUser(userId) {
+    const res = await fetch(`/api/users/${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete user')
+    }
+  },
+
   /** グループメンバー一覧（管理者のみ） */
   async groupMembers(groupId) {
     const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/members`, { credentials: 'include' })

@@ -156,6 +156,26 @@ func (s *SQLiteUserStore) ListUsers(limit, offset int) ([]*User, error) {
 	return out, rows.Err()
 }
 
+// DeleteUser removes the user row; dependent rows are removed by the
+// ON DELETE CASCADE foreign keys (user_groups, user_tags, sessions,
+// user_ssh_keys, file_transfer_jobs -- foreign_keys=on is set in the DSN).
+func (s *SQLiteUserStore) DeleteUser(userID string) error {
+	if strings.TrimSpace(userID) == "" {
+		return ErrUserNotFound
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
 // SetForcePasswordChange flips the force_password_change flag.
 func (s *SQLiteUserStore) SetForcePasswordChange(userID string, force bool) error {
 	if strings.TrimSpace(userID) == "" {

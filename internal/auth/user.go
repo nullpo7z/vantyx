@@ -57,6 +57,12 @@ type UserStore interface {
 	// SetForcePasswordChange flips the force-password-change flag for a
 	// user. Returns ErrUserNotFound if the row does not exist.
 	SetForcePasswordChange(userID string, force bool) error
+	// DeleteUser removes the user row. Dependent rows (group membership,
+	// tags, login sessions, SSH public keys, file transfer jobs) go with
+	// it via ON DELETE CASCADE. Business rules such as "not yourself" and
+	// "not the last admin" are enforced by the caller. Returns
+	// ErrUserNotFound if the row does not exist.
+	DeleteUser(userID string) error
 }
 
 // ErrInvalidLocale is returned when an UpdateLocale call receives a value

@@ -65,6 +65,8 @@ var Messages = map[string]string{
 	"users.usernameRequired": "username is required",
 	"users.passwordRequired": "password is required",
 	"users.alreadyExists":    "user already exists (id or username)",
+	"users.cannotDeleteSelf": "you cannot delete your own account",
+	"users.lastAdmin":        "cannot delete the last remaining admin",
 
 	// Groups.
 	"groups.idRequired":             "group_id required",

@@ -57,6 +57,8 @@ var Messages = map[string]string{
 	"users.usernameRequired": "ユーザー名は必須です",
 	"users.passwordRequired": "パスワードは必須です",
 	"users.alreadyExists":    "同じ ID またはユーザー名のユーザーが既に存在します",
+	"users.cannotDeleteSelf": "自分自身のアカウントは削除できません",
+	"users.lastAdmin":        "最後の管理者は削除できません",
 
 	// Groups.
 	"groups.idRequired":             "group_id は必須です",

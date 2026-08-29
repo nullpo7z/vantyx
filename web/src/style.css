@@ -367,6 +367,13 @@ body.terminal-standalone #app {
 #app header .vantyx-page-btn:hover {
   background-color: rgba(255, 255, 255, 0.2);
 }
+/* `#app header .vantyx-page-btn` (id + element + class) outranks
+   Tailwind's `.hidden`, so role-gated header buttons that are toggled
+   with the `hidden` class (Participants / Invitations / End session /
+   Leave) stayed visible. Give `.hidden` the final say. */
+#app header .vantyx-page-btn.hidden {
+  display: none !important;
+}
 #app header .vantyx-page-btn-danger {
   border-color: rgba(248, 113, 113, 0.6);
   background-color: rgba(248, 113, 113, 0.85);

@@ -53,6 +53,7 @@ type App struct {
 	TargetStore      access.TargetStore
 	AccessGroupStore access.AccessGroupStore
 	AccessRequests   access.AccessRequestStore
+	APITokens        auth.APITokenStore
 	// retention holds the age-based purge policy and its last report.
 	retention *retentionState
 	// backups holds the backup policy, last snapshot and staged restore.
@@ -300,6 +301,7 @@ func NewApp() *App {
 		TargetStore:             targetStore,
 		AccessGroupStore:        groupStore,
 		AccessRequests:          access.NewSQLiteAccessRequestStore(db),
+		APITokens:               auth.NewSQLiteAPITokenStore(db),
 		SSHKeyStore:             sshKeyStore,
 		CredentialIdentityStore: credIdentityStore,
 		TerminalSessionManager:  terminalSessions,
@@ -379,6 +381,7 @@ func (a *App) NewRouter() http.Handler {
 	r.Use(maxBodyBytesMiddleware(2 << 20))
 	r.Use(csrfOriginMiddleware)
 	r.Use(a.sessionMiddleware)
+	r.Use(a.apiTokenMiddleware)
 	r.Use(a.forcePasswordChangeMiddleware)
 
 	// Health check.
@@ -403,6 +406,9 @@ func (a *App) NewRouter() http.Handler {
 	r.Post("/api/me/totp/setup", a.handleTOTPSetup)
 	r.Post("/api/me/totp/confirm", a.handleTOTPConfirm)
 	r.Delete("/api/me/totp", a.handleTOTPDisable)
+	r.Get("/api/me/tokens", a.handleListMyTokens)
+	r.Post("/api/me/tokens", a.handleCreateMyToken)
+	r.Delete("/api/me/tokens/{id}", a.handleRevokeMyToken)
 	r.Get("/api/me/ssh-keys", a.handleListSSHKeys)
 	r.Post("/api/me/ssh-keys", a.handleAddSSHKey)
 	r.Delete("/api/me/ssh-keys/{key_id}", a.handleDeleteSSHKey)
@@ -449,6 +455,8 @@ func (a *App) NewRouter() http.Handler {
 	r.Patch("/api/users/{user_id}", a.handleUpdateUser)
 	r.Delete("/api/users/{user_id}", a.handleDeleteUser)
 	r.Delete("/api/users/{user_id}/totp", a.handleAdminResetTOTP)
+	r.Get("/api/users/{user_id}/tokens", a.handleListUserTokens)
+	r.Delete("/api/users/{user_id}/tokens/{id}", a.handleAdminRevokeToken)
 	r.Get("/api/users/{user_id}/tags", a.handleUserTags)
 	r.Put("/api/users/{user_id}/tags", a.handleSetUserTags)
 	r.Get("/api/users/{user_id}/ssh-keys", a.handleListUserSSHKeys)

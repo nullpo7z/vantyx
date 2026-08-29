@@ -346,6 +346,11 @@ func effectiveScheme(r *http.Request) string {
 // effective scheme + host. Used by /api/login which is exempted from
 // the global CSRF middleware.
 func sameOriginRequest(r *http.Request) bool {
+	// Bearer-token requests carry no cookie, so cross-site request forgery
+	// does not apply; the token itself is the proof of intent.
+	if _, viaToken := apiTokenFromContext(r); viaToken {
+		return true
+	}
 	want := effectiveScheme(r) + "://" + r.Host
 	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
 		return origin == want

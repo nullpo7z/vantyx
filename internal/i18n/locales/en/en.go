@@ -66,6 +66,13 @@ var Messages = map[string]string{
 	"auth.passwordChangeRequired": "password change required before using this feature",
 
 	// Users (admin management).
+	"auth.apiTokenReadOnly":           "this API token is read-only",
+	"auth.apiTokenNotAllowedHere":     "API tokens cannot be used for this endpoint; sign in with a browser session",
+	"auth.apiTokenNameRequired":       "token name is required (max 100 characters)",
+	"auth.apiTokenScopeInvalid":       "scope must be read or write",
+	"auth.apiTokenExpiryInvalid":      "expires_in_days must be between 0 (never) and 3650",
+	"auth.apiTokenLimit":              "too many active API tokens (max 50)",
+	"auth.apiTokenNotFound":           "API token not found",
 	"settings.backupNotFound":         "backup not found",
 	"targets.importEmpty":             "no targets to import",
 	"targets.importTooMany":           "too many rows (max 2000)",

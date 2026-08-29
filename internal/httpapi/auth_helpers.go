@@ -14,6 +14,9 @@ import (
 // or ("", err) when a storage error (e.g. database locked) occurs. Callers that need to return 500 on
 // storage errors should use this and call writeInternalError(w, err) when err != nil.
 func (a *App) currentUserIDWithError(r *http.Request) (string, error) {
+	if tok, ok := apiTokenFromContext(r); ok {
+		return tok.userID, nil
+	}
 	c, err := r.Cookie("vantyx_session")
 	if err != nil || c.Value == "" {
 		// No session cookie is "unauthenticated", not an error.

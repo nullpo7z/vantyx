@@ -46,6 +46,10 @@ components:
       type: apiKey
       in: cookie
       name: vantyx_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: 自動化用 API トークン（`vtx_...`、Account settings → API tokens で作成）。cookieAuth を要求するすべての /api エンドポイントで代替可能（ログイン・パスワード・二要素認証・トークン管理を除く）。`read` スコープは GET/HEAD のみ。
   schemas:
     ErrorResponse:
       type: object
@@ -271,6 +275,33 @@ components:
           type: string
           format: date-time
           description: 承認時に付与したメンバーシップの期限（無期限なら省略）
+    APIToken:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        prefix:
+          type: string
+          description: トークン先頭 12 文字（識別用）
+        scope:
+          type: string
+          enum: [read, write]
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+        active:
+          type: boolean
     MFARequiredResponse:
       type: object
       description: |
@@ -1192,6 +1223,105 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/me/tokens:
+    get:
+      summary: 自分の API トークン一覧
+      description: 平文トークンは返しません（作成時の 1 回のみ）。ブラウザセッションでのみ利用可能（API トークンでは 403）。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: トークン一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/APIToken'
+    post:
+      summary: API トークンを作成
+      description: |
+        自動化用のベアラートークンを作成します。応答の `token`（`vtx_...`）はこの 1 回だけ返され、サーバーには SHA-256 のみ保存されます。
+        `scope` は `read`（GET/HEAD のみ）または `write`。`expires_in_days` は 0（無期限）〜3650。監査イベント `api_token_created`。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                scope:
+                  type: string
+                  enum: [read, write]
+                expires_in_days:
+                  type: integer
+      responses:
+        '201':
+          description: 作成したトークン（`token` を含む）
+        '400':
+          description: 不正な入力
+        '409':
+          description: 有効トークン数の上限（50）
+
+  /api/me/tokens/{id}:
+    delete:
+      summary: 自分の API トークンを失効
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 失効完了
+        '404':
+          description: 存在しない、または既に失効
+
+  /api/users/{user_id}/tokens:
+    get:
+      summary: ユーザーの API トークン一覧（管理者のみ）
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: トークン一覧
+
+  /api/users/{user_id}/tokens/{id}:
+    delete:
+      summary: ユーザーの API トークンを失効（管理者のみ）
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 失効完了
+        '404':
+          description: 存在しない
 
   /api/me/ssh-keys:
     get:

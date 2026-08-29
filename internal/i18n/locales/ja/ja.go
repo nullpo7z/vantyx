@@ -58,6 +58,13 @@ var Messages = map[string]string{
 	"auth.passwordChangeRequired": "この機能を利用する前にパスワードを変更してください",
 
 	// Users (admin management).
+	"auth.apiTokenReadOnly":           "この API トークンは読み取り専用です",
+	"auth.apiTokenNotAllowedHere":     "このエンドポイントは API トークンでは利用できません。ブラウザでログインしてください",
+	"auth.apiTokenNameRequired":       "トークン名は必須です（最大 100 文字）",
+	"auth.apiTokenScopeInvalid":       "scope は read または write を指定してください",
+	"auth.apiTokenExpiryInvalid":      "expires_in_days は 0（無期限）〜3650 で指定してください",
+	"auth.apiTokenLimit":              "有効な API トークンが多すぎます（最大 50）",
+	"auth.apiTokenNotFound":           "API トークンが見つかりません",
 	"settings.backupNotFound":         "バックアップが見つかりません",
 	"targets.importEmpty":             "インポートするターゲットがありません",
 	"targets.importTooMany":           "行数が多すぎます（最大 2000）",

@@ -125,6 +125,10 @@ export async function renderAccountPage(container, { meData, onMeChanged } = {})
       <section id="account-keys" class="mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="px-5 py-4 text-sm text-slate-500">${t('common.loading')}</div>
       </section>
+
+      <section id="account-tokens" class="mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div class="px-5 py-4 text-sm text-slate-500">${t('common.loading')}</div>
+      </section>
       </div>
       </div>
     </div>
@@ -163,6 +167,7 @@ export async function renderAccountPage(container, { meData, onMeChanged } = {})
   await Promise.all([
     renderTOTPCard(container.querySelector('#account-totp'), { meData }),
     renderSSHKeysCard(container.querySelector('#account-keys'), { meData }),
+    renderTokensCard(container.querySelector('#account-tokens')),
   ])
   if (typeof onMeChanged === 'function') onMeChanged(meData)
 }
@@ -486,5 +491,97 @@ async function renderSSHKeysCard(section, { meData }) {
       errorEl.classList.remove('hidden')
       btn.disabled = false
     }
+  })
+}
+
+/* ------------------------------------------------------------------ */
+/* API tokens                                                          */
+/* ------------------------------------------------------------------ */
+
+async function renderTokensCard(section) {
+  if (!section) return
+  let tokens
+  try {
+    tokens = (await API.myTokens()) || []
+  } catch (err) {
+    section.innerHTML = `<div class="px-5 py-4 text-sm text-red-600">${esc(err.message || t('account.tokensLoadFailed'))}</div>`
+    return
+  }
+  const active = tokens.filter((x) => x.active)
+  const rows = active
+    .map(
+      (x) => `<li class="flex items-center justify-between gap-3 py-2">
+        <div class="min-w-0">
+          <div class="text-sm text-slate-800"><span class="font-medium">${esc(x.name)}</span> <code class="ml-1 rounded bg-slate-100 px-1 text-xs font-mono">${esc(x.prefix)}…</code> ${pill(x.scope === 'write' ? t('account.tokenScopeWrite') : t('account.tokenScopeRead'), x.scope === 'write' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700')}</div>
+          <div class="text-xs text-slate-500">${t('account.tokenCreated', { date: esc(formatDateTime(x.created_at)) })}${x.expires_at ? ` · ${t('account.tokenExpires', { date: esc(formatDateTime(x.expires_at)) })}` : ` · ${t('account.tokenNoExpiry')}`}${x.last_used_at ? ` · ${t('account.tokenLastUsed', { date: esc(formatDateTime(x.last_used_at)) })}` : ` · ${t('account.tokenNeverUsed')}`}</div>
+        </div>
+        <button type="button" class="token-revoke ${BTN_DANGER} text-xs py-1" data-id="${esc(x.id)}">${t('account.tokenRevoke')}</button>
+      </li>`,
+    )
+    .join('')
+  section.innerHTML = `
+    <div class="px-5 pt-4 pb-3 border-b border-slate-100">
+      <h3 class="text-sm font-semibold text-slate-800">${t('account.tokensTitle')}</h3>
+      <p class="mt-0.5 text-xs text-slate-500">${t('account.tokensHint')}</p>
+    </div>
+    <div class="px-5 py-4">
+      <div id="token-reveal" class="hidden mb-4 rounded border border-emerald-200 bg-emerald-50 px-3 py-2">
+        <p class="text-sm text-emerald-800 font-medium">${t('account.tokenRevealTitle')}</p>
+        <p class="text-xs text-emerald-700">${t('account.tokenRevealHint')}</p>
+        <div class="mt-2 flex items-center gap-2">
+          <code id="token-reveal-value" class="flex-1 break-all rounded bg-white border border-emerald-200 px-2 py-1 font-mono text-xs text-slate-800"></code>
+          <button type="button" id="token-copy" class="${BTN_SECONDARY} text-xs py-1">${t('common.copy')}</button>
+        </div>
+        <p class="mt-2 text-[11px] text-slate-600 font-mono">curl -H "Authorization: Bearer &lt;token&gt;" ${esc(window.location.origin)}/api/me</p>
+      </div>
+      ${rows ? `<ul class="divide-y divide-slate-100">${rows}</ul>` : `<p class="text-sm text-slate-500">${t('account.tokensNone')}</p>`}
+      <form id="token-create" class="mt-4 grid grid-cols-1 sm:grid-cols-[1fr_9rem_8rem_auto] gap-2 items-end">
+        <div><label for="token-name" class="block text-xs font-medium text-slate-600 mb-1">${t('account.tokenName')}</label><input id="token-name" required maxlength="100" class="${INPUT}" placeholder="${t('account.tokenNamePlaceholder')}" /></div>
+        <div><label for="token-scope" class="block text-xs font-medium text-slate-600 mb-1">${t('account.tokenScope')}</label><select id="token-scope" class="${INPUT}"><option value="read">${t('account.tokenScopeRead')}</option><option value="write">${t('account.tokenScopeWrite')}</option></select></div>
+        <div><label for="token-days" class="block text-xs font-medium text-slate-600 mb-1">${t('account.tokenExpiry')}</label><select id="token-days" class="${INPUT}"><option value="30">30 ${t('account.days')}</option><option value="90" selected>90 ${t('account.days')}</option><option value="365">365 ${t('account.days')}</option><option value="0">${t('account.tokenNoExpiry')}</option></select></div>
+        <button type="submit" class="${BTN_PRIMARY}">${t('account.tokenCreate')}</button>
+        <p id="token-error" class="sm:col-span-4 text-sm text-red-600 hidden"></p>
+      </form>
+    </div>`
+  const reload = () => renderTokensCard(section)
+  section.querySelector('#token-create').addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const errEl = section.querySelector('#token-error')
+    errEl.classList.add('hidden')
+    try {
+      const res = await API.createToken({
+        name: section.querySelector('#token-name').value.trim(),
+        scope: section.querySelector('#token-scope').value,
+        expires_in_days: section.querySelector('#token-days').value,
+      })
+      await reload()
+      const reveal = section.querySelector('#token-reveal')
+      section.querySelector('#token-reveal-value').textContent = res.token
+      reveal.classList.remove('hidden')
+      section.querySelector('#token-copy').addEventListener('click', async (ev) => {
+        try {
+          await navigator.clipboard.writeText(res.token)
+          ev.currentTarget.textContent = t('common.copied')
+        } catch {
+          /* clipboard unavailable */
+        }
+      })
+    } catch (err) {
+      errEl.textContent = err.message || t('common.errorOccurred')
+      errEl.classList.remove('hidden')
+    }
+  })
+  section.querySelectorAll('.token-revoke').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!(await uiConfirm(t('account.tokenConfirmRevoke'), { danger: true }))) return
+      btn.disabled = true
+      try {
+        await API.revokeToken(btn.dataset.id)
+        await reload()
+      } catch (err) {
+        btn.disabled = false
+        await uiAlert(err.message || t('common.errorOccurred'))
+      }
+    })
   })
 }

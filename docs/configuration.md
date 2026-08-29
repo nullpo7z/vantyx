@@ -64,6 +64,20 @@ eight single-use recovery codes that are shown once.
   `VANTYX_SSH_PASSWORD_ENCRYPTION_KEY`; recovery codes are stored as SHA-256
   digests.
 
+### API tokens (automation)
+
+Every user can create bearer tokens under **Account settings → API tokens**
+(`POST /api/me/tokens {name, scope, expires_in_days}`; the plain token is
+returned once, only its SHA-256 is stored). Send them as
+`Authorization: Bearer vtx_…` to any `/api/...` endpoint: the request runs
+as the owning user with their role and group access, without a cookie, so
+the same-origin check does not apply. Scope `read` allows `GET`/`HEAD`
+only; `write` allows every method. Tokens can never be used to log in,
+change passwords or two-factor settings, or manage tokens. Owners revoke
+their own tokens (`DELETE /api/me/tokens/{id}`); admins list and revoke any
+user's (`GET/DELETE /api/users/{id}/tokens[/{id}]`). Audit events
+`api_token_created`, `api_token_revoked`, `api_token_auth_failed`.
+
 ## Single sign-on (OpenID Connect)
 
 Vantyx can act as an OIDC relying party (Authorization Code flow with PKCE

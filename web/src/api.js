@@ -146,6 +146,39 @@ const API = {
     }
   },
 
+  /** Current user's API tokens (plain values are never returned). */
+  async myTokens() {
+    const res = await fetch('/api/me/tokens', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load API tokens')
+    }
+    return res.json()
+  },
+
+  /** Create an API token; the response carries the plain token exactly once. */
+  async createToken({ name, scope, expires_in_days }) {
+    const res = await fetch('/api/me/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ name, scope, expires_in_days: Number(expires_in_days) || 0 }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to create the token')
+    }
+    return res.json()
+  },
+
+  async revokeToken(id) {
+    const res = await fetch(`/api/me/tokens/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'include' })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to revoke the token')
+    }
+  },
+
   /** Admin: update a user's role ('admin' | 'user'). */
   async updateUser(userId, { role }) {
     const res = await fetch(`/api/users/${encodeURIComponent(userId)}`, {

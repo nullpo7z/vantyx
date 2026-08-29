@@ -79,3 +79,4 @@ coverage-*.html
 
 # Claude Code conversation export (may contain secrets)
 handoff.md
+handoff-*.md

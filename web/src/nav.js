@@ -197,8 +197,10 @@ export function initNav({
   if (navSettings) {
     navSettings.addEventListener('click', (e) => {
       e.preventDefault()
+      // Settings is for every signed-in user (language / timezone); the
+      // page itself gates the admin-only audit-forwarder section (E-8 / R-4).
       const me = state.getMe && state.getMe()
-      if (!me || me.role !== 'admin') return
+      if (!me) return
       if (typeof onSettings === 'function') onSettings()
     })
   }

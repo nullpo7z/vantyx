@@ -140,6 +140,7 @@ func (a *App) requestLog(next http.Handler) http.Handler {
 			}
 		}
 		dur := time.Since(start).Round(time.Millisecond)
+		observeHTTPMetrics(r.Method, wrap.status, dur, r.URL.Path)
 		httpLogger.Info("http",
 			logging.KeyMethod, r.Method,
 			logging.KeyPath, r.URL.Path,

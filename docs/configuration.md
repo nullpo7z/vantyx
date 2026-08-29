@@ -191,6 +191,30 @@ Values below one hour are raised to one hour.
 |----------|---------|-------------|
 | `VANTYX_SSH_LISTEN` | — | When set (for example `:2222`), the binary starts the CLI SSH gateway on this address. Leave unset to disable the gateway. Authentication is **public-key only**: password and keyboard-interactive auth are not offered, so a leaked password cannot bypass the web UI's second factor. Admins register keys per user under **Users → Public keys** (`POST /api/users/{id}/ssh-keys`). |
 
+## Metrics (Prometheus)
+
+`GET /metrics` exposes Prometheus text-format metrics: HTTP requests by
+method / status class and latency, logins by outcome, audit and
+security-relevant event counters, live sessions by kind, open sharing
+rooms, users / targets / groups / recordings totals, pending access
+requests, export jobs by state, uptime and Go runtime basics. Nothing
+user-identifying is exported.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_METRICS_TOKEN` | — | Bearer token Prometheus presents (`Authorization: Bearer …`). Without it only an admin session cookie can read `/metrics`. |
+
+Example scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: vantyx
+    scheme: https
+    tls_config: { insecure_skip_verify: true }   # self-signed certificate
+    authorization: { credentials: "<VANTYX_METRICS_TOKEN>" }
+    static_configs: [{ targets: ["vantyx.example:443"] }]
+```
+
 ## Audit forwarder
 
 | Variable | Default | Description |

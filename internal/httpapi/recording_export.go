@@ -95,6 +95,17 @@ func newRecordingExportJobID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// countByState tallies jobs per state for the metrics exporter.
+func (r *recordingExportRegistry) countByState() map[string]int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := map[string]int{}
+	for _, j := range r.jobs {
+		out[string(j.State)]++
+	}
+	return out
+}
+
 func (r *recordingExportRegistry) get(id string) (*recordingExportJob, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

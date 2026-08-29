@@ -415,6 +415,13 @@ func (reg *Registry) EnsureRoom(sessionID, targetID, ownerID, ownerName string) 
 }
 
 // Get returns the room for sessionID, or nil if missing.
+// Len returns the number of open rooms (metrics).
+func (reg *Registry) Len() int {
+	reg.mu.RLock()
+	defer reg.mu.RUnlock()
+	return len(reg.rooms)
+}
+
 func (reg *Registry) Get(sessionID string) (*Room, bool) {
 	reg.mu.RLock()
 	defer reg.mu.RUnlock()

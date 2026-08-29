@@ -38,7 +38,8 @@ exposes a unified REST + WebSocket API for the bundled single-page UI.
 - **Session recording**: terminal/CLI sessions as asciinema `.cast`; RDP/VNC
   screen capture as H.264 `.mp4`. Playback in the UI; GIF/MP4 export via a
   background conversion queue.
-- **Audit pipeline** with optional syslog / SIEM forwarding.
+- **Audit pipeline** with optional syslog / SIEM forwarding, and a
+  Prometheus `/metrics` endpoint.
 - Follows the spirit of **OWASP ASVS Level 2** (best-effort, not a formal audit)
   for sensitive-data storage and transport.
 

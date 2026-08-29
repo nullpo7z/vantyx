@@ -23,6 +23,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/filetransfer"
 	"github.com/nullpo7z/vantyx/internal/i18n"
 	"github.com/nullpo7z/vantyx/internal/logging"
+	"github.com/nullpo7z/vantyx/internal/metrics"
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
 	"github.com/nullpo7z/vantyx/internal/recording"
 	"github.com/nullpo7z/vantyx/internal/secret"
@@ -53,7 +54,9 @@ type App struct {
 	AccessGroupStore access.AccessGroupStore
 	AccessRequests   access.AccessRequestStore
 	// retention holds the age-based purge policy and its last report.
-	retention               *retentionState
+	retention *retentionState
+	// metricsReg holds this App's scrape-time gauges (counters are global).
+	metricsReg              *metrics.Registry
 	SSHKeyStore             access.SSHKeyStore
 	CredentialIdentityStore access.CredentialIdentityStore
 
@@ -314,6 +317,7 @@ func NewApp() *App {
 	app.startRecordingRemuxBackfill()
 	// Age-based purge of recordings / audit / command logs (opt-in via env).
 	app.startRetentionLoop()
+	app.registerMetricsGauges()
 	return app
 }
 
@@ -370,6 +374,8 @@ func (a *App) NewRouter() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	// Prometheus exposition (admin session or VANTYX_METRICS_TOKEN).
+	r.Get("/metrics", a.handleMetrics)
 
 	// Authentication.
 	r.Post("/api/login", a.handleLogin)

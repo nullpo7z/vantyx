@@ -260,7 +260,7 @@ func NewApp() *App {
 	cleanupOrphanExportTemps(exportDir)
 	cleanupLegacyRecordingDirExportTemps(recordingsDir)
 	_ = recording.DefaultGovernor()
-	return &App{
+	app := &App{
 		UserStore:               userStore,
 		SessionStore:            sessionStore,
 		TargetStore:             targetStore,
@@ -282,6 +282,10 @@ func NewApp() *App {
 		SharingBridges:          newBridgeRegistry(),
 		RecordingExports:        newRecordingExportRegistry(exportDir),
 	}
+	// Convert pre-existing fragmented RDP/VNC recordings to faststart MP4
+	// in the background (B-1); new recordings are converted on stop.
+	app.startRecordingRemuxBackfill()
+	return app
 }
 
 // sessionMiddleware resolves the session cookie and, for both

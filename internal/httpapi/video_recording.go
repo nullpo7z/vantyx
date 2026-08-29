@@ -194,6 +194,11 @@ func (a *App) finishVideoRecording(sessionID string) {
 		endedAt := time.Now().UTC().Format("2006-01-02 15:04:05")
 		_ = a.UpdateRecordingEnded(context.Background(), sessionID, endedAt)
 	}
+	// ffmpeg has exited (Stop waited for it), so the fragmented MP4 is
+	// complete: rewrite it as a faststart MP4 in the background (B-1).
+	if ok && started && handle != nil && handle.path != "" {
+		a.remuxRecordingAsync(sessionID, handle.path)
+	}
 }
 
 func (a *App) startRDPVideoRecording(parentCtx context.Context, sessionID, userID, targetID string, display, width, height int) {

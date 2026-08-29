@@ -314,6 +314,15 @@ func (a *App) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	if info.Size() > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	}
+	// Successful downloads are security-relevant (data leaving the
+	// target through the gateway), so record them alongside the
+	// failure events instead of only logging the failures.
+	audit("files_download_ok", auditFields{
+		"user_id":   a.currentUserID(r),
+		"target_id": target.ID,
+		"path":      filePath,
+		"size":      info.Size(),
+	})
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, f)
 }
@@ -424,5 +433,12 @@ func (a *App) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		writeJSONErrorKey(w, r, "files.removeFailed", http.StatusBadGateway)
 		return
 	}
+	// Deletions are destructive and must be traceable to a user in the
+	// audit log, not just their failures.
+	audit("files_remove_ok", auditFields{
+		"user_id":   a.currentUserID(r),
+		"target_id": target.ID,
+		"path":      filePath,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }

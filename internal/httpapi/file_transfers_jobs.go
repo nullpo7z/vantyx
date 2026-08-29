@@ -244,6 +244,7 @@ func (a *App) runRemoteUpload(ctx context.Context, job *filetransfer.Job, target
 	}
 	job.SetState(filetransfer.StateCompleted, "")
 	audit("files_upload_ok", auditFields{
+		"user_id":     job.UserID,
 		"target_id":   string(target.ID),
 		"path":        remotePath,
 		"transfer_id": job.ID,

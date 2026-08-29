@@ -59,7 +59,7 @@ function exportJobLabel(job) {
     target_path: job.target_path,
   })
   const sessionName = String(job.session_name || '').trim()
-  const startedAt = String(job.recording_started_at || '').trim()
+  const startedAt = formatDateTime(job.recording_started_at, undefined, '')
   if (fullPath && fullPath !== '—') return `${fullPath} (${format})`
   if (sessionName) return `${sessionName} (${format})`
   if (startedAt) return `${startedAt} (${format})`
@@ -76,7 +76,9 @@ function renderSessionCell(job, escapeHtml) {
   })
   const sessionName = String(job.session_name || '').trim()
   const description = String(job.session_description || '').trim()
-  const startedAt = String(job.recording_started_at || '').trim()
+  // Render in the viewer's timezone/locale like every other timestamp
+  // (E-6); the raw value is a UTC RFC3339 string.
+  const startedAt = formatDateTime(job.recording_started_at, undefined, '')
   const channelType = String(job.channel_type || '').trim()
   const metaParts = []
   if (sessionName) metaParts.push(sessionName)

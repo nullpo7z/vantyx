@@ -54,7 +54,6 @@ export function buildAppShellHTML() {
           </button>
           <div class="w-px h-4 bg-white/20"></div>
           <button id="user-name" class="text-sm font-medium opacity-90 hover:opacity-100 hover:underline focus:outline-none focus:ring-1 focus:ring-white/70 rounded px-1 cursor-pointer"></button>
-          <span id="display-timezone" class="hidden text-xs opacity-70 whitespace-nowrap font-mono"></span>
           <div class="w-px h-4 bg-white/20"></div>
           <button id="logout-btn" class="text-sm opacity-80 hover:opacity-100 transition-opacity">${t('common.logoutLabel')}</button>
           </div>

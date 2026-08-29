@@ -314,7 +314,6 @@ const ja = {
     treeTargetCount: '{n} 台',
   },
   nav: {
-    displayTimezone: '時刻は {tz}（サーバーのタイムゾーン）で表示しています',
     home: 'ホーム',
     sessions: 'セッション',
     recordings: '録画',

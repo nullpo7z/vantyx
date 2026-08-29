@@ -337,7 +337,6 @@ const en = {
     treeTargetCount: '{n} targets',
   },
   nav: {
-    displayTimezone: 'Times are shown in {tz} (server timezone)',
     home: 'Home',
     sessions: 'Sessions',
     recordings: 'Recordings',

@@ -104,19 +104,28 @@ function hasLocalUploadGhostFor(jobId) {
 
 const localAborts = new Map() // tempId -> abort fn
 
+// After a finished job has been visible for TERMINAL_DISPLAY_MS, stop
+// watching it and re-render so the global bar drops it (age filter in
+// renderGlobalBar). The job itself stays in `jobs` for the Sessions page.
 function scheduleCleanup(id, delay = TERMINAL_DISPLAY_MS) {
   if (cleanupTimers.has(id)) return
   const ms = Math.max(0, delay)
   const tid = window.setTimeout(() => {
     cleanupTimers.delete(id)
-    cleanedJobIds.add(id)
     const watched = new Set(loadWatchedIds())
     watched.delete(id)
-    jobs.delete(id)
     saveWatchedIds([...watched])
-    notifyIfChanged()
+    notify()
   }, ms)
   cleanupTimers.set(id, tid)
+}
+
+// Finished jobs are shown in the compact global bar only briefly.
+function isRecentlyFinished(job) {
+  const updatedAt = job?.updated_at ? Date.parse(job.updated_at) : NaN
+  // Without a usable timestamp, "recent" means its display timer is still pending.
+  if (!Number.isFinite(updatedAt)) return cleanupTimers.has(job?.id)
+  return Date.now() - updatedAt < TERMINAL_DISPLAY_MS
 }
 
 async function applySnapshot(item) {
@@ -136,17 +145,16 @@ async function applySnapshot(item) {
   const wasCompleted = prev?.state === 'completed'
   const isTerminal =
     item.state === 'completed' || item.state === 'failed' || item.state === 'cancelled'
+  // Finished jobs stay in the map for as long as the server reports them
+  // (its list is already bounded to recent jobs) so the Sessions page can
+  // show "recent completed" transfers (E-7). Only the compact global bar
+  // hides finished jobs after TERMINAL_DISPLAY_MS -- see renderGlobalBar,
+  // which filters by age; cleanupDelay just schedules that re-render.
   let cleanupDelay = TERMINAL_DISPLAY_MS
   if (isTerminal) {
     const updatedAt = item.updated_at ? Date.parse(item.updated_at) : NaN
     if (Number.isFinite(updatedAt)) {
-      const elapsed = Date.now() - updatedAt
-      if (elapsed >= TERMINAL_DISPLAY_MS) {
-        // Job finished long enough ago that we should not show it on (re)load.
-        cleanedJobIds.add(item.id)
-        return
-      }
-      cleanupDelay = TERMINAL_DISPLAY_MS - elapsed
+      cleanupDelay = Math.max(0, TERMINAL_DISPLAY_MS - (Date.now() - updatedAt))
     }
   }
   jobs.set(item.id, item)
@@ -291,7 +299,9 @@ function renderGlobalBar() {
   const slot = document.getElementById('vantyx-file-transfers-slot')
   let bar = document.getElementById('vantyx-file-transfers-bar')
   const hasDetailedView = !slot && !!document.getElementById('file-transfers-table-wrap')
-  const active = [...jobs.values()].filter((j) => isActive(j.state) || j.state === 'completed' || j.state === 'failed')
+  const active = [...jobs.values()].filter(
+    (j) => isActive(j.state) || ((j.state === 'completed' || j.state === 'failed') && isRecentlyFinished(j)),
+  )
   if (active.length === 0 || hasDetailedView) {
     bar?.remove()
     return

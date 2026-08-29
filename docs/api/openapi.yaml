@@ -219,6 +219,21 @@ components:
         timezone:
           type: string
           description: サーバー全体のタイムゾーン（`VANTYX_TIMEZONE`、IANA 名、既定 UTC）。ログ・監査ログ・UI・CLI はすべてこのゾーンで時刻を表示する。ユーザー側で変更はできない。
+        tags:
+          type: array
+          items:
+            type: string
+          description: GET /api/me で返る。ユーザーに付与されたタグ。
+        groups:
+          type: array
+          description: GET /api/me で返る。アクセスできるグループ（所属・タグ一致とその下位グループ）。
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
       required:
         - user_id
         - username
@@ -948,7 +963,9 @@ paths:
   /api/me:
     get:
       summary: 自分自身のユーザー情報取得
-      description: 現在のセッションに紐づくユーザー情報（user_id, username, role）を返します。
+      description: |
+        現在のセッションに紐づくユーザー情報（user_id, username, role, locale, timezone, totp_enabled）に加えて、
+        `tags`（ユーザーのタグ）と `groups`（アクセスできるグループ。所属・タグ一致とその下位グループ）を返します。
       security:
         - cookieAuth: []
       responses:
@@ -2770,6 +2787,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/users/{user_id}:
+    patch:
+      summary: ユーザーのロール変更（管理者のみ）
+      description: |
+        `role` を `admin` / `user` に変更します。自分自身の管理者ロールを外すこと、最後の管理者を降格することはできません。
+        変更は対象ユーザーの次のリクエストから有効です（管理者判定は毎回ストアのロールを参照）。監査イベント `user_role_update`。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  type: string
+                  enum: [admin, user]
+      responses:
+        '200':
+          description: 更新後のユーザー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: 不正なロール、または自分自身の降格
+        '401':
+          description: 未認証
+        '403':
+          description: 管理者以外
+        '404':
+          description: ユーザーが存在しない
+        '409':
+          description: 最後の管理者は降格できない
 
   /api/users/{user_id}/totp:
     delete:

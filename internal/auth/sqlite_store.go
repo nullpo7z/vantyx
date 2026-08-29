@@ -216,6 +216,27 @@ func NormalizeUILocale(locale string) (string, error) {
 	return loc, nil
 }
 
+// UpdateRole sets the user's role.
+func (s *SQLiteUserStore) UpdateRole(userID, role string) error {
+	if strings.TrimSpace(userID) == "" {
+		return ErrUserNotFound
+	}
+	if role != RoleAdmin && role != RoleUser {
+		return ErrInvalidRole
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET role = ? WHERE id = ?`, role, userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
 // UpdateLocale persists the user's UI locale preference. Pass "" to clear it.
 func (s *SQLiteUserStore) UpdateLocale(userID, locale string) error {
 	if strings.TrimSpace(userID) == "" {

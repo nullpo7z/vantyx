@@ -134,6 +134,92 @@ func (a *App) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(userResponse{ID: u.ID, Username: u.Username, Role: role, Locale: u.Locale})
 }
 
+type updateUserRequest struct {
+	Role *string `json:"role"`
+}
+
+// handleUpdateUser: PATCH /api/users/{user_id} {role}. Admin only. An
+// admin may not demote themselves (they would lock themselves out of
+// this very screen) and the last remaining admin cannot be demoted.
+// Role changes take effect on the user's next request: every admin
+// check reads the role from the store, not from the session.
+func (a *App) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	userID := strings.TrimSpace(chi.URLParam(r, "user_id"))
+	if userID == "" {
+		writeJSONErrorKey(w, r, "users.idRequired", http.StatusBadRequest)
+		return
+	}
+	var req updateUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONErrorKey(w, r, "common.invalidRequestBody", http.StatusBadRequest)
+		return
+	}
+	target, err := a.UserStore.GetByID(userID)
+	if err != nil || target == nil {
+		writeJSONErrorKey(w, r, "users.userNotFound", http.StatusNotFound)
+		return
+	}
+	if req.Role != nil {
+		role := strings.TrimSpace(*req.Role)
+		if role != auth.RoleAdmin && role != auth.RoleUser {
+			writeJSONErrorKey(w, r, "users.invalidRole", http.StatusBadRequest)
+			return
+		}
+		current := target.Role
+		if current == "" {
+			current = auth.RoleUser
+		}
+		if role != current {
+			if role == auth.RoleUser {
+				if userID == a.currentUserID(r) {
+					writeJSONErrorKey(w, r, "users.cannotDemoteSelf", http.StatusBadRequest)
+					return
+				}
+				n, err := a.countAdmins()
+				if err != nil {
+					writeInternalError(w, err)
+					return
+				}
+				if n <= 1 {
+					writeJSONErrorKey(w, r, "users.lastAdminRole", http.StatusConflict)
+					return
+				}
+			}
+			if err := a.UserStore.UpdateRole(userID, role); err != nil {
+				switch {
+				case errors.Is(err, auth.ErrUserNotFound):
+					writeJSONErrorKey(w, r, "users.userNotFound", http.StatusNotFound)
+				case errors.Is(err, auth.ErrInvalidRole):
+					writeJSONErrorKey(w, r, "users.invalidRole", http.StatusBadRequest)
+				default:
+					writeInternalError(w, err)
+				}
+				return
+			}
+			audit("user_role_update", auditFields{
+				"user_id":   a.currentUserID(r),
+				"target_id": userID,
+				"from":      current,
+				"to":        role,
+			})
+			target.Role = role
+		}
+	}
+	tags, _ := a.UserStore.TagsForUser(target.ID)
+	if tags == nil {
+		tags = []string{}
+	}
+	role := target.Role
+	if role == "" {
+		role = auth.RoleUser
+	}
+	totpEnabled := a.TOTPStore != nil && a.TOTPStore.Enabled(r.Context(), target.ID)
+	writeJSON(w, userResponse{ID: target.ID, Username: target.Username, Role: role, Locale: target.Locale, Tags: tags, TOTPEnabled: totpEnabled})
+}
+
 // handleUserTags returns tags for the user. Admin only.
 func (a *App) handleUserTags(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {

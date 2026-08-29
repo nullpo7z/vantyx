@@ -111,6 +111,56 @@ const API = {
     }
   },
 
+  /** Current user's SSH public keys for the CLI gateway. */
+  async mySSHKeys() {
+    const res = await fetch('/api/me/ssh-keys', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load SSH keys')
+    }
+    return res.json()
+  },
+
+  async addMySSHKey(authorizedKey) {
+    const res = await fetch('/api/me/ssh-keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ authorized_key: authorizedKey }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to add SSH key')
+    }
+    return res.json()
+  },
+
+  async deleteMySSHKey(keyId) {
+    const res = await fetch(`/api/me/ssh-keys/${encodeURIComponent(keyId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete SSH key')
+    }
+  },
+
+  /** Admin: update a user's role ('admin' | 'user'). */
+  async updateUser(userId, { role }) {
+    const res = await fetch(`/api/users/${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ role }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to update user')
+    }
+    return res.json()
+  },
+
   /** Admin: clear a user's second factor (lockout recovery). */
   async adminResetTotp(userId) {
     const res = await fetch(`/api/users/${encodeURIComponent(userId)}/totp`, {

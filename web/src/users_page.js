@@ -284,8 +284,11 @@ function showEditUserModal({ user, escapeHtml, fillExistingTagsPicker, reload })
                 <p class="text-sm text-slate-800">${escapeHtml(user.username)}</p>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldRole')}</label>
-                <p class="text-sm text-slate-800">${escapeHtml(user.role || 'user')}</p>
+                <label for="edit-user-role" class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldRole')}</label>
+                <select id="edit-user-role" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                  <option value="user"${(user.role || 'user') === 'user' ? ' selected' : ''}>${t('users.roleUser')}</option>
+                  <option value="admin"${user.role === 'admin' ? ' selected' : ''}>${t('users.roleAdmin')}</option>
+                </select>
               </div>
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldTagsLabel')}</label>
@@ -317,9 +320,13 @@ function showEditUserModal({ user, escapeHtml, fillExistingTagsPicker, reload })
     const submitBtn = modal.querySelector('#edit-user-submit')
     const raw = modal.querySelector('#edit-user-tags-input').value.trim()
     const tags = raw ? raw.split(',').map((t) => t.trim()).filter(Boolean) : []
+    const role = modal.querySelector('#edit-user-role').value
     errorEl.classList.add('hidden')
     submitBtn.disabled = true
     try {
+      if (role !== (user.role || 'user')) {
+        await API.updateUser(user.id, { role })
+      }
       await API.setUserTags(user.id, tags)
       close()
       await reload()

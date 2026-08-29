@@ -47,6 +47,10 @@ type UserStore interface {
 	SetUserTags(userID string, tags []string) error
 	UpdatePassword(userID, currentPlain, newPlain string) error
 	UpdateLocale(userID, locale string) error
+	// UpdateRole sets the user's role (RoleAdmin / RoleUser). Business
+	// rules such as "not yourself" and "not the last admin" are enforced
+	// by the caller. Returns ErrUserNotFound / ErrInvalidRole.
+	UpdateRole(userID, role string) error
 	AddPublicKey(userID, keyLine string) (int64, error)
 	ListPublicKeys(userID string) ([]UserSSHKey, error)
 	DeletePublicKey(userID string, keyID int64) error
@@ -64,6 +68,10 @@ type UserStore interface {
 // ErrInvalidLocale is returned when an UpdateLocale call receives a value
 // that is not in the supported set (currently "", "en", "ja").
 var ErrInvalidLocale = errors.New("unsupported locale")
+
+// ErrInvalidRole is returned when UpdateRole receives a role other than
+// RoleAdmin or RoleUser.
+var ErrInvalidRole = errors.New("invalid role")
 
 var (
 	ErrUserExists        = errors.New("user already exists")

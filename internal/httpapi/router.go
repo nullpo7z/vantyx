@@ -397,6 +397,7 @@ func (a *App) NewRouter() http.Handler {
 	// Users (admin only).
 	r.Get("/api/users", a.handleListUsers)
 	r.Post("/api/users", a.handleCreateUser)
+	r.Patch("/api/users/{user_id}", a.handleUpdateUser)
 	r.Delete("/api/users/{user_id}", a.handleDeleteUser)
 	r.Delete("/api/users/{user_id}/totp", a.handleAdminResetTOTP)
 	r.Get("/api/users/{user_id}/tags", a.handleUserTags)

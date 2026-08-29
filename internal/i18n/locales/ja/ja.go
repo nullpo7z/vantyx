@@ -65,6 +65,9 @@ var Messages = map[string]string{
 	"users.alreadyExists":    "同じ ID またはユーザー名のユーザーが既に存在します",
 	"users.cannotDeleteSelf": "自分自身のアカウントは削除できません",
 	"users.lastAdmin":        "最後の管理者は削除できません",
+	"users.invalidRole":      "ロールは admin または user を指定してください",
+	"users.cannotDemoteSelf": "自分自身の管理者ロールは外せません",
+	"users.lastAdminRole":    "最後の管理者のロールは変更できません",
 
 	// Groups.
 	"groups.idRequired":             "group_id は必須です",

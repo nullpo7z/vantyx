@@ -73,6 +73,9 @@ var Messages = map[string]string{
 	"users.alreadyExists":    "user already exists (id or username)",
 	"users.cannotDeleteSelf": "you cannot delete your own account",
 	"users.lastAdmin":        "cannot delete the last remaining admin",
+	"users.invalidRole":      "role must be admin or user",
+	"users.cannotDemoteSelf": "you cannot remove your own admin role",
+	"users.lastAdminRole":    "cannot demote the last remaining admin",
 
 	// Groups.
 	"groups.idRequired":             "group_id required",

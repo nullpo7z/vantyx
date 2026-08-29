@@ -589,6 +589,10 @@ export function renderTerminalPage(container) {
         onSessionEnded: () => { sawSessionEnded = true },
         onError: (msg) => {
           sawError = true
+          if (sharingMode === 'viewer') {
+            showViewerRejoinFailed()
+            return
+          }
           showConnectError(msg)
           shellWrap.classList.add('hidden')
           credsWrap.classList.remove('hidden')
@@ -617,6 +621,10 @@ export function renderTerminalPage(container) {
         // This attempt never actually re-attached to a live session
         // (connectivity failure before the server said anything) --
         // don't claim the session is still alive on the backend.
+        if (sharingMode === 'viewer') {
+          showViewerRejoinFailed()
+          return
+        }
         showConnectError(t('terminal.wsConnectFailedShort'))
         shellWrap.classList.add('hidden')
         credsWrap.classList.remove('hidden')
@@ -630,7 +638,12 @@ export function renderTerminalPage(container) {
       // Got a session_id but never any actual shell output before the
       // close -- the resume never really came up this time (e.g. the
       // backend session was already gone). Don't claim it's "still
-      // running on the backend".
+      // running on the backend". Viewers get the dedicated dead end
+      // rather than the owner's credentials form.
+      if (sharingMode === 'viewer') {
+        showViewerRejoinFailed()
+        return
+      }
       showConnectError(t('terminal.wsConnectFailedShort'))
       shellWrap.classList.add('hidden')
       credsWrap.classList.remove('hidden')
@@ -1424,7 +1437,11 @@ export function renderTerminalPage(container) {
     }
   }
 
-  function showKickedSessionEnded() {
+  // Replace the whole page with a terminal-state message plus a single
+  // "Back to home" button. Used for the two viewer-side dead ends where
+  // neither a credentials form nor a Reconnect button makes sense: being
+  // kicked by the owner, and a viewer resume that the server refused.
+  function showViewerDeadEnd(titleKey, hintKey) {
     try {
       if (currentWs && currentWs.readyState === WebSocket.OPEN) currentWs.close()
     } catch { /* ignore */ }
@@ -1432,12 +1449,25 @@ export function renderTerminalPage(container) {
     if (!root) return
     root.innerHTML = `
       <div class="flex flex-1 items-center justify-center p-8 text-center">
-        <div class="max-w-md space-y-3">
-          <h2 class="text-lg font-semibold text-slate-800">${escapeHtml(t('sharing.youWereKicked'))}</h2>
-          <p class="text-sm text-slate-600">${escapeHtml(t('sharing.youWereKickedHint'))}</p>
+        <div class="max-w-md space-y-4">
+          <h2 class="text-lg font-semibold text-slate-800">${escapeHtml(t(titleKey))}</h2>
+          <p class="text-sm text-slate-600">${escapeHtml(t(hintKey))}</p>
+          <button id="term-back-from-dead-end" type="button" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">${escapeHtml(t('terminal.backHome'))}</button>
         </div>
       </div>
     `
+    root.querySelector('#term-back-from-dead-end')?.addEventListener('click', goHomeOrCloseToOpener)
+  }
+
+  function showKickedSessionEnded() {
+    showViewerDeadEnd('sharing.youWereKicked', 'sharing.youWereKickedHint')
+  }
+
+  // A viewer whose resume the server refused (kicked earlier, invitation
+  // revoked/expired, session gone) must not be dropped onto the owner's
+  // SSH credentials form (E-15): show a dedicated dead end instead.
+  function showViewerRejoinFailed() {
+    showViewerDeadEnd('terminal.viewerRejoinFailed', 'terminal.viewerRejoinFailedHint')
   }
 
   async function kickParticipant(sessionId, userId, displayName) {

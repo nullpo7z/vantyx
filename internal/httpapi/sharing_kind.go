@@ -22,7 +22,10 @@ type sharingSessionMeta struct {
 	Kind      sharing.Kind
 }
 
-func (a *App) publishSharingEventForSession(sessionID, ownerID, event, userID, username string, extra map[string]interface{}) {
+// publishSharingEventForSession is the VNC/RDP counterpart of
+// publishSharingEvent; alsoNotify names recipients outside the current
+// participant list (e.g. a user who was just kicked).
+func (a *App) publishSharingEventForSession(sessionID, ownerID, event, userID, username string, extra map[string]interface{}, alsoNotify ...string) {
 	if a.SessionEventBroker == nil || sessionID == "" {
 		return
 	}
@@ -45,6 +48,7 @@ func (a *App) publishSharingEventForSession(sessionID, ownerID, event, userID, u
 			}
 		}
 	}
+	users = append(users, alsoNotify...)
 	a.SessionEventBroker.PublishToUsers(body, users...)
 	a.SessionEventBroker.Broadcast()
 }
@@ -466,9 +470,11 @@ func (a *App) handleKindKickParticipant(w http.ResponseWriter, r *http.Request, 
 		"target_id":  target,
 		"session_id": meta.SessionID,
 	})
+	// Name the kicked user explicitly: they are already out of the room's
+	// participant list, so they would otherwise never get this event.
 	a.publishSharingEventForSession(meta.SessionID, meta.OwnerID, sharing.EventParticipantLeft, target, "", map[string]interface{}{
 		"reason": "kicked",
-	})
+	}, target)
 	w.WriteHeader(http.StatusNoContent)
 }
 

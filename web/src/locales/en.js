@@ -1087,6 +1087,8 @@ const en = {
     sessionContinues: 'The session is still running on the backend.',
     backHome: 'Back to home',
     sessionEnded: 'The session has ended. The remote logged out, so reconnect is not possible.',
+    viewerRejoinFailed: 'Unable to join this shared session',
+    viewerRejoinFailedHint: 'You were removed from the session or the invitation is no longer valid. Ask the session owner for a new invitation.',
     authPrompt: 'Enter the target {auth} credentials.',
     storedCredHint:
       'Enter session name and description (optional). Connect uses the saved credentials.',

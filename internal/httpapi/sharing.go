@@ -1198,9 +1198,11 @@ func (a *App) handleKickParticipant(w http.ResponseWriter, r *http.Request) {
 		"target_id":  target,
 		"session_id": string(termSess.ID()),
 	})
+	// The kicked user is no longer a participant, so name them explicitly
+	// or they never receive the reason=kicked event (E-15).
 	a.publishSharingEvent(termSess, sharing.EventParticipantLeft, target, "", map[string]interface{}{
 		"reason": "kicked",
-	})
+	}, target)
 	if a.SessionEventBroker != nil {
 		a.SessionEventBroker.Broadcast()
 	}
@@ -1415,7 +1417,13 @@ func (a *App) handleReleaseWriteToken(w http.ResponseWriter, r *http.Request) {
 // room (plus the owner). The payload is JSON-marshaled before
 // dispatch so the SSE handler does not need to know about
 // sharing.Event.
-func (a *App) publishSharingEvent(termSess *session.Session, event, userID, username string, extra map[string]interface{}) {
+// publishSharingEvent fans a sharing event out to the session owner and
+// every *current* participant. alsoNotify lists extra recipients that
+// are no longer (or not yet) in the room but still need the event -- the
+// canonical case is the user who was just kicked: RemoveParticipant has
+// already dropped them from room.Participants(), so without this they
+// never learn why their connection went away.
+func (a *App) publishSharingEvent(termSess *session.Session, event, userID, username string, extra map[string]interface{}, alsoNotify ...string) {
 	if a.SessionEventBroker == nil || termSess == nil {
 		return
 	}
@@ -1438,6 +1446,7 @@ func (a *App) publishSharingEvent(termSess *session.Session, event, userID, user
 			}
 		}
 	}
+	users = append(users, alsoNotify...)
 	a.SessionEventBroker.PublishToUsers(body, users...)
 	// session_change lets all tabs refresh lists even if a targeted event was dropped.
 	if a.SessionEventBroker != nil {

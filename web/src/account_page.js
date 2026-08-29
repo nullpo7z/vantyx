@@ -1,8 +1,9 @@
 /**
  * @file Account settings page: one place for everything about the
  * signed-in user (profile, language, password, two-factor auth, SSH
- * public keys) plus the admin-only audit-forwarder section. Reached from
- * the "Settings" nav entry and from the user name in the header.
+ * public keys). Reached from the "Account settings" nav entry and from the
+ * user name in the header. Server-wide settings live in
+ * system_settings_page.js.
  */
 
 import API from './api.js'
@@ -59,10 +60,13 @@ export async function renderAccountPage(container, { meData, onMeChanged } = {})
     (l) => `<option value="${l.code}"${l.code === getLocale() ? ' selected' : ''}>${t(l.labelKey)}</option>`,
   ).join('')
 
+  // Two columns on wide screens so the page uses the whole viewport:
+  // identity + credentials on the left, second factor + SSH keys on the right.
   container.innerHTML = `
-    <div class="w-full max-w-3xl flex-1 flex flex-col">
+    <div class="w-full flex-1 flex flex-col">
       <h2 class="text-lg font-semibold text-slate-800">${t('account.title')}</h2>
-
+      <div class="grid grid-cols-1 xl:grid-cols-2 gap-x-6 items-start">
+      <div class="min-w-0">
       ${card(
         t('account.sectionProfile'),
         '',
@@ -112,7 +116,8 @@ export async function renderAccountPage(container, { meData, onMeChanged } = {})
           </div>
         </form>`,
       )}
-
+      </div>
+      <div class="min-w-0">
       <section id="account-totp" class="mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="px-5 py-4 text-sm text-slate-500">${t('common.loading')}</div>
       </section>
@@ -120,8 +125,8 @@ export async function renderAccountPage(container, { meData, onMeChanged } = {})
       <section id="account-keys" class="mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="px-5 py-4 text-sm text-slate-500">${t('common.loading')}</div>
       </section>
-
-      ${isAdmin ? renderAuditForwarderCard() : ''}
+      </div>
+      </div>
     </div>
   `
 
@@ -159,7 +164,6 @@ export async function renderAccountPage(container, { meData, onMeChanged } = {})
     renderTOTPCard(container.querySelector('#account-totp'), { meData }),
     renderSSHKeysCard(container.querySelector('#account-keys'), { meData }),
   ])
-  if (isAdmin) bindAuditForwarderCard(container)
   if (typeof onMeChanged === 'function') onMeChanged(meData)
 }
 
@@ -483,96 +487,4 @@ async function renderSSHKeysCard(section, { meData }) {
       btn.disabled = false
     }
   })
-}
-
-/* ------------------------------------------------------------------ */
-/* Admin: audit log forwarding                                         */
-/* ------------------------------------------------------------------ */
-
-function renderAuditForwarderCard() {
-  return card(
-    t('settings.sectionAudit'),
-    t('settings.adminOnly'),
-    `<div class="flex items-center gap-2">
-      <input id="audit-fwd-enabled" type="checkbox" class="h-4 w-4" />
-      <label for="audit-fwd-enabled" class="text-sm text-slate-800">${t('settings.auditEnable')}</label>
-    </div>
-    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">${t('settings.proto')}</label>
-        <select id="audit-fwd-proto" class="${INPUT}">
-          <option value="udp">${t('settings.protoUdp')}</option>
-          <option value="tcp">${t('settings.protoTcp')}</option>
-          <option value="unix">${t('settings.protoUnix')}</option>
-          <option value="unixgram">${t('settings.protoUnixgram')}</option>
-        </select>
-      </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">${t('settings.addr')}</label>
-        <input id="audit-fwd-addr" class="${INPUT} font-mono" placeholder="${t('settings.addrPlaceholder')}" />
-        <p class="mt-1 text-[11px] text-slate-500">${t('settings.addrHint')}</p>
-      </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">${t('settings.appName')}</label>
-        <input id="audit-fwd-app" class="${INPUT} font-mono" placeholder="${t('settings.appNamePlaceholder')}" />
-      </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-600 mb-1">${t('settings.buffer')}</label>
-        <input id="audit-fwd-buffer" type="number" min="0" max="200000" class="${INPUT} font-mono" placeholder="${t('settings.bufferPlaceholder')}" />
-      </div>
-    </div>
-    <div class="mt-5 flex items-center gap-3">
-      <button id="audit-fwd-save" class="${BTN_PRIMARY}">${t('settings.save')}</button>
-      <span id="audit-fwd-status" class="text-sm text-slate-600"></span>
-    </div>`,
-  )
-}
-
-function bindAuditForwarderCard(container) {
-  const enabledEl = container.querySelector('#audit-fwd-enabled')
-  const protoEl = container.querySelector('#audit-fwd-proto')
-  const addrEl = container.querySelector('#audit-fwd-addr')
-  const appEl = container.querySelector('#audit-fwd-app')
-  const bufferEl = container.querySelector('#audit-fwd-buffer')
-  const saveBtn = container.querySelector('#audit-fwd-save')
-  const statusEl = container.querySelector('#audit-fwd-status')
-  if (!enabledEl || !saveBtn) return
-
-  async function load() {
-    statusEl.textContent = t('settings.loading')
-    try {
-      const res = await API.auditForwarderSettingsGet()
-      const cfg = res?.config || {}
-      enabledEl.checked = !!cfg.enabled
-      protoEl.value = cfg.proto || 'udp'
-      addrEl.value = cfg.addr || ''
-      appEl.value = cfg.app || 'vantyx'
-      bufferEl.value = cfg.buffer != null ? String(cfg.buffer) : '2000'
-      statusEl.textContent = res?.source === 'env' ? t('settings.sourceEnv') : t('settings.sourceApp')
-    } catch (e) {
-      statusEl.textContent = t('settings.loadFailed', { error: esc(e?.message || e) })
-    }
-  }
-
-  saveBtn.addEventListener('click', async () => {
-    statusEl.textContent = t('settings.saving')
-    saveBtn.disabled = true
-    try {
-      const cfg = {
-        enabled: !!enabledEl.checked,
-        proto: String(protoEl.value || 'udp'),
-        addr: String(addrEl.value || '').trim(),
-        app: String(appEl.value || '').trim(),
-        buffer: Number(bufferEl.value || '0'),
-      }
-      await API.auditForwarderSettingsPut({ config: cfg })
-      statusEl.textContent = t('settings.saved')
-    } catch (e) {
-      statusEl.textContent = t('settings.saveFailed', { error: esc(e?.message || e) })
-    } finally {
-      saveBtn.disabled = false
-    }
-  })
-
-  load()
 }

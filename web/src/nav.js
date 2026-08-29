@@ -13,6 +13,7 @@ let state = {
   navUsers: null,
   navCredentials: null,
   navAudit: null,
+  navSystem: null,
   navSettings: null,
   navApiRef: null,
   getMe: null,
@@ -28,6 +29,7 @@ function navLinks() {
     navUsers,
     navCredentials,
     navAudit,
+    navSystem,
     navSettings,
     navApiRef,
   } = state
@@ -40,21 +42,24 @@ function navLinks() {
     navUsers,
     navCredentials,
     navAudit,
+    navSystem,
     navSettings,
     navApiRef,
   ].filter(Boolean)
 }
 
-// Settings is deliberately NOT admin-only: it holds per-user preferences
-// (language, timezone) every user needs to reach (E-8). The admin-only
-// audit-forwarder section inside it is gated by the settings page itself.
+// "Account settings" is deliberately NOT admin-only: it holds per-user
+// preferences (language, password, 2FA, SSH keys) every user needs to
+// reach (E-8). Server-wide settings live under the admin-only "System
+// settings" entry.
 function isAdminOnlyNav(el) {
-  const { navGroups, navUsers, navCredentials, navAudit, navApiRef } = state
+  const { navGroups, navUsers, navCredentials, navAudit, navSystem, navApiRef } = state
   return (
     el === navGroups ||
     el === navUsers ||
     el === navCredentials ||
     el === navAudit ||
+    el === navSystem ||
     el === navApiRef
   )
 }
@@ -80,6 +85,7 @@ function setNavLinkVisible(el, visible) {
  * @param {HTMLElement} opts.navUsers
  * @param {HTMLElement} opts.navCredentials
  * @param {HTMLElement} opts.navAudit
+ * @param {HTMLElement} [opts.navSystem]
  * @param {HTMLElement} opts.navSettings
  * @param {() => ({role: string} | null)} opts.getMe
  * @param {() => void} opts.onHome
@@ -90,6 +96,7 @@ function setNavLinkVisible(el, visible) {
  * @param {() => void} opts.onUsers
  * @param {() => void} opts.onCredentials
  * @param {() => void} opts.onAudit
+ * @param {() => void} [opts.onSystem]
  * @param {() => void} opts.onSettings
  */
 export function initNav({
@@ -101,6 +108,7 @@ export function initNav({
   navUsers,
   navCredentials,
   navAudit,
+  navSystem,
   navSettings,
   getMe,
   onHome,
@@ -111,6 +119,7 @@ export function initNav({
   onUsers,
   onCredentials,
   onAudit,
+  onSystem,
   onSettings,
 }) {
   const navApiRef = document.getElementById('nav-api-ref')
@@ -123,6 +132,7 @@ export function initNav({
     navUsers,
     navCredentials,
     navAudit,
+    navSystem,
     navSettings,
     navApiRef,
     getMe,
@@ -194,11 +204,19 @@ export function initNav({
     })
   }
 
+  if (navSystem) {
+    navSystem.addEventListener('click', (e) => {
+      e.preventDefault()
+      const me = state.getMe && state.getMe()
+      if (!me || me.role !== 'admin') return
+      if (typeof onSystem === 'function') onSystem()
+    })
+  }
+
   if (navSettings) {
     navSettings.addEventListener('click', (e) => {
       e.preventDefault()
-      // Settings is for every signed-in user (language / timezone); the
-      // page itself gates the admin-only audit-forwarder section (E-8 / R-4).
+      // Account settings is for every signed-in user (E-8 / R-4).
       const me = state.getMe && state.getMe()
       if (!me) return
       if (typeof onSettings === 'function') onSettings()
@@ -210,7 +228,7 @@ export function initNav({
  * Mark the supplied tab as active and refresh per-link visibility based
  * on the current user's role.
  *
- * @param {'targets'|'sessions'|'recordings'|'recordingExports'|'groups'|'users'|'credentials'|'audit'|'settings'} tab
+ * @param {'targets'|'sessions'|'recordings'|'recordingExports'|'groups'|'users'|'credentials'|'audit'|'system'|'settings'} tab
  */
 export function setActiveNav(tab) {
   const { navTargets, navRecordings, navGroups, getMe } = state
@@ -233,6 +251,7 @@ export function setActiveNav(tab) {
     users: state.navUsers,
     credentials: state.navCredentials,
     audit: state.navAudit,
+    system: state.navSystem,
     settings: state.navSettings,
   }[tab]
 
@@ -252,7 +271,7 @@ export function showAuthenticatedNav(isAdmin) {
   setNavLinkVisible(navSessions, true)
   setNavLinkVisible(navRecordings, true)
   setNavLinkVisible(navRecordingExports, true)
-  // Settings holds per-user language/timezone preferences (E-8).
+  // Account settings holds per-user preferences (E-8).
   setNavLinkVisible(navSettings, true)
   if (isAdmin) {
     for (const el of navLinks()) {

@@ -13,6 +13,7 @@ import {
   countIdleSessions,
 } from './session_list_shared.js'
 import { renderAccountPage } from './account_page.js'
+import { renderSystemSettingsPage } from './system_settings_page.js'
 import { renderAuditPage } from './audit_page.js'
 import { renderGroupTargetsTable } from './targets_page.js'
 import { renderCredentialsPage } from './credentials_page.js'
@@ -123,6 +124,7 @@ export function renderApp(container) {
   const navUsers = document.getElementById('nav-users')
   const navCredentials = document.getElementById('nav-credentials')
   const navAudit = document.getElementById('nav-audit')
+  const navSystem = document.getElementById('nav-system')
   const navSettings = document.getElementById('nav-settings')
 
   let meData = null
@@ -298,8 +300,15 @@ export function renderApp(container) {
     await renderAuditPage({ mainContent, meData, setActiveNav })
   }
 
-  // Account settings: profile, language, password, 2FA, SSH keys and
-  // (admins) audit forwarding. Also opened from the user name in the header.
+  // System settings (admin only): server-wide knobs such as audit forwarding.
+  async function showSystemSettings() {
+    if (!meData || meData.role !== 'admin') return
+    disconnectAppSessionEvents()
+    await renderSystemSettingsPage(mainContent)
+  }
+
+  // Account settings: profile, language, password, 2FA and SSH keys.
+  // Also opened from the user name in the header.
   async function showSettings() {
     disconnectAppSessionEvents()
     try {
@@ -2922,6 +2931,7 @@ export function renderApp(container) {
     navUsers,
     navCredentials,
     navAudit,
+    navSystem,
     navSettings,
     getMe: () => meData,
     onHome: () => showTreeView('home'),
@@ -2932,6 +2942,7 @@ export function renderApp(container) {
     onUsers: () => showUsersPage(),
     onCredentials: () => showCredentialsPage(),
     onAudit: () => showAuditLogs(),
+    onSystem: () => showSystemSettings(),
     onSettings: () => showSettings(),
   })
 

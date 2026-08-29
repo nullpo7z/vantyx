@@ -60,10 +60,19 @@ function buildDialog({ title, body, kind, buttons }) {
 function showDialog({ title, body, kind, buttons, closeResult }) {
   return new Promise((resolve) => {
     const overlay = buildDialog({ title, body, kind, buttons })
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        close(closeResult)
+      }
+    }
     const close = (v) => {
+      document.removeEventListener('keydown', onKey, true)
       removeEl(overlay)
       resolve(v)
     }
+    // Escape = the same outcome as clicking outside / the × button (E-2).
+    document.addEventListener('keydown', onKey, true)
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) close(closeResult)
     })
@@ -72,6 +81,45 @@ function showDialog({ title, body, kind, buttons, closeResult }) {
       btn.addEventListener('click', () => close(btn.dataset.uiDialogResult))
     })
     document.body.appendChild(overlay)
+  })
+}
+
+// Escape closes the topmost page modal (E-2). Page modals are either a
+// pre-rendered `#…-modal` container toggled with the `hidden` class, or a
+// dynamically appended full-screen wrap (invite / participants dialogs).
+// Each exposes its own close/cancel control; we just click it so the
+// modal's own teardown logic runs. The uiConfirm/uiAlert overlays handle
+// Escape themselves (capture phase, stopPropagation) so they win when
+// stacked on top of a page modal.
+const MODAL_CLOSE_SELECTOR = [
+  '[data-close="1"]',
+  '[data-cancel="1"]',
+  'button[id$="-cancel"]',
+  'button[id$="-close"]',
+].join(', ')
+
+function topmostOpenModal() {
+  const candidates = []
+  for (const el of document.querySelectorAll('[id$="-modal"]')) {
+    if (!el.classList.contains('hidden') && el.childElementCount > 0) candidates.push(el)
+  }
+  for (const el of document.querySelectorAll('body > div.fixed.inset-0')) {
+    if (!el.classList.contains('hidden') && el.querySelector(MODAL_CLOSE_SELECTOR)) candidates.push(el)
+  }
+  return candidates.length ? candidates[candidates.length - 1] : null
+}
+
+if (typeof document !== 'undefined' && !document.__vantyxModalEscapeInstalled) {
+  document.__vantyxModalEscapeInstalled = true
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented) return
+    const modal = topmostOpenModal()
+    if (!modal) return
+    const closer = modal.querySelector(MODAL_CLOSE_SELECTOR)
+    if (closer) {
+      e.preventDefault()
+      closer.click()
+    }
   })
 }
 

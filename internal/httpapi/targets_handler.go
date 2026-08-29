@@ -24,9 +24,9 @@ type targetResponse struct {
 	SSHUsername           string   `json:"ssh_username,omitempty"`
 	HasStoredCredentials  bool     `json:"has_stored_credentials,omitempty"`
 	HasSSHKey             bool     `json:"has_ssh_key,omitempty"`
-	HasPassphrase         bool     `json:"has_passphrase,omitempty"`   // private key has a stored passphrase already (no prompt needed at connect).
-	NeedsPassword         bool     `json:"needs_password,omitempty"`   // username stored but no password; SPA prompts at connect.
-	NeedsPassphrase       bool     `json:"needs_passphrase,omitempty"` // encrypted private key stored but no passphrase; SPA prompts at connect.
+	HasPassphrase         bool     `json:"has_passphrase,omitempty"`         // private key has a stored passphrase already (no prompt needed at connect).
+	NeedsPassword         bool     `json:"needs_password,omitempty"`         // username stored but no password; SPA prompts at connect.
+	NeedsPassphrase       bool     `json:"needs_passphrase,omitempty"`       // encrypted private key stored but no passphrase; SPA prompts at connect.
 	CredentialIdentityID  string   `json:"credential_identity_id,omitempty"` // set when credentials were last applied from this Identity; empty = manual entry.
 	SSHKeyID              string   `json:"ssh_key_id,omitempty"`             // set when credentials were last applied from this SSH Key; empty = manual entry.
 	Tags                  []string `json:"tags,omitempty"`
@@ -66,7 +66,7 @@ type updateTargetRequest struct {
 	Port                    uint16  `json:"port"`
 	Protocol                string  `json:"protocol"`
 	Path                    string  `json:"path"`
-	GroupID                 *string `json:"group_id,omitempty"` // nil = leave unchanged; non-empty = move to this group.
+	GroupID                 *string `json:"group_id,omitempty"`               // nil = leave unchanged; non-empty = move to this group.
 	CredentialIdentityID    *string `json:"credential_identity_id,omitempty"` // nil = leave unchanged; "" = detach (manual entry); non-empty = link to this Identity.
 	SSHKeyID                *string `json:"ssh_key_id,omitempty"`             // nil = leave unchanged; "" = detach (manual entry); non-empty = link to this SSH Key.
 	SSHUsername             string  `json:"ssh_username"`

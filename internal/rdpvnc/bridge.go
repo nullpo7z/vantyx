@@ -373,8 +373,8 @@ type Session struct {
 	TargetName string
 	Width      int
 	Height     int
-	CreatedAt time.Time
-	lastSeen  time.Time
+	CreatedAt  time.Time
+	lastSeen   time.Time
 	// lastSeenMu guards lastSeen, like proxyOnce below it must be a
 	// pointer: Session is copied by value in places like
 	// ActiveSessionsForUser, and an embedded sync.RWMutex value would

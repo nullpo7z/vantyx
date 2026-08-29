@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -79,6 +80,42 @@ func TestApp_Groups_AdminSeesAllWithoutMembership(t *testing.T) {
 	}
 	if len(bobGroups) != 0 {
 		t.Fatalf("non-member ordinary user must see no groups, got %d", len(bobGroups))
+	}
+}
+
+// TestApp_UpdateTarget_AdminNotMember_Allowed is the R-3 regression guard:
+// PUT /api/targets/{id} by an admin who is not a member of the target's
+// group must succeed (create and delete already did; update still went
+// through the per-user ACL and returned 403).
+func TestApp_UpdateTarget_AdminNotMember_Allowed(t *testing.T) {
+	app := newTestApp(t)
+	seedAdminVisibilityFixtures(t, app)
+	router := app.NewRouter()
+
+	sess, _ := app.SessionStore.Create("admin2")
+	body := []byte(`{"name":"Renamed","host":"10.0.0.1","port":22,"protocol":"ssh","path":"","ssh_username":"","ssh_password":""}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/targets/srv1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: sess.ID, Path: "/"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for a non-member admin updating a target, got %d body=%s", w.Code, w.Body.String())
+	}
+	got, err := app.TargetStore.Get(context.Background(), access.TargetID("srv1"))
+	if err != nil || got.Name != "Renamed" {
+		t.Fatalf("expected the rename to be applied, got name=%q err=%v", got.Name, err)
+	}
+
+	// Ordinary users are still refused (admin-only handler).
+	bobSess, _ := app.SessionStore.Create("bob")
+	req = httptest.NewRequest(http.MethodPut, "/api/targets/srv1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "vantyx_session", Value: bobSess.ID, Path: "/"})
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for a non-admin, got %d", w.Code)
 	}
 }
 

@@ -3486,7 +3486,11 @@ func TestApp_UpdateTarget_CredentialSourceOmitVsExplicit(t *testing.T) {
 	}
 }
 
-func TestApp_UpdateTarget_Forbidden(t *testing.T) {
+// TestApp_UpdateTarget_AdminNotMemberOfTargetGroup_Allowed pins the E-10 /
+// R-3 policy: an admin may update a target in a group they are not a
+// member of. (Previously 403 -- the last handler still applying the
+// per-user ACL to admins.)
+func TestApp_UpdateTarget_AdminNotMemberOfTargetGroup_Allowed(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
@@ -3505,8 +3509,12 @@ func TestApp_UpdateTarget_Forbidden(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Result().StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", w.Result().StatusCode)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for admin updating a target in a group they are not a member of, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+	got, err := app.TargetStore.Get(ctx, access.TargetID("t2"))
+	if err != nil || got.Name != "X" {
+		t.Fatalf("expected the update to be applied, got name=%q err=%v", got.Name, err)
 	}
 }
 

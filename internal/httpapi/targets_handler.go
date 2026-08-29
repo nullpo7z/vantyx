@@ -442,9 +442,18 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	targetID := chi.URLParam(r, "target_id")
-	userID, cur, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
-	if !ok {
+	targetID := strings.TrimSpace(chi.URLParam(r, "target_id"))
+	if targetID == "" {
+		writeJSONErrorKey(w, r, "common.targetIDRequired", http.StatusBadRequest)
+		return
+	}
+	userID := strings.TrimSpace(a.currentUserID(r))
+	// Admin-only handler: load the target without the per-user ACL that
+	// getSessionAndTargetWithAccess applies -- admins manage every target
+	// regardless of their own group membership (E-10 / R-3).
+	cur, getErr := a.TargetStore.Get(r.Context(), access.TargetID(targetID))
+	if getErr != nil {
+		writeJSONErrorKey(w, r, "common.targetNotFound", http.StatusNotFound)
 		return
 	}
 	ctx := r.Context()

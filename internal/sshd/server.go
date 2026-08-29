@@ -42,17 +42,6 @@ type SessionStopper interface {
 	Stop(id session.ID) bool
 }
 
-// TOTPVerifier is the optional second-factor check for CLI logins.
-// [*auth.SQLiteTOTPStore] implements it. When a user has TOTP enabled,
-// plain password auth is refused and the client is driven through
-// keyboard-interactive (password prompt, then verification code);
-// public-key auth is accepted without a code (the key is the strong
-// factor).
-type TOTPVerifier interface {
-	Enabled(ctx context.Context, userID string) bool
-	Verify(ctx context.Context, userID, code string) (usedRecovery bool, err error)
-}
-
 // RecordingStore persists recording metadata when CLI sessions are
 // recorded. Both methods are no-ops when recording is disabled.
 type RecordingStore interface {
@@ -101,8 +90,6 @@ type Config struct {
 	SharingRegistry *sharing.Registry
 	SharingStore    sharing.Store
 	SharingBridges  sharingBridgeRegistry
-	// TOTP enables the second factor for password logins when set.
-	TOTP TOTPVerifier
 }
 
 // NewServer builds an SSH server that authenticates with cfg.UserStore
@@ -123,6 +110,11 @@ func NewServer(cfg Config) (*Server, error) {
 	if limiter == nil {
 		limiter = ratelimit.NewLoginLimiter()
 	}
+	// Public-key authentication only. Password (and keyboard-interactive)
+	// auth is deliberately not offered on the CLI gateway: a leaked
+	// password must not open a second, weaker entry point next to the web
+	// UI's password + TOTP login, and keys are what automation needs anyway.
+	// Admins register keys under Users -> Public keys.
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			ip := ratelimit.ClientIPFromAddr(c.RemoteAddr())
@@ -135,65 +127,6 @@ func NewServer(cfg Config) (*Server, error) {
 				limiter.RecordFailureIP(ip)
 				limiter.RecordFailureUser(username)
 				return nil, err
-			}
-			limiter.RecordSuccess(ip, username)
-			return &ssh.Permissions{
-				Extensions: map[string]string{"user_id": user.ID},
-			}, nil
-		},
-		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			ip := ratelimit.ClientIPFromAddr(c.RemoteAddr())
-			username := c.User()
-			if !limiter.AllowIP(ip) || !limiter.AllowUser(username) {
-				return nil, fmt.Errorf("too many failed attempts")
-			}
-			user, err := cfg.UserStore.Authenticate(username, string(pass))
-			if err != nil {
-				limiter.RecordFailureIP(ip)
-				limiter.RecordFailureUser(username)
-				return nil, err
-			}
-			// A password alone is not enough for a TOTP-enabled account:
-			// OpenSSH clients try keyboard-interactive before password, so
-			// they normally never reach this branch; a client that forces
-			// password auth is told why it is refused.
-			if cfg.TOTP != nil && cfg.TOTP.Enabled(context.Background(), user.ID) {
-				return nil, fmt.Errorf("second factor required: use keyboard-interactive authentication")
-			}
-			limiter.RecordSuccess(ip, username)
-			return &ssh.Permissions{
-				Extensions: map[string]string{"user_id": user.ID},
-			}, nil
-		},
-		// keyboard-interactive: password prompt, then -- only for accounts
-		// with TOTP enabled -- a verification code prompt (TOTP or an
-		// unused recovery code).
-		KeyboardInteractiveCallback: func(c ssh.ConnMetadata, challenge ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
-			ip := ratelimit.ClientIPFromAddr(c.RemoteAddr())
-			username := c.User()
-			if !limiter.AllowIP(ip) || !limiter.AllowUser(username) {
-				return nil, fmt.Errorf("too many failed attempts")
-			}
-			answers, err := challenge(username, "", []string{"Password: "}, []bool{false})
-			if err != nil || len(answers) != 1 {
-				return nil, fmt.Errorf("authentication cancelled")
-			}
-			user, err := cfg.UserStore.Authenticate(username, answers[0])
-			if err != nil {
-				limiter.RecordFailureIP(ip)
-				limiter.RecordFailureUser(username)
-				return nil, err
-			}
-			if cfg.TOTP != nil && cfg.TOTP.Enabled(context.Background(), user.ID) {
-				codes, err := challenge(username, "", []string{"Verification code: "}, []bool{true})
-				if err != nil || len(codes) != 1 {
-					return nil, fmt.Errorf("authentication cancelled")
-				}
-				if _, verr := cfg.TOTP.Verify(context.Background(), user.ID, codes[0]); verr != nil {
-					limiter.RecordFailureIP(ip)
-					limiter.RecordFailureUser(username)
-					return nil, fmt.Errorf("invalid verification code")
-				}
 			}
 			limiter.RecordSuccess(ip, username)
 			return &ssh.Permissions{

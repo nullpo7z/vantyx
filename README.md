@@ -31,7 +31,8 @@ exposes a unified REST + WebSocket API for the bundled single-page UI.
 - **OIDC single sign-on** (Keycloak, Entra ID, Okta, … via discovery + PKCE)
   and **TOTP two-factor** for built-in users, on both the web UI and the CLI
   gateway. See [docs/configuration.md](docs/configuration.md#two-factor-authentication-totp).
-- **CLI gateway**: `ssh user@vantyx` and proxy to allowed targets.
+- **CLI gateway**: `ssh user@vantyx` (public-key auth only) and proxy to
+  allowed targets.
 - **Session recording**: terminal/CLI sessions as asciinema `.cast`; RDP/VNC
   screen capture as H.264 `.mp4`. Playback in the UI; GIF/MP4 export via a
   background conversion queue.
@@ -69,7 +70,7 @@ docker compose -f docker-compose.dev.yml up --build -d
 |----------|------------------------------------------------------------------------------------------------|
 | `80`     | Always 301-redirects to HTTPS (cannot be disabled).                                            |
 | `443`    | The application (REST API + SPA). Inside the container the listeners bind to `8080` / `8443`. |
-| `2222`   | CLI SSH gateway (`ssh -p 2222 admin@<host>`)                                                   |
+| `2222`   | CLI SSH gateway (`ssh -p 2222 admin@<host>`; public-key auth only, register keys under Users → Public keys) |
 | `69/udp` | Forwarded to the embedded TFTP server (`6969/udp` inside the container).                       |
 
 - **TLS**: a self-signed certificate is created on first start under

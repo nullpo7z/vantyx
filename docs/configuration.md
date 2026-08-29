@@ -51,9 +51,10 @@ eight single-use recovery codes that are shown once.
   instead of a session; the client completes with
   `POST /api/login/totp {mfa_token, code}`. The token lives 5 minutes and is
   discarded after 5 wrong codes (the login rate limiter applies as well).
-- **CLI gateway**: password logins switch to SSH *keyboard-interactive*
-  (`Password:` then `Verification code:`). Plain password authentication is
-  refused for users with TOTP enabled; **public-key** logins are unaffected.
+- **CLI gateway**: not affected — the gateway accepts **public keys only**
+  (no password or keyboard-interactive auth), so there is no password
+  entry point for TOTP to protect. Register keys under **Users → Public
+  keys**.
 - **SSO logins** (below) are not challenged for a local TOTP — the IdP owns
   MFA for those users.
 - Users disable it with their password (`DELETE /api/me/totp`); admins can
@@ -126,7 +127,7 @@ Audit events: `oidc_login_started`, `oidc_login_ok`, `oidc_login_failed`
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VANTYX_SSH_LISTEN` | — | When set (for example `:2222`), the binary starts the CLI SSH gateway on this address. Leave unset to disable the gateway. Users with TOTP enabled must authenticate with keyboard-interactive (password + verification code) or a public key. |
+| `VANTYX_SSH_LISTEN` | — | When set (for example `:2222`), the binary starts the CLI SSH gateway on this address. Leave unset to disable the gateway. Authentication is **public-key only**: password and keyboard-interactive auth are not offered, so a leaked password cannot bypass the web UI's second factor. Admins register keys per user under **Users → Public keys** (`POST /api/users/{id}/ssh-keys`). |
 
 ## Audit forwarder
 

@@ -142,7 +142,6 @@ func main() {
 			SharingRegistry: app.SharingRegistry,
 			SharingStore:    app.SharingStore,
 			SharingBridges:  app.SharingBridges,
-			TOTP:            app.TOTPStore,
 		})
 		if err != nil {
 			slog.Error("sshd setup failed", "error", err)

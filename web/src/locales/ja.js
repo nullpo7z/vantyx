@@ -379,7 +379,7 @@ const ja = {
     failed: '変更に失敗しました',
     totpTitle: '二要素認証（TOTP）',
     totpHint:
-      'Web UI と SSH CLI のパスワードログインに、認証アプリのワンタイムコード（TOTP）を追加します。公開鍵による SSH ログインと SSO ログインには影響しません。',
+      'Web UI のパスワードログインに、認証アプリのワンタイムコード（TOTP）を追加します。SSH CLI ゲートウェイは公開鍵認証のみのため対象外で、SSO ログインにも影響しません。',
     totpEnabled: '有効',
     totpDisabled: '未設定',
     totpRecoveryLeft: 'リカバリーコード残り {n} 個',

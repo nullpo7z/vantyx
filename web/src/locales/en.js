@@ -402,7 +402,7 @@ const en = {
     failed: 'Failed to change the password.',
     totpTitle: 'Two-factor authentication',
     totpHint:
-      'Adds a time-based one-time code (TOTP) to password logins on the web UI and the SSH CLI. Public-key SSH logins and SSO logins are not affected.',
+      'Adds a time-based one-time code (TOTP) to password logins on the web UI. The SSH CLI gateway accepts public keys only, and SSO logins are not affected.',
     totpEnabled: 'Enabled',
     totpDisabled: 'Not enabled',
     totpRecoveryLeft: '{n} recovery codes left',

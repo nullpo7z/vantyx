@@ -58,6 +58,8 @@ var Messages = map[string]string{
 	"auth.passwordChangeRequired": "この機能を利用する前にパスワードを変更してください",
 
 	// Users (admin management).
+	"groups.expiresInvalid":  "expires_at は RFC3339 形式で指定してください",
+	"groups.expiresInPast":   "expires_at は未来の日時を指定してください",
 	"users.idRequired":       "user_id は必須です",
 	"users.userNotFound":     "ユーザーが見つかりません",
 	"users.usernameRequired": "ユーザー名は必須です",

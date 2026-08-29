@@ -3,6 +3,7 @@ package access
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // UserID identifies a user (e.g. session user).
@@ -36,6 +37,15 @@ type AccessGroup struct {
 	Name string
 }
 
+// Membership is one user_groups row as admins see it: ExpiresAt is nil
+// for permanent access. Expired memberships grant nothing but are
+// listed (Expired=true) so the reason for a lost permission is visible.
+type Membership struct {
+	UserID    UserID
+	ExpiresAt *time.Time
+	Expired   bool
+}
+
 // AccessGroupStore defines the behavior required for managing access groups
 // and their relationships to users and targets.
 // Implementations may derive the acting principal (who performed the change)
@@ -49,12 +59,25 @@ type AccessGroupStore interface {
 	// Delete removes an access group. Implementations should define whether this is
 	// a physical delete or a soft delete, and document the behavior.
 	Delete(ctx context.Context, id GroupID) error
+	// AddUserToGroup grants permanent membership (idempotent; clears an
+	// existing expiry).
 	AddUserToGroup(ctx context.Context, userID UserID, groupID GroupID) error
+	// AddUserToGroupUntil grants membership that stops granting access at
+	// expiresAt (nil = permanent). Re-adding an existing member updates
+	// the expiry.
+	AddUserToGroupUntil(ctx context.Context, userID UserID, groupID GroupID, expiresAt *time.Time) error
 	RemoveUserFromGroup(ctx context.Context, userID UserID, groupID GroupID) error
-	// UserIDsForGroup returns the direct members of the group only (the
-	// management UI edits exactly this set). Members of ancestor groups
-	// also have access; see ancestorGroupIDs in httpapi for callers that
-	// need everyone with access through the group.
+	// MembershipsForGroup lists every membership row of the group,
+	// including expired ones, for the management UI.
+	MembershipsForGroup(ctx context.Context, groupID GroupID) ([]Membership, error)
+	// PurgeExpiredMemberships deletes memberships that expired before
+	// olderThan and returns how many rows went.
+	PurgeExpiredMemberships(ctx context.Context, olderThan time.Time) (int64, error)
+	// UserIDsForGroup returns the direct, non-expired members of the
+	// group. Members of ancestor groups also have access; see
+	// ancestorGroupIDs in httpapi for callers that need everyone with
+	// access through the group. The management UI uses
+	// MembershipsForGroup (which includes expired rows) instead.
 	UserIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]UserID, error)
 	AddTargetToGroup(ctx context.Context, groupID GroupID, targetID TargetID) error
 	// RemoveTargetFromGroup revokes the group's access to the target.

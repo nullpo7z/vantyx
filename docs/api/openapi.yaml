@@ -2469,7 +2469,7 @@ paths:
             type: string
       responses:
         '200':
-          description: メンバー一覧（id, username）
+          description: メンバー一覧（id, username, role, expires_at, expired）。期限切れの行も expired=true で含まれる。
           content:
             application/json:
               schema:
@@ -2502,7 +2502,10 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
       summary: グループにメンバーを追加（管理者のみ）
-      description: 指定したアクセスグループにユーザーを追加します。管理者（admin）のみ利用可能。
+      description: |
+        指定したアクセスグループにユーザーを追加します。管理者（admin）のみ利用可能。
+        `expires_at`（RFC3339、任意）を指定すると、その時刻以降は自動的にアクセスを失います（下位グループへの継承も同時に切れる）。
+        既存メンバーに再度 POST すると期限を更新（空なら無期限化）します。監査イベント `group_member_added`。
       security:
         - cookieAuth: []
       parameters:
@@ -2521,6 +2524,10 @@ paths:
               properties:
                 user_id:
                   type: string
+                expires_at:
+                  type: string
+                  format: date-time
+                  description: アクセス期限（任意、RFC3339）。省略または空で無期限。
       responses:
         '204':
           description: 追加完了

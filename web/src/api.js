@@ -1052,12 +1052,12 @@ const API = {
   },
 
   /** グループにメンバーを追加（管理者のみ） */
-  async addGroupMember(groupId, userId) {
+  async addGroupMember(groupId, userId, expiresAt = '') {
     const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/members`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ user_id: userId }),
+      body: JSON.stringify({ user_id: userId, expires_at: expiresAt || '' }),
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))

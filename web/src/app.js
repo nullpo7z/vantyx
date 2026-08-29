@@ -13,6 +13,7 @@ import {
   countIdleSessions,
 } from './session_list_shared.js'
 import { renderAccountPage } from './account_page.js'
+import { formatDateTime } from './datetime.js'
 import { renderSystemSettingsPage } from './system_settings_page.js'
 import { renderAuditPage } from './audit_page.js'
 import { renderGroupTargetsTable } from './targets_page.js'
@@ -407,6 +408,11 @@ export function renderApp(container) {
                   <option value="">${t('app.pickPlaceholder')}</option>
                 </select>
               </div>
+              <div>
+                <label for="add-member-expires" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldMemberExpires')}</label>
+                <input type="datetime-local" id="add-member-expires" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
+                <p class="mt-1 text-xs text-slate-500">${t('app.memberExpiresHint')}</p>
+              </div>
               <p id="add-member-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
@@ -449,9 +455,20 @@ export function renderApp(container) {
       const userId = selectEl.value?.trim()
       if (!userId) return
       errorEl.classList.add('hidden')
+      const expiresRaw = modal.querySelector('#add-member-expires').value
+      let expiresAt = ''
+      if (expiresRaw) {
+        const d = new Date(expiresRaw)
+        if (Number.isNaN(d.getTime()) || d.getTime() <= Date.now()) {
+          errorEl.textContent = t('app.memberExpiresInvalid')
+          errorEl.classList.remove('hidden')
+          return
+        }
+        expiresAt = d.toISOString()
+      }
       submitBtn.disabled = true
       try {
-        await API.addGroupMember(groupId, userId)
+        await API.addGroupMember(groupId, userId, expiresAt)
         close()
         groupsCache = null
         await showTreeView('manage', true)
@@ -1088,9 +1105,14 @@ export function renderApp(container) {
                 </div>
               `
               const rows = (members || []).map((m) => `
-                <tr class="border-b border-slate-200 hover:bg-slate-50">
+                <tr class="border-b border-slate-200 hover:bg-slate-50${m.expired ? ' opacity-60' : ''}">
                   <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(m.id)}</td>
                   <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(m.username)}</td>
+                  <td class="px-4 py-2 text-sm text-slate-600 whitespace-nowrap">${
+                    m.expires_at
+                      ? `${escapeHtml(formatDateTime(m.expires_at))}${m.expired ? ` <span class="ml-1 inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">${t('app.memberExpired')}</span>` : ''}`
+                      : `<span class="text-slate-400">${t('app.memberNoExpiry')}</span>`
+                  }</td>
                   <td class="px-4 py-2 text-right">
                     <button type="button" class="remove-member-btn rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50" data-user-id="${escapeHtml(m.id)}">${t('app.delete')}</button>
                   </td>
@@ -1109,10 +1131,11 @@ export function renderApp(container) {
                       <tr>
                         <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('app.memberHeaderId')}</th>
                         <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('app.memberHeaderName')}</th>
+                        <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('app.memberHeaderExpires')}</th>
                         <th class="px-4 py-2"></th>
                       </tr>
                     </thead>
-                    <tbody>${rows || `<tr><td colspan="3" class="px-4 py-4 text-center text-slate-500">${t('app.noMembers')}</td></tr>`}</tbody>
+                    <tbody>${rows || `<tr><td colspan="4" class="px-4 py-4 text-center text-slate-500">${t('app.noMembers')}</td></tr>`}</tbody>
                   </table>
                 </div>
               `

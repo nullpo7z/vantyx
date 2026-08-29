@@ -148,6 +148,12 @@ const en = {
     tagsInvalid:
       'Tags must use alphanumerics, hyphen or underscore (1–64 characters).',
     addMemberTitle: 'Add member',
+    fieldMemberExpires: 'Access until (optional)',
+    memberExpiresHint: 'Leave blank for permanent membership. After this time the user loses this group (and its child groups) automatically; the row stays listed as expired until removed.',
+    memberExpiresInvalid: 'The expiry must be in the future.',
+    memberHeaderExpires: 'Access until',
+    memberNoExpiry: 'Permanent',
+    memberExpired: 'Expired',
     fieldUser: 'User',
     pickPlaceholder: 'Please choose',
     noMoreUsers: 'No more users to add',

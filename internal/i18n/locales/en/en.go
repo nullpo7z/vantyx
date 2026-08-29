@@ -66,6 +66,8 @@ var Messages = map[string]string{
 	"auth.passwordChangeRequired": "password change required before using this feature",
 
 	// Users (admin management).
+	"groups.expiresInvalid":  "expires_at must be an RFC3339 timestamp",
+	"groups.expiresInPast":   "expires_at must be in the future",
 	"users.idRequired":       "user_id required",
 	"users.userNotFound":     "user not found",
 	"users.usernameRequired": "username is required",

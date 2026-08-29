@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/go-chi/chi/v5"
@@ -48,6 +49,17 @@ type updateGroupRequest struct {
 
 type addGroupMemberRequest struct {
 	UserID string `json:"user_id"`
+	// ExpiresAt (RFC3339, optional): membership stops granting access at
+	// this time. Empty = permanent. Re-adding a member updates it.
+	ExpiresAt string `json:"expires_at"`
+}
+
+type memberResponse struct {
+	ID        string `json:"id"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+	Expired   bool   `json:"expired"`
 }
 
 type tagsResponse struct {
@@ -327,15 +339,14 @@ func (a *App) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	opts := listOptsFromRequest(r)
-	userIDs, err := a.AccessGroupStore.UserIDsForGroup(ctx, access.GroupID(groupID), opts)
+	members, err := a.AccessGroupStore.MembershipsForGroup(ctx, access.GroupID(groupID))
 	if err != nil {
 		writeInternalError(w, err)
 		return
 	}
-	out := make([]userResponse, 0, len(userIDs))
-	for _, uid := range userIDs {
-		u, err := a.UserStore.GetByID(string(uid))
+	out := make([]memberResponse, 0, len(members))
+	for _, m := range members {
+		u, err := a.UserStore.GetByID(string(m.UserID))
 		if err != nil {
 			continue
 		}
@@ -343,7 +354,11 @@ func (a *App) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
 		if role == "" {
 			role = auth.RoleUser
 		}
-		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role})
+		mr := memberResponse{ID: u.ID, Username: u.Username, Role: role, Expired: m.Expired}
+		if m.ExpiresAt != nil {
+			mr.ExpiresAt = m.ExpiresAt.In(a.serverLocation()).Format(time.RFC3339)
+		}
+		out = append(out, mr)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -383,10 +398,33 @@ func (a *App) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, err)
 		return
 	}
-	if err := a.AccessGroupStore.AddUserToGroup(ctx, access.UserID(req.UserID), access.GroupID(groupID)); err != nil {
+	var expiresAt *time.Time
+	if raw := strings.TrimSpace(req.ExpiresAt); raw != "" {
+		t, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			writeJSONErrorKey(w, r, "groups.expiresInvalid", http.StatusBadRequest)
+			return
+		}
+		if !t.After(time.Now()) {
+			writeJSONErrorKey(w, r, "groups.expiresInPast", http.StatusBadRequest)
+			return
+		}
+		t = t.UTC()
+		expiresAt = &t
+	}
+	if err := a.AccessGroupStore.AddUserToGroupUntil(ctx, access.UserID(req.UserID), access.GroupID(groupID), expiresAt); err != nil {
 		writeInternalError(w, err)
 		return
 	}
+	fields := auditFields{
+		"user_id":   a.currentUserID(r),
+		"member_id": req.UserID,
+		"group_id":  groupID,
+	}
+	if expiresAt != nil {
+		fields["expires_at"] = expiresAt.Format(time.RFC3339)
+	}
+	audit("group_member_added", fields)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -411,6 +449,11 @@ func (a *App) handleRemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, err)
 		return
 	}
+	audit("group_member_removed", auditFields{
+		"user_id":   a.currentUserID(r),
+		"member_id": userID,
+		"group_id":  groupID,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 

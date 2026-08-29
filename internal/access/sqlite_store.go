@@ -293,6 +293,12 @@ func (s *SQLiteAccessGroupStore) Delete(ctx context.Context, id GroupID) error {
 
 // AddUserToGroup adds a user to an access group (within a transaction to avoid TOCTOU).
 func (s *SQLiteAccessGroupStore) AddUserToGroup(ctx context.Context, userID UserID, groupID GroupID) error {
+	return s.AddUserToGroupUntil(ctx, userID, groupID, nil)
+}
+
+// AddUserToGroupUntil grants membership until expiresAt (nil = permanent),
+// updating the expiry of an existing membership.
+func (s *SQLiteAccessGroupStore) AddUserToGroupUntil(ctx context.Context, userID UserID, groupID GroupID, expiresAt *time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
@@ -310,15 +316,64 @@ func (s *SQLiteAccessGroupStore) AddUserToGroup(ctx context.Context, userID User
 		return err
 	}
 
+	var exp interface{}
+	if expiresAt != nil {
+		exp = expiresAt.Unix()
+	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO user_groups (user_id, group_id)
-		VALUES (?, ?)
-	`, string(userID), string(groupID))
+		INSERT INTO user_groups (user_id, group_id, expires_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(user_id, group_id) DO UPDATE SET expires_at = excluded.expires_at
+	`, string(userID), string(groupID), exp)
 	if err != nil {
 		return err
 	}
 	return tx.Commit()
 }
+
+// MembershipsForGroup lists all membership rows (expired included).
+func (s *SQLiteAccessGroupStore) MembershipsForGroup(ctx context.Context, groupID GroupID) ([]Membership, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id, expires_at FROM user_groups WHERE group_id = ? ORDER BY user_id`, string(groupID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	now := time.Now()
+	var out []Membership
+	for rows.Next() {
+		var uid string
+		var exp sql.NullInt64
+		if err := rows.Scan(&uid, &exp); err != nil {
+			return nil, err
+		}
+		m := Membership{UserID: UserID(uid)}
+		if exp.Valid {
+			t := time.Unix(exp.Int64, 0).UTC()
+			m.ExpiresAt = &t
+			m.Expired = !t.After(now)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// PurgeExpiredMemberships deletes memberships that expired before olderThan.
+func (s *SQLiteAccessGroupStore) PurgeExpiredMemberships(ctx context.Context, olderThan time.Time) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	res, err := s.db.ExecContext(ctx, `DELETE FROM user_groups WHERE expires_at IS NOT NULL AND expires_at < ?`, olderThan.Unix())
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// activeMembership is the SQL predicate for a membership that still
+// grants access (permanent, or not yet expired at the bound unix time).
+const activeMembership = `(ug.expires_at IS NULL OR ug.expires_at > ?)`
 
 // RemoveUserFromGroup removes a user from an access group.
 func (s *SQLiteAccessGroupStore) RemoveUserFromGroup(ctx context.Context, userID UserID, groupID GroupID) error {
@@ -347,19 +402,19 @@ func (s *SQLiteAccessGroupStore) UserIDsForGroup(ctx context.Context, groupID Gr
 	if opts != nil && opts.AfterID != "" {
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT user_id
-			FROM user_groups
-			WHERE group_id = ? AND user_id > ?
+			FROM user_groups ug
+			WHERE group_id = ? AND user_id > ? AND `+activeMembership+`
 			ORDER BY user_id
 			LIMIT ?
-		`, string(groupID), opts.AfterID, limit)
+		`, string(groupID), opts.AfterID, time.Now().Unix(), limit)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT user_id
-			FROM user_groups
-			WHERE group_id = ?
+			FROM user_groups ug
+			WHERE group_id = ? AND `+activeMembership+`
 			ORDER BY user_id
 			LIMIT ? OFFSET ?
-		`, string(groupID), limit, offset)
+		`, string(groupID), time.Now().Unix(), limit, offset)
 	}
 	if err != nil {
 		return nil, err
@@ -394,7 +449,7 @@ func (s *SQLiteAccessGroupStore) UserIDsForTarget(ctx context.Context, targetID 
 			INNER JOIN group_targets gt
 				ON gt.group_id = ug.group_id
 				OR substr(gt.group_id, 1, length(ug.group_id) + 1) = ug.group_id || '/'
-			WHERE gt.target_id = ?
+			WHERE gt.target_id = ? AND `+activeMembership+`
 			UNION
 			SELECT ut.user_id AS uid
 			FROM user_tags ut
@@ -410,7 +465,7 @@ func (s *SQLiteAccessGroupStore) UserIDsForTarget(ctx context.Context, targetID 
 			WHERE gt.target_id = ?
 		)
 		ORDER BY uid
-	`, tid, tid, tid)
+	`, tid, time.Now().Unix(), tid, tid)
 	if err != nil {
 		return nil, err
 	}
@@ -647,9 +702,9 @@ func (s *SQLiteAccessGroupStore) GroupIDsForUser(ctx context.Context, userID Use
 		INNER JOIN access_groups g
 			ON g.id = ug.group_id
 			OR substr(g.id, 1, length(ug.group_id) + 1) = ug.group_id || '/'
-		WHERE ug.user_id = ?
+		WHERE ug.user_id = ? AND `+activeMembership+`
 		LIMIT ?
-	`, string(userID), maxFanoutRowsPerQuery)
+	`, string(userID), time.Now().Unix(), maxFanoutRowsPerQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -846,9 +901,9 @@ func (s *SQLiteAccessGroupStore) TargetIDsForUser(ctx context.Context, userID Us
 		JOIN group_targets gt
 			ON gt.group_id = ug.group_id
 			OR substr(gt.group_id, 1, length(ug.group_id) + 1) = ug.group_id || '/'
-		WHERE ug.user_id = ?
+		WHERE ug.user_id = ? AND `+activeMembership+`
 		LIMIT ?
-	`, string(userID), maxFanoutRowsPerQuery)
+	`, string(userID), time.Now().Unix(), maxFanoutRowsPerQuery)
 	if err != nil {
 		return nil, err
 	}

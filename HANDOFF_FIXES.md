@@ -10,7 +10,7 @@ Windows 側ではコードを触らない方針なので、以降の修正・ビ
 
 ## 0. まず読むこと(状態の要約)
 
-> **2026-08-29 Linux 側での対応結果**: A-1〜A-5、E-1、E-2、E-3/E-5、E-4、E-6、E-8、E-9、E-10(方針 a・管理 API 範囲)、E-11、E-12、E-13、E-14、E-15、E-16、F-1 を各 1 コミットで修正し、6 回に分けて本番へデプロイ済み(各項目の「✅ 修正済み(コミット ID)」を参照)。テストユーザー 3 名・テスト録画は本番から削除済み。**未対応・要判断**: B-1(fragmented MP4 の remux — 方針確認待ち)、E-7(仕様確認待ち)、E-10 の「接続・録画閲覧まで admin 全許可にするか」(判断待ち)。
+> **2026-08-29 Linux 側での対応結果**: A-1〜A-5、E-1、E-2、E-3/E-5、E-4、E-6、E-8、E-9、E-10(方針 a・管理 API 範囲)、E-11、E-12、E-13、E-14、E-15、E-16、F-1 を各 1 コミットで修正し、6 回に分けて本番へデプロイ済み(各項目の「✅ 修正済み(コミット ID)」を参照)。テストユーザー 3 名・テスト録画は本番から削除済み。その後の判断に基づき B-1(remux + 既存録画の一括変換)と E-7 も修正・デプロイ済み(7 回目)。E-10 の接続・録画閲覧範囲は「admin でもグループ配属が必要」で確定(変更なし)。**本ファイルの全項目が対応済み**。
 
 | 区分 | 件数 | 状態 |
 |---|---|---|
@@ -75,6 +75,7 @@ scripts/deploy.sh     # rsync(compose/.env 除外)+ サーバー側ビルド
 ## 2. B: 未修正(要実装)
 
 ### B-1. RDP/VNC 録画 MP4 に確定した総再生時間がない(fragmented MP4)
+- ✅ 対応済み(コミット f4c7bc9、2026-08-29 デプロイ済み)— 録画停止後(ffmpeg 終了を待ってから)に `ffmpeg -c copy -movflags +faststart` で一時ファイルへ非同期 remux し、「非 fragmented かつサイズ>0」を検証できた場合のみ差し替え(失敗時は元ファイルを残し `recording_remux_failed` を監査、成功時 `recording_remux_ok`)。エクスポート用のガバナー枠を使うためライブ録画の開始を妨げない。起動 30 秒後に既存録画の一括変換(`startRecordingRemuxBackfill`)も実行。**本番実績**: 起動時バックフィルで対象 2 件中 1 件(a164b1c7…、18 分の RDP 録画)を変換、`ffprobe` で総時間 1077 秒を確認。残り 1 件(0155172a…)は RDP 録画修正前の行で実体ファイルが存在せず対象外。`recording.IsFragmentedMP4`(top-level `moof` 検出)と ffmpeg 往復テストを追加(ffmpeg のない builder では skip)。
 - **症状**: `empty_moov` + `frag_keyframe` で書かれた MP4 は moov に duration を持たず、ブラウザは読み込んだ分だけ `duration` を伸ばす(A-1 の Range 対応後もタイムラインの総時間は「読み込んだところまで」になる)。
 - **関係コード**: `internal/recording/video_recorder.go`(ffmpeg 引数 `-movflags +frag_keyframe+empty_moov`)、`internal/httpapi/video_recording.go` の `stopVideoRecordingHandle` / `finishVideoRecording`、`internal/recording/vnc_capture.go`。
 - **提案**: 録画停止後(SIGINT で ffmpeg が終了した後)に `ffmpeg -i in.mp4 -c copy -movflags +faststart out.mp4` で remux して差し替える(非同期でよい。失敗時は元ファイルを残す)。既存の録画は Downloads の export ジョブ経由か一括バッチで変換可能。
@@ -151,6 +152,7 @@ scripts/deploy.sh     # rsync(compose/.env 除外)+ サーバー側ビルド
 - **修正案**: ラベル生成箇所で `formatDateTime(job.started_at ...)` を使う(同ファイル 45 行付近の helper を流用)。
 
 ### E-7. Sessions ページの「File transfers」欄に完了したアップロードが出ない(観察のみ)
+- ✅ 修正済み(コミット 401533f、2026-08-29 デプロイ済み)— 仕様ではなくバグ。`file_transfer_manager.js` が完了/失敗/取消ジョブを完了 8 秒後(`TERMINAL_DISPLAY_MS`)にローカルの一覧から削除し、再読込時も 8 秒より古いスナップショットを墓標化して取り込まなかったため、「実行中 + 直近完了 10 件」を出す設計の Sessions ページが空になっていた。完了ジョブはサーバーが返す間(サーバー側で直近分に限定済み)保持し、8 秒の窓は画面下部のコンパクトなバーの表示のみに適用するよう分離。
 - 52 B のアップロード完了直後に Sessions ページを開いても "No active or recent file transfers"。監査ログの File transfers タブには Completed 100% で記録されている。仕様(完了済みは表示しない/一定時間で消える)なら問題なし。意図と違うなら `web/src/file_transfer_manager.js` の表示条件を確認。
 
 ### 正常確認済み(2 回目のパス)
@@ -207,7 +209,7 @@ scripts/deploy.sh     # rsync(compose/.env 除外)+ サーバー側ビルド
 - `DELETE /api/users/<id>` → **405**。User management 画面にも Delete ボタンが無い(→ E-11)
 
 ### E-10. 追加 admin が既存グループ/ターゲットを管理できない — `internal/httpapi/groups_handler.go` / targets 一覧のアクセス判定
-- ✅ 修正済み(コミット 32e0068、2026-08-29 デプロイ済み)— 方針 (a) を採用: admin ロールは `GET /api/groups` / `GET /api/targets` で全グループ・全ターゲットを取得(`AccessGroupStore.AllGroupIDs` / `TargetStore.AllIDs` を追加)。admin 専用のターゲット作成/更新(グループ移動)/削除ハンドラにあった「操作する admin 自身が対象グループのメンバーであること」の再チェックを撤廃。一般ユーザーは従来どおり。**接続・録画閲覧まで admin 全許可にするかは未決定(現状はメンバーシップ基準のまま)** — 別途判断待ち。回帰テスト: `admin_visibility_test.go` + 旧方針を固定していた 3 テストを反転。
+- ✅ 修正済み(コミット 32e0068、2026-08-29 デプロイ済み)— 方針 (a) を採用: admin ロールは `GET /api/groups` / `GET /api/targets` で全グループ・全ターゲットを取得(`AccessGroupStore.AllGroupIDs` / `TargetStore.AllIDs` を追加)。admin 専用のターゲット作成/更新(グループ移動)/削除ハンドラにあった「操作する admin 自身が対象グループのメンバーであること」の再チェックを撤廃。一般ユーザーは従来どおり。**接続・録画閲覧の範囲は「admin でもグループ配属(メンバーシップ/タグ)が必要」で確定**(2026-08-29 ユーザー判断)。管理 API のみ admin 全許可。コード変更なし。回帰テスト: `admin_visibility_test.go` + 旧方針を固定していた 3 テストを反転。
 - **症状**: role=admin でも `/api/groups` `/api/targets` はメンバーシップ/タグで絞られるため、後から作った admin は Server management で既存グループが見えず、編集・削除・サーバー追加ができない(API を直接叩いてメンバー自己追加すれば見える)。組み込み `admin` はグループ作成時の自動メンバー登録で全件見えているだけ。
 - **修正案(要方針決定)**: (a) admin ロールは一覧/管理 API でアクセス制御をバイパスして全グループ・全ターゲットを返す(接続/録画閲覧も admin は全許可にするか、管理のみ全許可にするかを決める)。(b) 現行方針を維持するなら、admin 作成時に既存全グループへ自動メンバー登録し、グループ作成時も全 admin を自動追加する。少なくとも Server management は admin に全件表示すべき。
 - **優先度**: 高(運用上、2 人目の管理者が実質何も管理できない)。

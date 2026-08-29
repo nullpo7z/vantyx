@@ -292,7 +292,17 @@ func (a *App) handleCreateInvitation(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, err)
 		return
 	}
-	a.ensureRoomFor(termSess)
+	room := a.ensureRoomFor(termSess)
+	// A named re-invitation from the owner lifts a previous kick so the
+	// user can actually come back (E-16). Links/tags/groups don't.
+	if invitee != "" && room != nil && room.Unkick(invitee) {
+		audit("session_participant_unkicked", auditFields{
+			"user_id":    ownerID,
+			"session_id": string(termSess.ID()),
+			"target_id":  invitee,
+			"inv_id":     inv.ID,
+		})
+	}
 	audit("session_invitation_created", auditFields{
 		"user_id":    ownerID,
 		"session_id": string(termSess.ID()),

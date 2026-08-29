@@ -47,6 +47,12 @@ func (s *Service) JoinRoom(ctx context.Context, inv Invitation, userID, username
 	if userID == inv.OwnerUserID {
 		return nil, ErrInvitationNotFound
 	}
+	// A kicked user is refused BEFORE the invitation is consumed: the
+	// check used to run after RecordUse, so a kicked user trying a fresh
+	// single-use invitation burned it without getting in (E-16).
+	if room, ok := s.Registry.Get(inv.SessionID); ok && room.IsKicked(userID) {
+		return nil, ErrUserKicked
+	}
 	// Re-check target ACL before consuming the invitation. Both the
 	// inviter (guards against an owner who has since lost access) and the
 	// joining user must independently be able to reach the target: a

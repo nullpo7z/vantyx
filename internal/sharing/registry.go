@@ -160,6 +160,21 @@ func (r *Room) IsKicked(userID string) bool {
 	return ok
 }
 
+// Unkick lifts the rejoin block set by RemoveParticipant. The owner
+// explicitly re-inviting the same user by name is treated as permission
+// to come back; shareable links, tag and group invitations do not lift
+// it, so a kick keeps its meaning against blanket invitations. Returns
+// true when a block was actually removed.
+func (r *Room) Unkick(userID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.kicked[userID]; !ok {
+		return false
+	}
+	delete(r.kicked, userID)
+	return true
+}
+
 // AddViewer records that userID has joined the room as a viewer.
 // Re-adding an existing participant updates the username only.
 func (r *Room) AddViewer(userID, username, invitationID string, now time.Time) error {

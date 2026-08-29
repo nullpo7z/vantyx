@@ -153,6 +153,36 @@ func TestRoom_KickedUserCannotRejoin(t *testing.T) {
 	}
 }
 
+// TestRoom_UnkickAllowsRejoin guards E-16: after a kick the owner can lift
+// the block (a named re-invitation does this) and the user may rejoin.
+func TestRoom_UnkickAllowsRejoin(t *testing.T) {
+	reg := NewRegistry()
+	room := reg.EnsureRoom("s1", "t1", "alice", "Alice")
+	now := time.Now().UTC()
+	_ = room.AddViewer("bob", "Bob", "", now)
+	if err := room.RemoveParticipant("bob"); err != nil {
+		t.Fatalf("RemoveParticipant: %v", err)
+	}
+	if !room.IsKicked("bob") {
+		t.Fatal("expected bob to be marked kicked")
+	}
+	if !room.Unkick("bob") {
+		t.Fatal("expected Unkick to report a lifted block")
+	}
+	if room.Unkick("bob") {
+		t.Fatal("second Unkick must report nothing to lift")
+	}
+	if room.IsKicked("bob") {
+		t.Fatal("expected bob to no longer be kicked")
+	}
+	if err := room.AddViewer("bob", "Bob", "", now); err != nil {
+		t.Fatalf("AddViewer after Unkick: %v", err)
+	}
+	if !room.IsParticipant("bob") {
+		t.Fatal("expected bob to be a participant again")
+	}
+}
+
 func TestRegistry_RoomsForUser(t *testing.T) {
 	reg := NewRegistry()
 	r1 := reg.EnsureRoom("s1", "t1", "alice", "Alice")

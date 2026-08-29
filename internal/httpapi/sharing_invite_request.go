@@ -118,7 +118,17 @@ func (a *App) handleSharingCreateInvitation(w http.ResponseWriter, r *http.Reque
 		writeInternalError(w, err)
 		return
 	}
-	a.ensureRoomForMeta(meta)
+	room := a.ensureRoomForMeta(meta)
+	// A named re-invitation from the owner lifts a previous kick (E-16);
+	// links/tags/groups leave the block in place.
+	if invitee != "" && room != nil && room.Unkick(invitee) {
+		audit("session_participant_unkicked", auditFields{
+			"user_id":    meta.OwnerID,
+			"session_id": meta.SessionID,
+			"target_id":  invitee,
+			"inv_id":     inv.ID,
+		})
+	}
 	// Mirror the terminal path (sharing.go handleCreateInvitation) so
 	// VNC/RDP invitations are auditable too: who invited whom, to which
 	// session/target, and whether it was a shareable link.

@@ -121,6 +121,45 @@ func TestService_JoinRoom_AllowsWhenBothHaveAccess(t *testing.T) {
 	}
 }
 
+// TestService_JoinRoom_KickedUserDoesNotConsumeInvitation guards E-16: a
+// kicked user must be refused BEFORE RecordUse so a fresh single-use
+// invitation isn't burned by the failed attempt, and a named re-invite
+// (Unkick) lets them in.
+func TestService_JoinRoom_KickedUserDoesNotConsumeInvitation(t *testing.T) {
+	store := &recordUseStore{}
+	reg := NewRegistry()
+	svc := &Service{Store: store, Registry: reg}
+	inv := linkInvitationFixture()
+	now := time.Now().UTC()
+
+	room := reg.EnsureRoom(inv.SessionID, inv.TargetID, inv.OwnerUserID, inv.OwnerUserID)
+	if err := room.AddViewer("bob", "bob", inv.ID, now); err != nil {
+		t.Fatalf("AddViewer: %v", err)
+	}
+	if err := room.RemoveParticipant("bob"); err != nil {
+		t.Fatalf("RemoveParticipant: %v", err)
+	}
+
+	_, err := svc.JoinRoom(context.Background(), inv, "bob", "bob", now)
+	if !errors.Is(err, ErrUserKicked) {
+		t.Fatalf("expected ErrUserKicked, got %v", err)
+	}
+	if store.recordUseCalls != 0 {
+		t.Fatalf("a kicked user's attempt must not consume the invitation; RecordUse called %d times", store.recordUseCalls)
+	}
+
+	room.Unkick("bob")
+	if _, err := svc.JoinRoom(context.Background(), inv, "bob", "bob", now); err != nil {
+		t.Fatalf("JoinRoom after Unkick: %v", err)
+	}
+	if store.recordUseCalls != 1 {
+		t.Fatalf("expected RecordUse once after the permitted rejoin, got %d", store.recordUseCalls)
+	}
+	if !room.IsParticipant("bob") {
+		t.Fatal("bob should be a participant after the permitted rejoin")
+	}
+}
+
 // TestService_JoinRoom_NilAccessSkipsCheck documents that a nil Access is
 // treated as "no check" (used only by tests that don't exercise ACL).
 func TestService_JoinRoom_NilAccessSkipsCheck(t *testing.T) {

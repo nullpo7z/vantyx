@@ -68,6 +68,10 @@ type TargetStore interface {
 	Update(ctx context.Context, id TargetID, name, host string, port uint16, protocol Protocol, path, sshUsername, sshPassword, sshPrivateKey, sshPrivateKeyPassphrase string, sftpEnabled, ftpEnabled, tftpEnabled bool) (*Target, error)
 	Delete(ctx context.Context, id TargetID) error
 	ListByIDs(ctx context.Context, ids []TargetID, opts *ListOpts) ([]*Target, error)
+	// AllIDs returns every target ID (sorted, paginated via opts)
+	// regardless of who can access it. Only for admin management views
+	// that bypass membership/tag visibility.
+	AllIDs(ctx context.Context, opts *ListOpts) ([]TargetID, error)
 	// ListByProtocol returns targets for the given protocol (e.g. TFTP). Credentials are not populated.
 	ListByProtocol(ctx context.Context, protocol Protocol) ([]*Target, error)
 	// Tags applied to the target. Users that share any of these tags gain access.

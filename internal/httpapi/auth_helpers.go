@@ -121,6 +121,27 @@ func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// currentUserIsAdmin reports whether the authenticated user has the admin
+// role. Unlike requireAdmin it writes nothing to w: it is for handlers
+// that serve every authenticated user but widen what admins can see
+// (management views bypass membership/tag visibility). An unauthenticated
+// or unknown user is reported as not-admin with a nil error so callers
+// fall through to their normal, more restrictive path.
+func (a *App) currentUserIsAdmin(r *http.Request) (bool, error) {
+	userID, err := a.currentUserIDWithError(r)
+	if err != nil {
+		return false, err
+	}
+	if userID == "" || a.UserStore == nil {
+		return false, nil
+	}
+	u, err := a.UserStore.GetByID(userID)
+	if err != nil || u == nil {
+		return false, nil
+	}
+	return u.Role == auth.RoleAdmin, nil
+}
+
 // requireGroupMemberOrAdmin enforces that the current user is either an
 // admin or a member of the given group. The first return value carries
 // the resolved user ID for callers that need it (the user-management

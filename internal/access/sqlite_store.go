@@ -714,6 +714,49 @@ func (s *SQLiteAccessGroupStore) GroupIDsForUser(ctx context.Context, userID Use
 	return all, nil
 }
 
+// AllGroupIDs returns every group ID sorted by ID, honouring opts for
+// pagination. It ignores membership and tags entirely: callers are
+// expected to have already established that the acting user is an admin.
+func (s *SQLiteAccessGroupStore) AllGroupIDs(ctx context.Context, opts *ListOpts) ([]GroupID, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	limit, offset := listLimit(opts, s.defaultListLimit)
+	var rows *sql.Rows
+	var err error
+	if opts != nil && opts.AfterID != "" {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id FROM access_groups
+			WHERE id > ?
+			ORDER BY id
+			LIMIT ?
+		`, opts.AfterID, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id FROM access_groups
+			ORDER BY id
+			LIMIT ? OFFSET ?
+		`, limit, offset)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []GroupID
+	for rows.Next() {
+		var gid string
+		if err := rows.Scan(&gid); err != nil {
+			return nil, err
+		}
+		out = append(out, GroupID(gid))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TargetIDsForGroup returns target IDs assigned to the group.
 func (s *SQLiteAccessGroupStore) TargetIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]TargetID, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
@@ -1342,6 +1385,49 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 }
 
 // ListByProtocol returns targets for the given protocol. Credentials are not populated.
+// AllIDs returns every target ID sorted by ID, honouring opts for
+// pagination. It ignores access control entirely: callers are expected
+// to have already established that the acting user is an admin.
+func (s *SQLiteTargetStore) AllIDs(ctx context.Context, opts *ListOpts) ([]TargetID, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	limit, offset := listLimit(opts, s.defaultListLimit)
+	var rows *sql.Rows
+	var err error
+	if opts != nil && opts.AfterID != "" {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id FROM targets
+			WHERE id > ?
+			ORDER BY id
+			LIMIT ?
+		`, opts.AfterID, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id FROM targets
+			ORDER BY id
+			LIMIT ? OFFSET ?
+		`, limit, offset)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []TargetID
+	for rows.Next() {
+		var tid string
+		if err := rows.Scan(&tid); err != nil {
+			return nil, err
+		}
+		out = append(out, TargetID(tid))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (s *SQLiteTargetStore) ListByProtocol(ctx context.Context, protocol Protocol) ([]*Target, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()

@@ -61,6 +61,11 @@ type AccessGroupStore interface {
 	// current groups, then add to the new one).
 	GroupIDsForTarget(ctx context.Context, targetID TargetID) ([]GroupID, error)
 	GroupIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]GroupID, error)
+	// AllGroupIDs returns every group ID (sorted, paginated via opts)
+	// regardless of membership. Only for admin management views, which
+	// bypass the membership/tag visibility rules that GroupIDsForUser
+	// enforces for ordinary users.
+	AllGroupIDs(ctx context.Context, opts *ListOpts) ([]GroupID, error)
 	TargetIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]TargetID, error)
 	TargetIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]TargetID, error)
 	// UserIDsForTarget returns user IDs that can access the target (group

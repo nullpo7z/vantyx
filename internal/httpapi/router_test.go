@@ -2766,7 +2766,10 @@ func TestApp_CreateTarget_GroupNotFound(t *testing.T) {
 	}
 }
 
-func TestApp_CreateTarget_Forbidden(t *testing.T) {
+// TestApp_CreateTarget_AdminNotMemberOfGroup_Allowed pins the E-10 policy:
+// admins manage every group, so an admin who is not a member of the
+// destination group can still create a target in it. (Previously 403.)
+func TestApp_CreateTarget_AdminNotMemberOfGroup_Allowed(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
@@ -2783,8 +2786,8 @@ func TestApp_CreateTarget_Forbidden(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Result().StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", w.Result().StatusCode)
+	if w.Result().StatusCode/100 != 2 {
+		t.Fatalf("expected 2xx for admin creating a target in a group they are not a member of, got %d body=%s", w.Result().StatusCode, w.Body.String())
 	}
 }
 
@@ -3292,7 +3295,10 @@ func TestApp_UpdateTarget_ChangeGroup_NotFound(t *testing.T) {
 	}
 }
 
-func TestApp_UpdateTarget_ChangeGroup_ForbiddenWhenAdminLacksDestGroup(t *testing.T) {
+// TestApp_UpdateTarget_ChangeGroup_AllowedWhenAdminLacksDestGroup pins the
+// E-10 policy: an admin may move a target into a group they are not a
+// member of. (Previously 403 and the move was rejected.)
+func TestApp_UpdateTarget_ChangeGroup_AllowedWhenAdminLacksDestGroup(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
@@ -3312,22 +3318,27 @@ func TestApp_UpdateTarget_ChangeGroup_ForbiddenWhenAdminLacksDestGroup(t *testin
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Result().StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for admin moving a target into a group they are not a member of, got %d body=%s", w.Result().StatusCode, w.Body.String())
 	}
 
-	g1Targets, err := app.AccessGroupStore.TargetIDsForGroup(ctx, access.GroupID("g1"), nil)
-	if err != nil {
-		t.Fatalf("TargetIDsForGroup g1: %v", err)
-	}
-	found := false
-	for _, id := range g1Targets {
-		if id == access.TargetID("t1") {
-			found = true
+	inGroup := func(gid access.GroupID) bool {
+		ids, err := app.AccessGroupStore.TargetIDsForGroup(ctx, gid, nil)
+		if err != nil {
+			t.Fatalf("TargetIDsForGroup %s: %v", gid, err)
 		}
+		for _, id := range ids {
+			if id == access.TargetID("t1") {
+				return true
+			}
+		}
+		return false
 	}
-	if !found {
-		t.Fatal("expected t1 to remain in g1 after a rejected group change")
+	if inGroup("g1") {
+		t.Fatal("expected t1 to have left g1 after the group change")
+	}
+	if !inGroup("g2") {
+		t.Fatal("expected t1 to be in g2 after the group change")
 	}
 }
 
@@ -3559,7 +3570,10 @@ func TestApp_DeleteTarget_Success(t *testing.T) {
 	}
 }
 
-func TestApp_DeleteTarget_Forbidden(t *testing.T) {
+// TestApp_DeleteTarget_AdminNotMember_Allowed pins the E-10 policy: an
+// admin can delete a target in a group they are not a member of.
+// (Previously 403.)
+func TestApp_DeleteTarget_AdminNotMember_Allowed(t *testing.T) {
 	app := newTestApp(t)
 	router := app.NewRouter()
 
@@ -3576,8 +3590,11 @@ func TestApp_DeleteTarget_Forbidden(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Result().StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", w.Result().StatusCode)
+	if w.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 for admin deleting a target in a group they are not a member of, got %d body=%s", w.Result().StatusCode, w.Body.String())
+	}
+	if _, err := app.TargetStore.Get(ctx, access.TargetID("t2")); err == nil {
+		t.Fatal("expected t2 to be deleted")
 	}
 }
 

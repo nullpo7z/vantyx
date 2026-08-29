@@ -239,7 +239,19 @@ func (a *App) handleTargets(w http.ResponseWriter, r *http.Request) {
 		pageLimit = opts.Limit
 		opts = &access.ListOpts{Limit: pageLimit + 1, AfterID: opts.AfterID}
 	}
-	ids, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), opts)
+	// Admins see every target (management view); ordinary users only
+	// what their group membership / tags grant.
+	isAdmin, err := a.currentUserIsAdmin(r)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	var ids []access.TargetID
+	if isAdmin {
+		ids, err = a.TargetStore.AllIDs(ctx, opts)
+	} else {
+		ids, err = a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), opts)
+	}
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -318,22 +330,9 @@ func (a *App) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		writeJSONErrorKey(w, r, "targets.groupNotFound", http.StatusNotFound)
 		return
 	}
-	allowedGroups, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(sess.UserID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	allowed := false
-	for _, gid := range allowedGroups {
-		if gid == access.GroupID(req.GroupID) {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
-		return
-	}
+	// No membership check on the destination group: this handler is
+	// admin-only (requireAdmin above) and admins manage every group,
+	// not just the ones they happen to be members of.
 	if err := a.applyStoredCredentials(ctx, req.CredentialIdentityID, req.SSHKeyID,
 		&req.SSHUsername, &req.SSHPassword, &req.SSHPrivateKey, &req.SSHPrivateKeyPassphrase, true); err != nil {
 		if errors.Is(err, access.ErrCredentialIdentityNotFound) {
@@ -477,9 +476,8 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A non-nil GroupID means the caller wants to move the target to a
-	// different access group. Validated up front (same rule as create:
-	// the acting admin must themselves have access to the destination
-	// group) so a failure here doesn't leave the rest of the update
+	// different access group. Validated up front (the destination group
+	// must exist) so a failure here doesn't leave the rest of the update
 	// half-applied; the actual group_targets move happens after
 	// TargetStore.Update succeeds, below.
 	var newGroupID access.GroupID
@@ -494,22 +492,8 @@ func (a *App) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 			writeJSONErrorKey(w, r, "targets.groupNotFound", http.StatusNotFound)
 			return
 		}
-		allowedGroups, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(userID), nil)
-		if err != nil {
-			writeInternalError(w, err)
-			return
-		}
-		allowed := false
-		for _, g := range allowedGroups {
-			if g == access.GroupID(gid) {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
-			return
-		}
+		// No membership check on the destination group: admin-only
+		// handler, and admins manage every group (see handleCreateTarget).
 		newGroupID = access.GroupID(gid)
 		changingGroup = true
 	}
@@ -667,22 +651,9 @@ func (a *App) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	allowedIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(sess.UserID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	allowed := false
-	for _, id := range allowedIDs {
-		if id == access.TargetID(targetID) {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
-		return
-	}
+	// No per-target ACL check: admin-only handler, and admins manage
+	// every target regardless of their own group membership.
+	_ = sess
 	cur, _ := a.TargetStore.Get(ctx, access.TargetID(targetID))
 	if err := a.TargetStore.Delete(ctx, access.TargetID(targetID)); err != nil {
 		if errors.Is(err, access.ErrTargetNotFound) {

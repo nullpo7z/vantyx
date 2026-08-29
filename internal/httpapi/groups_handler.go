@@ -107,7 +107,21 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 		pageLimit = opts.Limit
 		opts = &access.ListOpts{Limit: pageLimit + 1, AfterID: opts.AfterID}
 	}
-	groupIDs, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(userID), opts)
+	// Admins see every group and every target in it: the management UI
+	// (Server management) is driven by this endpoint, and a second admin
+	// who isn't a member of a group could otherwise neither see nor edit
+	// it. Ordinary users stay on the membership/tag-based path.
+	isAdmin, err := a.currentUserIsAdmin(r)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	var groupIDs []access.GroupID
+	if isAdmin {
+		groupIDs, err = a.AccessGroupStore.AllGroupIDs(ctx, opts)
+	} else {
+		groupIDs, err = a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(userID), opts)
+	}
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -117,15 +131,18 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 		groupIDs = groupIDs[:pageLimit]
 		nextCursor = string(groupIDs[pageLimit-1])
 	}
-	// Targets this user is allowed to see (membership or tag based).
-	allowedTargetIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
+	// Targets this user is allowed to see (membership or tag based);
+	// admins are allowed to see all of them.
 	allowedSet := make(map[access.TargetID]bool)
-	for _, id := range allowedTargetIDs {
-		allowedSet[id] = true
+	if !isAdmin {
+		allowedTargetIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		for _, id := range allowedTargetIDs {
+			allowedSet[id] = true
+		}
 	}
 
 	out := make([]groupResponse, 0, len(groupIDs))
@@ -139,10 +156,10 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// Only include targets the user is allowed to see; avoids
-		// leaking targets when access is tag based.
+		// leaking targets when access is tag based. Admins see all.
 		var filtered []access.TargetID
 		for _, tid := range tids {
-			if allowedSet[tid] {
+			if isAdmin || allowedSet[tid] {
 				filtered = append(filtered, tid)
 			}
 		}

@@ -1051,6 +1051,63 @@ const API = {
     return res.json()
   },
 
+  /** Admin: backup policy + stored backups. */
+  async backupsGet() {
+    const res = await fetch('/api/settings/backups', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load backups')
+    }
+    return res.json()
+  },
+
+  async backupCreate() {
+    const res = await fetch('/api/settings/backups', { method: 'POST', credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Backup failed')
+    }
+    return res.json()
+  },
+
+  async backupDelete(name) {
+    const res = await fetch(`/api/settings/backups/${encodeURIComponent(name)}`, { method: 'DELETE', credentials: 'include' })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete the backup')
+    }
+  },
+
+  /** Admin: stage a restore from a stored backup (name) or an uploaded File. */
+  async backupRestore({ name, file }) {
+    let res
+    if (file) {
+      const fd = new FormData()
+      fd.append('file', file)
+      res = await fetch('/api/settings/backups/restore', { method: 'POST', credentials: 'include', body: fd })
+    } else {
+      res = await fetch('/api/settings/backups/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name }),
+      })
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to stage the restore')
+    }
+    return res.json()
+  },
+
+  async backupRestoreCancel() {
+    const res = await fetch('/api/settings/backups/restore', { method: 'DELETE', credentials: 'include' })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to cancel the restore')
+    }
+  },
+
   /** Admin: webhook endpoints with delivery stats. */
   async webhooksGet() {
     const res = await fetch('/api/settings/webhooks', { credentials: 'include' })

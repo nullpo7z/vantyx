@@ -37,6 +37,14 @@ export async function renderSystemSettingsPage(container) {
 
       <section class="mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="px-5 pt-4 pb-3 border-b border-slate-100">
+          <h3 class="text-sm font-semibold text-slate-800">${t('settings.sectionBackups')}</h3>
+          <p class="mt-0.5 text-xs text-slate-500">${t('settings.backupsHint')}</p>
+        </div>
+        <div id="backups-body" class="px-5 py-4 text-sm text-slate-500">${t('common.loading')}</div>
+      </section>
+
+      <section class="mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div class="px-5 pt-4 pb-3 border-b border-slate-100">
           <h3 class="text-sm font-semibold text-slate-800">${t('settings.sectionWebhooks')}</h3>
           <p class="mt-0.5 text-xs text-slate-500">${t('settings.webhooksHint')}</p>
         </div>
@@ -88,6 +96,7 @@ export async function renderSystemSettingsPage(container) {
 
   renderRetention(container.querySelector('#retention-body'))
   renderWebhooks(container.querySelector('#webhooks-body'))
+  renderBackups(container.querySelector('#backups-body'))
 
   const enabledEl = container.querySelector('#audit-fwd-enabled')
   const protoEl = container.querySelector('#audit-fwd-proto')
@@ -329,6 +338,127 @@ async function renderWebhooks(body) {
         statusEl.textContent = err?.message || String(err)
       }
       await renderWebhooks(body)
+    })
+  })
+}
+
+function humanBytes(n) {
+  const v = Number(n) || 0
+  if (v < 1024) return `${v} B`
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`
+  if (v < 1024 * 1024 * 1024) return `${(v / 1024 / 1024).toFixed(1)} MB`
+  return `${(v / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+async function renderBackups(body) {
+  if (!body) return
+  let data
+  try {
+    data = await API.backupsGet()
+  } catch (e) {
+    body.innerHTML = `<p class="text-sm text-red-600">${esc(e?.message || e)}</p>`
+    return
+  }
+  const p = data.policy || {}
+  const list = data.backups || []
+  body.innerHTML = `
+    ${
+      p.restore_pending
+        ? `<div class="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 flex flex-wrap items-center justify-between gap-2"><span>${t('settings.backupRestorePending')}</span><button type="button" id="bk-cancel-restore" class="rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100">${t('common.cancel')}</button></div>`
+        : ''
+    }
+    <dl class="grid grid-cols-1 sm:grid-cols-[14rem_1fr] gap-x-4 gap-y-1 text-sm">
+      <dt class="text-slate-500">${t('settings.backupDir')}</dt><dd class="font-mono text-xs text-slate-800">${esc(p.dir || '')}</dd>
+      <dt class="text-slate-500">${t('settings.backupSchedule')}</dt><dd class="text-slate-800">${p.interval ? esc(humanDuration(p.interval)) : t('settings.backupManualOnly')} · ${t('settings.backupKeep', { n: p.keep })}</dd>
+    </dl>
+    ${p.last_error ? `<p class="mt-2 text-sm text-red-600">${esc(p.last_error)}</p>` : ''}
+    <div class="mt-3 flex flex-wrap items-center gap-3">
+      <button type="button" id="bk-create" class="rounded bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-700 shadow-sm disabled:opacity-50">${t('settings.backupNow')}</button>
+      <label class="text-sm text-slate-700 flex items-center gap-2">${t('settings.backupRestoreUpload')}
+        <input type="file" id="bk-upload" accept=".db,application/vnd.sqlite3,application/octet-stream" class="text-xs" />
+      </label>
+      <span id="bk-status" class="text-xs text-slate-600"></span>
+    </div>
+    ${
+      list.length
+        ? `<div class="mt-4 overflow-x-auto"><table class="min-w-full text-left text-sm"><thead class="bg-slate-50 border-b border-slate-200"><tr>
+            <th class="px-3 py-2 text-xs font-semibold text-slate-700">${t('common.name')}</th>
+            <th class="px-3 py-2 text-xs font-semibold text-slate-700">${t('common.size')}</th>
+            <th class="px-3 py-2 text-xs font-semibold text-slate-700">${t('common.createdAt')}</th>
+            <th class="px-3 py-2"></th></tr></thead><tbody>
+            ${list
+              .map(
+                (b) => `<tr class="border-b border-slate-100" data-name="${esc(b.name)}">
+                  <td class="px-3 py-2 font-mono text-xs text-slate-800">${esc(b.name)}</td>
+                  <td class="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">${esc(humanBytes(b.size_bytes))}</td>
+                  <td class="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">${esc(formatDateTime(b.created_at))}</td>
+                  <td class="px-3 py-2 whitespace-nowrap">
+                    <a href="/api/settings/backups/${encodeURIComponent(b.name)}" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">${t('common.download')}</a>
+                    <button type="button" class="bk-restore rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-50">${t('settings.backupRestore')}</button>
+                    <button type="button" class="bk-delete rounded border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50">${t('common.delete')}</button>
+                  </td></tr>`,
+              )
+              .join('')}
+          </tbody></table></div>`
+        : `<p class="mt-3 text-sm text-slate-500">${t('settings.backupNone')}</p>`
+    }
+    <p class="mt-3 text-xs text-slate-500">${t('settings.backupScopeHint')}</p>`
+  const statusEl = body.querySelector('#bk-status')
+  body.querySelector('#bk-create').addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true
+    statusEl.textContent = t('settings.backupRunning')
+    try {
+      const info = await API.backupCreate()
+      statusEl.textContent = t('settings.backupDone', { name: info.name })
+      await renderBackups(body)
+    } catch (err) {
+      statusEl.textContent = err?.message || String(err)
+      e.currentTarget.disabled = false
+    }
+  })
+  body.querySelector('#bk-cancel-restore')?.addEventListener('click', async () => {
+    try {
+      await API.backupRestoreCancel()
+      await renderBackups(body)
+    } catch (err) {
+      await uiAlert(err?.message || String(err))
+    }
+  })
+  body.querySelector('#bk-upload').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0]
+    if (!file) return
+    if (!(await uiConfirm(t('settings.backupConfirmRestore', { name: file.name }), { danger: true }))) {
+      e.target.value = ''
+      return
+    }
+    statusEl.textContent = t('settings.backupUploading')
+    try {
+      await API.backupRestore({ file })
+      await renderBackups(body)
+    } catch (err) {
+      statusEl.textContent = err?.message || String(err)
+    }
+    e.target.value = ''
+  })
+  body.querySelectorAll('tr[data-name]').forEach((tr) => {
+    const name = tr.dataset.name
+    tr.querySelector('.bk-delete').addEventListener('click', async () => {
+      if (!(await uiConfirm(t('settings.backupConfirmDelete', { name }), { danger: true }))) return
+      try {
+        await API.backupDelete(name)
+        await renderBackups(body)
+      } catch (err) {
+        await uiAlert(err?.message || String(err))
+      }
+    })
+    tr.querySelector('.bk-restore').addEventListener('click', async () => {
+      if (!(await uiConfirm(t('settings.backupConfirmRestore', { name }), { danger: true }))) return
+      try {
+        await API.backupRestore({ name })
+        await renderBackups(body)
+      } catch (err) {
+        await uiAlert(err?.message || String(err))
+      }
     })
   })
 }

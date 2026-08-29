@@ -66,6 +66,7 @@ var Messages = map[string]string{
 	"auth.passwordChangeRequired": "password change required before using this feature",
 
 	// Users (admin management).
+	"settings.backupNotFound":         "backup not found",
 	"settings.webhookTooMany":         "too many webhook endpoints (max 20)",
 	"settings.webhookDuplicateID":     "duplicate webhook endpoint id",
 	"settings.webhookNotFound":        "webhook endpoint not found",

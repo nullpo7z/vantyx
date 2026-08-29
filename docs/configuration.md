@@ -153,6 +153,39 @@ Audit events: `oidc_login_started`, `oidc_login_ok`, `oidc_login_failed`
 | `VANTYX_RECORDING_EXPORT_CONVERT_TIMEOUT` | `45m` | Maximum wall time for a single GIF/MP4 export conversion job. |
 | `VANTYX_RECORDING_EXPORT_COMPLETED_TTL` | `168h` | How long completed, failed, or cancelled export jobs (and their output files) are retained in memory and on disk before automatic cleanup. |
 
+## Backup and restore
+
+**System settings → Database backup** creates consistent online snapshots
+of the SQLite database (`VACUUM INTO`, verified with
+`PRAGMA integrity_check`, SHA-256 recorded in the audit log), lists /
+downloads / deletes them, and stages restores.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_BACKUP_DIR` | `<db dir>/backups` | Where snapshots are written (`vantyx-YYYYMMDD-HHMMSS.db`). Must be on local disk like the database itself. |
+| `VANTYX_BACKUP_KEEP` | `14` | Newest snapshots to keep; older ones are pruned after each backup. |
+| `VANTYX_BACKUP_INTERVAL` | — | Go duration (≥ `1h`, e.g. `24h`) for scheduled backups; empty = manual only. |
+
+**Restore** (from a stored snapshot or an uploaded `.db` file) is validated
+(SQLite header, `integrity_check`, `users` table present) and then
+*staged* as `<db>.restore-pending`. It is applied on the next start-up,
+before any connection opens: the current database is moved to
+`<db>.pre-restore-<timestamp>` (never deleted), WAL/SHM files are dropped
+and the snapshot takes its place (`restore_applied` audit event). Restart
+with `docker compose -f docker-compose.dev.yml restart` (or `up -d`). A
+staged restore can be cancelled until then.
+
+API: `GET/POST /api/settings/backups`, `GET/DELETE
+/api/settings/backups/{name}`, `POST/DELETE /api/settings/backups/restore`.
+Audit events: `backup_created`, `backup_failed`, `backup_downloaded`,
+`backup_deleted`, `restore_staged`, `restore_cancelled`, `restore_applied`.
+
+Backups cover the database only. Recording files
+(`VANTYX_RECORDINGS_DIR`), TLS certificates and `.env` (including
+`VANTYX_SSH_PASSWORD_ENCRYPTION_KEY`, without which stored credentials and
+TOTP secrets in a restored database cannot be decrypted) must be backed up
+separately.
+
 ## Webhook notifications
 
 Admins register HTTP endpoints under **System settings → Webhook

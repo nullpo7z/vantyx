@@ -55,6 +55,8 @@ type App struct {
 	AccessRequests   access.AccessRequestStore
 	// retention holds the age-based purge policy and its last report.
 	retention *retentionState
+	// backups holds the backup policy, last snapshot and staged restore.
+	backups *backupState
 	// metricsReg holds this App's scrape-time gauges (counters are global).
 	metricsReg              *metrics.Registry
 	SSHKeyStore             access.SSHKeyStore
@@ -213,6 +215,14 @@ func NewApp() *App {
 		slog.Warn("invalid "+TimezoneEnv+", using UTC", "error", tzErr)
 		loc = time.UTC
 	}
+	// A restore staged from the admin UI is applied here, before any
+	// connection is open; the previous database is kept alongside.
+	if movedTo, applied, rerr := ApplyPendingRestore(path); rerr != nil {
+		slog.Error("staged database restore was not applied", "error", rerr)
+	} else if applied {
+		slog.Warn("database restored from staged backup", "previous", movedTo)
+		defer audit("restore_applied", auditFields{"previous_db": movedTo})
+	}
 	cfg := dbsqlite.Config{Path: path}
 	open := dbsqlite.Open
 	if newAppDBOpen != nil {
@@ -319,6 +329,7 @@ func NewApp() *App {
 	app.startRetentionLoop()
 	app.registerMetricsGauges()
 	app.initWebhooks()
+	app.initBackups(path)
 	return app
 }
 
@@ -404,6 +415,13 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/api/groups/{group_id}/members", a.handleGroupMembers)
 	r.Post("/api/groups/{group_id}/members", a.handleAddGroupMember)
 	r.Delete("/api/groups/{group_id}/members/{user_id}", a.handleRemoveGroupMember)
+	// Database backup / restore (admin).
+	r.Get("/api/settings/backups", a.handleListBackups)
+	r.Post("/api/settings/backups", a.handleCreateBackup)
+	r.Post("/api/settings/backups/restore", a.handleStageRestore)
+	r.Delete("/api/settings/backups/restore", a.handleCancelRestore)
+	r.Get("/api/settings/backups/{name}", a.handleDownloadBackup)
+	r.Delete("/api/settings/backups/{name}", a.handleDeleteBackup)
 	// Webhook notifications (admin).
 	r.Get("/api/settings/webhooks", a.handleGetWebhooks)
 	r.Put("/api/settings/webhooks", a.handlePutWebhooks)

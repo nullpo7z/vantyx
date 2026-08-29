@@ -1,8 +1,12 @@
 import API from './api.js'
 import { t } from './i18n.js'
+import { setActiveNav } from './nav.js'
 import { uiAlert } from './ui_dialog.js'
 
 export function renderUserInfo({ mainContent, meData, escapeHtml, onChangePassword }) {
+  // The account page has no nav entry of its own; clear the previous
+  // page's active state so e.g. "Recordings" doesn't stay underlined (E-1).
+  if (typeof setActiveNav === 'function') setActiveNav('account')
   if (!meData) return
   mainContent.innerHTML = `
       <h2 class="text-lg font-medium text-slate-800 mb-4">${t('account.title')}</h2>

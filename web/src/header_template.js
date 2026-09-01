@@ -28,7 +28,7 @@ export function buildAppShellHTML() {
       <header class="text-white shadow z-10 shrink-0">
         <div class="vantyx-header-inner">
           <div class="vantyx-header-start">
-            <h1 class="vantyx-brand">${t('app.appName')}</h1>
+            <h1 class="vantyx-brand"><a href="#" id="nav-brand" class="vantyx-brand-link" aria-label="${t('app.appName')}"><img src="/icon.svg" alt="" width="26" height="26" class="vantyx-brand-icon" decoding="async" /><span>${t('app.appName')}</span></a></h1>
             <nav class="vantyx-nav" aria-label="${t('common.mainMenuLabel')}">
               <a href="#" id="nav-targets" class="vantyx-nav-link">${t('nav.home')}</a>
               <a href="#" id="nav-sessions" class="vantyx-nav-link hidden">${t('nav.sessions')}</a>

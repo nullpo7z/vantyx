@@ -19,6 +19,7 @@ export function renderChangePassword(container) {
     <div class="flex-1 flex items-center justify-center p-4">
       <div class="w-full max-w-sm bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
         <div class="px-5 py-6">
+          <picture><img src="/logo.svg" alt="Vantyx" class="vantyx-logo vantyx-logo-light" decoding="async" /></picture><img src="/logo-dark.svg" alt="" aria-hidden="true" class="vantyx-logo vantyx-logo-dark" decoding="async" />
           <h1 class="text-xl font-semibold text-slate-800 text-center mb-2">${t('login.changeTitle')}</h1>
           <p class="text-sm text-slate-600 text-center mb-5">${t('login.changeIntro')}</p>
           <form id="change-password-form" class="space-y-5">
@@ -94,6 +95,7 @@ export function renderLogin(container) {
     <div class="flex-1 flex items-center justify-center p-4">
       <div class="w-full max-w-sm bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
         <div class="px-5 py-6">
+          <picture><img src="/logo.svg" alt="Vantyx" class="vantyx-logo vantyx-logo-light" decoding="async" /></picture><img src="/logo-dark.svg" alt="" aria-hidden="true" class="vantyx-logo vantyx-logo-dark" decoding="async" />
           <h1 class="text-2xl font-semibold text-slate-800 text-center mb-6">${t('login.title')}</h1>
           <form id="login-form" class="space-y-5">
             <div>
@@ -188,6 +190,7 @@ function renderTOTPStep(container, mfaToken, methods = ['totp']) {
     <div class="flex-1 flex items-center justify-center p-4">
       <div class="w-full max-w-sm bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
         <div class="px-5 py-6">
+          <picture><img src="/logo.svg" alt="Vantyx" class="vantyx-logo vantyx-logo-light" decoding="async" /></picture><img src="/logo-dark.svg" alt="" aria-hidden="true" class="vantyx-logo vantyx-logo-dark" decoding="async" />
           <h1 class="text-xl font-semibold text-slate-800 text-center mb-2">${t('login.totpTitle')}</h1>
           <p class="text-sm text-slate-600 text-center mb-5">${hasTotp ? t('login.totpIntro') : t('login.passkeyIntro')}</p>
           ${

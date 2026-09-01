@@ -3123,6 +3123,12 @@ router1,10.0.0.1,22,ssh,net/tokyo,core edge,admin,,true,false,false,,,</pre>
     onSettings: () => showSettings(),
   })
 
+  // The brand mark in the header is a shortcut to the home view.
+  document.getElementById('nav-brand')?.addEventListener('click', (e) => {
+    e.preventDefault()
+    navTargets.click()
+  })
+
   userNameEl.addEventListener('click', (e) => {
     e.preventDefault()
     if (!meData) return

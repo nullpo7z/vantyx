@@ -280,6 +280,32 @@ body.terminal-standalone #app {
   white-space: nowrap;
   flex-shrink: 0;
 }
+#app header .vantyx-brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: inherit;
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+#app header .vantyx-brand-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+/* Brand logo (wordmark + mark) on the login / password screens: the
+   light-surface file carries a navy wordmark, the dark one a light
+   wordmark; the theme class picks the right file. */
+.vantyx-logo {
+  display: block;
+  width: min(100%, 15rem);
+  height: auto;
+  margin: 0 auto 1.25rem;
+}
+.vantyx-logo-dark { display: none; }
+.dark .vantyx-logo-light { display: none; }
+.dark .vantyx-logo-dark { display: block; }
 #app header nav.vantyx-nav {
   display: flex;
   align-items: baseline;

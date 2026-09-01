@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 640" role="img" aria-labelledby="title desc">
+  <title id="title">Vantyx logo</title>
+  <desc id="desc">Vantyx secure remote access gateway logo.</desc>
+  <defs>
+    <linearGradient id="bg" x1="46" y1="42" x2="540" y2="594" gradientUnits="userSpaceOnUse"><stop stop-color="#102A43"/><stop offset="1" stop-color="#071724"/></linearGradient>
+    <linearGradient id="signal" x1="145" y1="135" x2="465" y2="503" gradientUnits="userSpaceOnUse"><stop stop-color="#5EEAD4"/><stop offset="1" stop-color="#38BDF8"/></linearGradient>
+  </defs>
+  <rect x="32" y="32" width="576" height="576" rx="132" fill="url(#bg)"/>
+  <path d="M320 95 501 164v134c0 124-73 226-181 292-108-66-181-168-181-292V164L320 95Z" fill="none" stroke="#264B64" stroke-width="22"/>
+  <g fill="none" stroke="url(#signal)" stroke-linecap="round" stroke-linejoin="round"><path d="M193 237 320 462 447 237" stroke-width="38"/><path d="M320 462v82" stroke-width="25"/></g>
+  <g fill="#5EEAD4"><circle cx="193" cy="237" r="20"/><circle cx="447" cy="237" r="20"/><circle cx="320" cy="462" r="23"/><circle cx="320" cy="544" r="17"/></g>
+  <text x="700" y="386" fill="#102A43" font-family="Inter, Arial, sans-serif" font-size="224" font-weight="750" letter-spacing="-11">Vantyx</text>
+  <text x="712" y="465" fill="#527188" font-family="Inter, Arial, sans-serif" font-size="38" font-weight="600" letter-spacing="8">SECURE ACCESS GATEWAY</text>
+</svg>

@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="web/public/logo-dark.svg">
+    <img src="web/public/logo.svg" alt="Vantyx — secure access gateway" width="480">
+  </picture>
+</p>
+
 # Vantyx
 
 [日本語](README.ja.md)

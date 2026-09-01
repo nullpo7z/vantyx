@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Vantyx application icon</title>
+  <desc id="desc">A secure gateway between distributed remote endpoints.</desc>
+  <defs>
+    <linearGradient id="bg" x1="120" y1="90" x2="904" y2="944" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#102A43"/>
+      <stop offset="1" stop-color="#071724"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="284" y1="260" x2="744" y2="774" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5EEAD4"/>
+      <stop offset="1" stop-color="#38BDF8"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="13" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="216" fill="url(#bg)"/>
+  <path d="M512 126 790 232v206c0 191-112 348-278 449C346 786 234 629 234 438V232l278-106Z" fill="none" stroke="#264B64" stroke-width="30"/>
+  <g fill="none" stroke="url(#signal)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M317 342 512 686 707 342" stroke-width="58"/>
+    <path d="M392 342 512 550 632 342" stroke-width="30" opacity=".9"/>
+    <path d="M512 686V814" stroke-width="38"/>
+  </g>
+  <g fill="#5EEAD4" filter="url(#glow)">
+    <circle cx="317" cy="342" r="30"/><circle cx="707" cy="342" r="30"/>
+    <circle cx="512" cy="686" r="34"/><circle cx="512" cy="814" r="25"/>
+  </g>
+</svg>

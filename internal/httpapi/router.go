@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"mime"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -607,6 +608,7 @@ func (a *App) NewRouter() http.Handler {
 
 	// SPA: serve web/dist when present (after `npm run build`).
 	if dir := staticDir(); dir != "" {
+		_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
 		r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
 			raw := strings.TrimPrefix(r.URL.Path, "/")
 			if raw == "" {

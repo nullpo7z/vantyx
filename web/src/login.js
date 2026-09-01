@@ -96,7 +96,7 @@ export function renderLogin(container) {
       <div class="w-full max-w-sm bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
         <div class="px-5 py-6">
           <picture><img src="/logo.svg" alt="Vantyx" class="vantyx-logo vantyx-logo-light" decoding="async" /></picture><img src="/logo-dark.svg" alt="" aria-hidden="true" class="vantyx-logo vantyx-logo-dark" decoding="async" />
-          <h1 class="text-2xl font-semibold text-slate-800 text-center mb-6">${t('login.title')}</h1>
+          <h1 class="sr-only">${t('login.title')}</h1>
           <form id="login-form" class="space-y-5">
             <div>
               <label for="username" class="block text-xs font-medium text-slate-600 mb-1.5">${t('login.username')}</label>

@@ -299,9 +299,9 @@ body.terminal-standalone #app {
    wordmark; the theme class picks the right file. */
 .vantyx-logo {
   display: block;
-  width: min(100%, 15rem);
+  width: min(100%, 17rem);
   height: auto;
-  margin: 0 auto 1.25rem;
+  margin: 0 auto 1.5rem;
 }
 .vantyx-logo-dark { display: none; }
 .dark .vantyx-logo-light { display: none; }

@@ -1117,8 +1117,8 @@ router1,10.0.0.1,22,ssh,net/tokyo,core edge,admin,,true,false,false,,,</pre>
         <div class="w-full h-full flex flex-col gap-4">
           ${!isManageMode ? '<section id="incoming-invitations-banner" class="hidden w-full bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-4 space-y-3"></section>' : ''}
           ${!isManageMode ? '<section id="my-access-requests" class="hidden w-full bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-3 space-y-2"></section>' : ''}
-          <div class="flex gap-6 w-full flex-1 min-h-0">
-            <aside class="w-80 flex-col border-r border-slate-200 bg-white shadow-sm shrink-0 rounded-lg overflow-hidden flex">
+          <div class="flex flex-col md:flex-row gap-4 md:gap-6 w-full flex-1 min-h-0">
+            <aside class="w-full md:w-80 flex-col border-b md:border-b-0 md:border-r border-slate-200 bg-white shadow-sm md:shrink-0 rounded-lg overflow-hidden flex max-h-[45vh] md:max-h-none">
               <div class="px-4 py-3 border-b border-slate-200 text-sm font-semibold text-slate-700 flex items-center justify-between">
                 <span>${t('app.accessGroupsTitle')}</span>
                 ${addGroupBtnHtml}

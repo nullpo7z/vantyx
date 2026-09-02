@@ -61,7 +61,7 @@ export function buildAppShellHTML() {
           </div>
         </div>
       </header>
-      <main class="flex-1 overflow-auto p-6 flex flex-col items-center" id="main-content">
+      <main class="flex-1 overflow-auto p-3 sm:p-6 flex flex-col items-center" id="main-content">
         <div class="w-full max-w-5xl flex-1 flex flex-col">
           <p class="text-slate-500">${t('common.loading')}</p>
         </div>

@@ -245,17 +245,29 @@ export function setupMobileConsole({ shellEl, xtermEl, term, sendData, refit }) 
   renderModStates()
 
   // ---- keep the console visible above the keyboard -----------------
+  // The page root is normally a flex child sized by 100% of the layout
+  // viewport, which on mobile is TALLER than the visible area (the
+  // browser URL bar) and does not shrink when the keyboard opens -- so
+  // the toolbar at its bottom ends up off-screen or behind the keyboard.
+  // We instead pin the root as a fixed box exactly over the visual
+  // viewport (window.visualViewport), which excludes both the browser
+  // chrome and the on-screen keyboard. xterm (flex-1) fills the middle
+  // and the toolbar (shrink-0) rides just above the keyboard.
   const root = shellEl.closest('.terminal-page-root') || shellEl.parentElement
   const vv = window.visualViewport
 
   function applyViewport() {
-    if (!vv || !root) return
-    // Pin the whole page to the visible band: height = visible height,
-    // shifted down by however far the layout viewport scrolled under the
-    // keyboard. The toolbar (shrink-0) then rides just above the
-    // keyboard and xterm (flex-1) fills the rest.
-    root.style.height = Math.round(vv.height) + 'px'
-    root.style.transform = `translateY(${Math.round(vv.offsetTop)}px)`
+    if (!root) return
+    const h = vv ? vv.height : window.innerHeight
+    const top = vv ? vv.offsetTop : 0
+    const left = vv ? vv.offsetLeft : 0
+    root.style.position = 'fixed'
+    root.style.top = Math.round(top) + 'px'
+    root.style.left = Math.round(left) + 'px'
+    root.style.right = 'auto'
+    root.style.width = '100%'
+    root.style.height = Math.round(h) + 'px'
+    root.style.zIndex = '40'
     try {
       refit?.()
     } catch {
@@ -286,8 +298,21 @@ export function setupMobileConsole({ shellEl, xtermEl, term, sendData, refit }) 
   if (vv) {
     vv.addEventListener('resize', onViewportChange)
     vv.addEventListener('scroll', onViewportChange)
-    applyViewport()
   }
+  window.addEventListener('resize', onViewportChange)
+  window.addEventListener('orientationchange', onViewportChange)
+  // The keyboard often only moves the visual viewport a beat after the
+  // textarea gains/loses focus; re-apply a few times to catch the
+  // settled geometry.
+  function nudge() {
+    applyViewport()
+    setTimeout(applyViewport, 150)
+    setTimeout(applyViewport, 400)
+  }
+  xtermEl?.addEventListener('focusin', nudge)
+  xtermEl?.addEventListener('focusout', nudge)
+  applyViewport()
+  setTimeout(applyViewport, 200)
 
   document.documentElement.classList.add('term-mobile-active')
 
@@ -296,9 +321,18 @@ export function setupMobileConsole({ shellEl, xtermEl, term, sendData, refit }) 
       vv.removeEventListener('resize', onViewportChange)
       vv.removeEventListener('scroll', onViewportChange)
     }
+    window.removeEventListener('resize', onViewportChange)
+    window.removeEventListener('orientationchange', onViewportChange)
+    xtermEl?.removeEventListener('focusin', nudge)
+    xtermEl?.removeEventListener('focusout', nudge)
     if (root) {
+      root.style.position = ''
+      root.style.top = ''
+      root.style.left = ''
+      root.style.right = ''
+      root.style.width = ''
       root.style.height = ''
-      root.style.transform = ''
+      root.style.zIndex = ''
     }
     document.documentElement.classList.remove('term-mobile-active')
     try {

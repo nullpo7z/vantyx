@@ -372,6 +372,9 @@ type TerminalSessionItem struct {
 	LastSeen    time.Time `json:"last_seen"`
 	Idle        bool      `json:"idle"`
 	IdleSeconds int       `json:"idle_seconds,omitempty"`
+	// Keep is true when the owner (or an admin) pinned the session as
+	// intentionally left running, so it is not flagged idle.
+	Keep bool `json:"keep"`
 	// Role indicates how the current user is attached to this session:
 	// "owner" if they own the underlying terminal (and therefore are
 	// the default writer), or "viewer" if they have joined via a
@@ -394,6 +397,7 @@ func terminalSessionItemFrom(sess *session.Session, mgr *session.Manager, protoc
 		CreatedAt:   sess.CreatedAt(),
 		LastSeen:    sess.LastSeen(),
 	}
+	item.Keep = sess.Keep()
 	if mgr != nil && mgr.IsIdle(sess) {
 		item.Idle = true
 		item.IdleSeconds = int(mgr.IdleDuration(sess).Seconds())

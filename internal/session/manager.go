@@ -69,6 +69,9 @@ type Session struct {
 	// this (a torn read can otherwise surface a garbage timestamp).
 	lastSeenMu sync.RWMutex
 	lastSeen   time.Time
+	// keep marks a session the owner (or an admin) deliberately left
+	// running, so IsIdle never flags it as abandoned.
+	keep bool
 
 	UserID      string
 	TargetID    string
@@ -171,6 +174,13 @@ func (s *Session) LastSeen() time.Time {
 	return s.lastSeen
 }
 
+// Keep reports whether the session is pinned as intentionally running.
+func (s *Session) Keep() bool {
+	s.lastSeenMu.RLock()
+	defer s.lastSeenMu.RUnlock()
+	return s.keep
+}
+
 // SetIdleWarnAfter sets how long without Touch before IsIdle returns true. Zero disables idle detection.
 func (m *Manager) SetIdleWarnAfter(d time.Duration) {
 	m.mu.Lock()
@@ -193,12 +203,32 @@ func (m *Manager) IdleDuration(sess *Session) time.Duration {
 	return m.now().Sub(sess.LastSeen())
 }
 
-// IsIdle reports whether the session has exceeded the idle warning threshold.
+// SetKeep pins (or unpins) a session as intentionally left running.
+// Returns false when the session does not exist.
+func (m *Manager) SetKeep(id ID, keep bool) bool {
+	m.mu.Lock()
+	s, ok := m.sessions[id]
+	m.mu.Unlock()
+	if !ok {
+		return false
+	}
+	s.lastSeenMu.Lock()
+	s.keep = keep
+	s.lastSeenMu.Unlock()
+	return true
+}
+
+// IsIdle reports whether the session has exceeded the idle warning
+// threshold. A session pinned via SetKeep is never reported idle: its
+// owner deliberately left it running.
 func (m *Manager) IsIdle(sess *Session) bool {
+	if sess == nil || sess.Keep() {
+		return false
+	}
 	m.mu.RLock()
 	threshold := m.idleWarnAfter
 	m.mu.RUnlock()
-	if threshold <= 0 || sess == nil {
+	if threshold <= 0 {
 		return false
 	}
 	return m.IdleDuration(sess) >= threshold

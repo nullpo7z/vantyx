@@ -274,7 +274,7 @@ export async function renderSessionsPage({
       .map(
         (s) => `<tr class="border-b border-slate-100 last:border-0${s.idle ? ' bg-amber-50/40' : ''}">
           <td class="px-4 py-2.5 text-sm text-slate-900 font-medium whitespace-nowrap">${escapeHtml(s.owner_username || s.owner_user_id)}</td>
-          <td class="px-4 py-2.5 text-sm text-slate-700 font-mono break-all">${escapeHtml(s.target_path ? `${s.target_path}/${s.target_name}` : s.target_name || s.target_id)}${s.name ? `<div class="text-xs text-slate-500 font-sans">${escapeHtml(s.name)}</div>` : ''}</td>
+          <td class="px-4 py-2.5 text-sm text-slate-700 font-mono break-all">${escapeHtml(s.target_path ? `${s.target_path}/${s.target_name}` : s.target_name || s.target_id)}${s.name ? `<div class="text-xs text-slate-500 font-sans">${escapeHtml(s.name)}</div>` : ''}${s.keep ? ` <span class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-sky-800 align-middle">${t('sessions.keepBadge')}</span>` : ''}</td>
           <td class="px-2 py-2.5 text-sm text-slate-800 whitespace-nowrap">${escapeHtml(kindLabel(s.kind))}${s.protocol && s.kind === 'terminal' ? ` <span class="text-xs text-slate-500">${escapeHtml(String(s.protocol).toUpperCase())}</span>` : ''}</td>
           <td class="px-2 py-2.5 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(formatLastSeen(s.created_at))}</td>
           <td class="px-2 py-2.5 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(formatLastSeen(s.last_seen || s.created_at))}${s.idle ? ` <span class="text-amber-700">(${t('sessions.idleShort')})</span>` : ''}</td>

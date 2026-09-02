@@ -97,6 +97,24 @@ const SESSIONS_ACTION_BTNS =
 const SESSIONS_BTN =
   'rounded px-2 py-1 text-xs font-medium whitespace-nowrap'
 
+// keepBadge renders a small "kept" pill shown next to a pinned session's
+// title so it is clear the idle warning is intentionally suppressed.
+function keepBadge(kept) {
+  return kept
+    ? `<span class="ml-1 inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-sky-800 align-middle" title="${tr('sessions.keepTitle')}">${tr('sessions.keepBadge')}</span>`
+    : ''
+}
+
+// keepButton renders the pin / unpin toggle for a session the caller owns.
+function keepButton(s, escapeHtml, kind) {
+  const kept = !!s.keep
+  const label = kept ? tr('sessions.keepUnmark') : tr('sessions.keepMark')
+  const cls = kept
+    ? `${SESSIONS_BTN} border border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100`
+    : `${SESSIONS_BTN} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50`
+  return `<button type="button" data-session-keep="1" data-session-id="${escapeHtml(s.session_id)}" data-session-kind="${kind}" data-keep="${kept ? '1' : '0'}" class="${cls}" title="${tr('sessions.keepTitle')}">${label}</button>`
+}
+
 function sessionTableRowClass(idle) {
   return idle
     ? 'border-b border-amber-200/80 bg-amber-50 hover:bg-amber-100/80'
@@ -224,7 +242,7 @@ export function buildSessionsTableHTML(sessions, rdpSessions, escapeHtml) {
       ? `<div class="text-xs text-slate-500 mt-0.5">${escapeHtml(tr('sharing.ownedBy', { name: s.owner_username }))}</div>`
       : ''
     rows.push(`<tr class="${sessionTableRowClass(s.idle)}">
-      <td class="${SESSIONS_CELL} text-sm font-medium text-slate-900 whitespace-nowrap">${titleText}${roleBadge}${ownerLine}</td>
+      <td class="${SESSIONS_CELL} text-sm font-medium text-slate-900 whitespace-nowrap">${titleText}${roleBadge}${keepBadge(s.keep)}${ownerLine}</td>
       <td class="${SESSIONS_CELL} text-sm text-slate-600 min-w-[8rem] max-w-md">${descCell}</td>
       <td class="${SESSIONS_CELL} text-sm text-slate-700 break-all font-mono">${escapeHtml(targetFullPathForDisplay(s))}</td>
       <td class="${SESSIONS_CELL_SHRINK} text-slate-800 font-medium">${escapeHtml(sessionProtocolLabel(s))}</td>
@@ -233,6 +251,7 @@ export function buildSessionsTableHTML(sessions, rdpSessions, escapeHtml) {
         <div class="${SESSIONS_ACTION_BTNS}">
           <button type="button" ${reconnectAttrs} class="${SESSIONS_BTN} bg-sky-600 text-white hover:bg-sky-700">${tr('sessions.reconnect')}</button>
           ${inviteBtn}
+          ${isOwner ? keepButton(s, escapeHtml, 'terminal') : ''}
           ${isOwner ? `<button type="button" ${sessionEndButtonAttrs(s, escapeHtml, { kind: 'terminal' })} class="${SESSIONS_BTN} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">${tr('sessions.end')}</button>` : ''}
         </div>
       </td>
@@ -241,7 +260,7 @@ export function buildSessionsTableHTML(sessions, rdpSessions, escapeHtml) {
   rdpSessions.forEach((r) => {
     const url = `/rdp?target_id=${encodeURIComponent(r.target_id)}&target_name=${encodeURIComponent(r.target_name || r.target_id)}&session_id=${encodeURIComponent(r.session_id)}`
     rows.push(`<tr class="${sessionTableRowClass(r.idle)}">
-      <td class="${SESSIONS_CELL} text-sm font-medium text-slate-900 break-words">${escapeHtml(r.target_name || r.target_id)}</td>
+      <td class="${SESSIONS_CELL} text-sm font-medium text-slate-900 break-words">${escapeHtml(r.target_name || r.target_id)}${keepBadge(r.keep)}</td>
       <td class="${SESSIONS_CELL} text-sm text-slate-400">—</td>
       <td class="${SESSIONS_CELL} text-sm text-slate-700 break-all font-mono">${escapeHtml(targetFullPathForDisplay(r))}</td>
       <td class="${SESSIONS_CELL_SHRINK} text-slate-800 font-medium">RDP</td>
@@ -249,6 +268,7 @@ export function buildSessionsTableHTML(sessions, rdpSessions, escapeHtml) {
       <td class="${SESSIONS_CELL_ACTIONS}">
         <div class="${SESSIONS_ACTION_BTNS}">
           <a href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer" data-rdp-reconnect="1" data-rdp-target-id="${escapeHtml(r.target_id)}" data-rdp-href="${escapeHtml(url)}" class="${SESSIONS_BTN} bg-sky-600 text-white hover:bg-sky-700">${tr('sessions.reconnect')}</a>
+          ${keepButton(r, escapeHtml, 'rdp')}
           <button type="button" ${sessionEndButtonAttrs(r, escapeHtml, { kind: 'rdp' })} class="${SESSIONS_BTN} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">${tr('sessions.end')}</button>
         </div>
       </td>
@@ -389,6 +409,22 @@ export function bindSessionListActions(container, { openTerminalTab, getRdpResol
         if (h) u.searchParams.set('rh', String(h))
       }
       openTerminalTab(u.toString())
+    })
+  })
+  container.querySelectorAll('[data-session-keep]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const sid = btn.getAttribute('data-session-id') || ''
+      const kind = btn.getAttribute('data-session-kind') || 'terminal'
+      if (!sid) return
+      const next = btn.getAttribute('data-keep') !== '1'
+      btn.disabled = true
+      try {
+        await API.setSessionKeep(sid, next, { kind })
+        if (typeof onEnded === 'function') onEnded()
+      } catch (err) {
+        btn.disabled = false
+        await uiAlert((err && err.message) || tr('common.errorOccurred'))
+      }
     })
   })
   container.querySelectorAll('[data-session-end]').forEach((btn) => {

@@ -37,12 +37,40 @@ func (m *Manager) IdleDuration(sess *Session) time.Duration {
 	return nowFn().Sub(sess.LastSeen())
 }
 
-// IsIdle reports whether the session has exceeded the idle warning threshold.
+// SetKeep pins (or unpins) a session as intentionally left running.
+// Returns false when the session is unknown.
+func (m *Manager) SetKeep(sessionID string, keep bool) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.sessionsByID[sessionID]; !ok {
+		return false
+	}
+	if keep {
+		m.keep[sessionID] = true
+	} else {
+		delete(m.keep, sessionID)
+	}
+	return true
+}
+
+// IsKept reports whether the session is pinned.
+func (m *Manager) IsKept(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.keep[sessionID]
+}
+
+// IsIdle reports whether the session has exceeded the idle warning
+// threshold. A pinned session (SetKeep) is never reported idle.
 func (m *Manager) IsIdle(sess *Session) bool {
+	if sess == nil {
+		return false
+	}
 	m.mu.Lock()
 	threshold := m.idleWarnAfter
+	pinned := m.keep[sess.ID]
 	m.mu.Unlock()
-	if threshold <= 0 || sess == nil {
+	if threshold <= 0 || pinned {
 		return false
 	}
 	return m.IdleDuration(sess) >= threshold

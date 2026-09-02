@@ -88,6 +88,7 @@ type RDPSessionItem struct {
 	LastSeen    time.Time `json:"last_seen"`
 	Idle        bool      `json:"idle"`
 	IdleSeconds int       `json:"idle_seconds,omitempty"`
+	Keep        bool      `json:"keep"`
 }
 
 func rdpSessionItemFrom(s rdpvnc.Session, mgr *rdpvnc.Manager) RDPSessionItem {
@@ -98,9 +99,12 @@ func rdpSessionItemFrom(s rdpvnc.Session, mgr *rdpvnc.Manager) RDPSessionItem {
 		CreatedAt:  s.CreatedAt,
 		LastSeen:   s.LastSeen(),
 	}
-	if mgr != nil && mgr.IsIdle(&s) {
-		item.Idle = true
-		item.IdleSeconds = int(mgr.IdleDuration(&s).Seconds())
+	if mgr != nil {
+		item.Keep = mgr.IsKept(s.ID)
+		if mgr.IsIdle(&s) {
+			item.Idle = true
+			item.IdleSeconds = int(mgr.IdleDuration(&s).Seconds())
+		}
 	}
 	return item
 }

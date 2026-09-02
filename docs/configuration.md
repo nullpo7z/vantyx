@@ -37,6 +37,16 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 |----------|---------|-------------|
 | `VANTYX_LOGIN_RATE_LIMIT_N` | `5` | Maximum failed logins per IP within a 15-minute window before `429` is returned. |
 | `VANTYX_TERMINAL_SESSION_IDLE_WARN_AFTER` | `30m` | Duration (Go duration syntax) before an idle terminal session is flagged. `0` disables idle warnings. |
+
+A session that is meant to be left running (a long-running job, a Claude
+Code / agent session, a monitored tail) can be marked **Mark as left
+running** in the Sessions tab (`PUT /api/{terminal,vnc,rdp}/sessions/{id}/keep`
+`{ "keep": true }`, owner or admin). A marked session shows a *kept* badge
+and is never counted as idle, so the idle warning distinguishes genuinely
+abandoned sessions from ones deliberately left open. The mark is an
+in-memory hint on the live session (cleared when it ends) and does not
+extend any lifetime or block an admin terminate. Audited as
+`session_keep_set`.
 | `VANTYX_INVITATION_MAX_TTL_SECONDS` | `14400` | Maximum validity (`ttl_seconds`) for collaborative session invitations. Default TTL when omitted is 15 minutes. See [collaborative-sessions.md](collaborative-sessions.md). |
 | `VANTYX_REQUIRE_RECORDING_WITH_VIEWERS` | unset | When enabled (`1`, `true`, or `yes`), refuse collaborative invitations and joins unless `VANTYX_RECORDINGS_DIR` is set. |
 

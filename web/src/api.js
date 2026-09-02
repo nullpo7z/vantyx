@@ -1068,6 +1068,30 @@ const API = {
   },
 
   /** ターミナルセッションを終了する（閉じる用）。keepalive でタブ閉鎖時も送信完了させる。 */
+  /**
+   * セッションを「意図的に放置中」としてマーク（または解除）する。
+   * kind は 'terminal' | 'vnc' | 'rdp'。マークされたセッションはアイドル警告の対象外になる。
+   */
+  async setSessionKeep(sessionId, keep, { kind = 'terminal' } = {}) {
+    const base =
+      kind === 'rdp'
+        ? '/api/rdp/sessions'
+        : kind === 'vnc'
+          ? '/api/vnc/sessions'
+          : '/api/terminal/sessions'
+    const res = await fetch(`${base}/${encodeURIComponent(sessionId)}/keep`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keep: !!keep }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to update session')
+    }
+    return res.json()
+  },
+
   async terminalSessionDelete(sessionId) {
     const res = await fetch(`/api/terminal/sessions/${encodeURIComponent(sessionId)}`, {
       method: 'DELETE',

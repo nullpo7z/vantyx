@@ -35,6 +35,7 @@ type adminSessionItem struct {
 	LastSeen      time.Time `json:"last_seen"`
 	Idle          bool      `json:"idle"`
 	IdleSeconds   int       `json:"idle_seconds,omitempty"`
+	Keep          bool      `json:"keep"`
 	// Participants lists everyone in the sharing room besides the owner
 	// (viewers / writers), including admins who are watching.
 	Participants []string `json:"participants"`
@@ -103,7 +104,7 @@ func (a *App) handleAdminListSessions(w http.ResponseWriter, r *http.Request) {
 				OwnerUserID: sess.UserID, OwnerUsername: a.usernameFor(ctx, sess.UserID),
 				TargetID: sess.TargetID, TargetName: firstNonEmpty(sess.TargetName, name), TargetPath: path,
 				Protocol: string(protocol), Name: sess.Name,
-				CreatedAt: ti.CreatedAt, LastSeen: ti.LastSeen, Idle: ti.Idle, IdleSeconds: ti.IdleSeconds,
+				CreatedAt: ti.CreatedAt, LastSeen: ti.LastSeen, Idle: ti.Idle, IdleSeconds: ti.IdleSeconds, Keep: ti.Keep,
 				Participants: parts, Watching: watching,
 			})
 		}
@@ -122,7 +123,7 @@ func (a *App) handleAdminListSessions(w http.ResponseWriter, r *http.Request) {
 				OwnerUserID: sess.UserID, OwnerUsername: a.usernameFor(ctx, sess.UserID),
 				TargetID: sess.TargetID, TargetName: firstNonEmpty(sess.TargetName, name), TargetPath: path,
 				Protocol: string(access.ProtocolVNC), Name: sess.Name,
-				CreatedAt: ti.CreatedAt, LastSeen: ti.LastSeen, Idle: ti.Idle, IdleSeconds: ti.IdleSeconds,
+				CreatedAt: ti.CreatedAt, LastSeen: ti.LastSeen, Idle: ti.Idle, IdleSeconds: ti.IdleSeconds, Keep: ti.Keep,
 				Participants: parts, Watching: watching,
 			})
 		}
@@ -137,7 +138,7 @@ func (a *App) handleAdminListSessions(w http.ResponseWriter, r *http.Request) {
 				OwnerUserID: s.UserID, OwnerUsername: a.usernameFor(ctx, s.UserID),
 				TargetID: s.TargetID, TargetName: firstNonEmpty(s.TargetName, name), TargetPath: path,
 				Protocol:  string(access.ProtocolRDP),
-				CreatedAt: ri.CreatedAt, LastSeen: ri.LastSeen, Idle: ri.Idle, IdleSeconds: ri.IdleSeconds,
+				CreatedAt: ri.CreatedAt, LastSeen: ri.LastSeen, Idle: ri.Idle, IdleSeconds: ri.IdleSeconds, Keep: ri.Keep,
 				Participants: parts, Watching: watching,
 			})
 		}

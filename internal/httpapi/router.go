@@ -526,6 +526,7 @@ func (a *App) NewRouter() http.Handler {
 	r.Route("/api/terminal/sessions", func(r chi.Router) {
 		r.Get("/", a.handleTerminalSessions)
 		r.Delete("/{session_id}", a.handleTerminalSessionDelete)
+		r.Put("/{session_id}/keep", a.handleSetSessionKeep)
 		// Collaborative session sharing (Phase A).
 		r.Get("/{session_id}/invitation-options", a.handleInvitationOptions)
 		r.Post("/{session_id}/invitations", a.handleCreateInvitation)
@@ -544,6 +545,7 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/ws/vnc", a.handleVNCWebSocket)
 	r.Route("/api/vnc/sessions", func(r chi.Router) {
 		r.Get("/", a.handleVNCSessions)
+		r.Put("/{session_id}/keep", a.handleSetSessionKeep)
 		r.Get("/{session_id}/invitation-options", a.handleVNCInvitationOptions)
 		r.Post("/{session_id}/invitations", a.handleVNCCreateInvitation)
 		r.Get("/{session_id}/invitations", a.handleVNCListInvitations)
@@ -556,6 +558,7 @@ func (a *App) NewRouter() http.Handler {
 	r.Route("/api/rdp/sessions", func(r chi.Router) {
 		r.Get("/", a.handleRDPSessions)
 		r.Delete("/{session_id}", a.handleRDPSessionDelete)
+		r.Put("/{session_id}/keep", a.handleSetSessionKeep)
 		r.Get("/{session_id}/invitation-options", a.handleRDPInvitationOptions)
 		r.Post("/{session_id}/invitations", a.handleRDPCreateInvitation)
 		r.Get("/{session_id}/invitations", a.handleRDPListInvitations)

@@ -188,3 +188,38 @@ func TestManager_IdleWarnDisabled(t *testing.T) {
 		t.Fatal("expected IsIdle false when idleWarnAfter is 0")
 	}
 }
+
+// A session pinned via SetKeep is never reported idle, even past the
+// threshold; unpinning restores normal idle detection.
+func TestManager_KeepSuppressesIdle(t *testing.T) {
+	m := NewManager()
+	m.SetIdleWarnAfter(5 * time.Minute)
+	now := time.Now()
+	m.now = func() time.Time { return now }
+
+	sess, err := m.Start("keep", StartOptions{}, func(ctx context.Context, _ *Session) { <-ctx.Done() })
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer m.Stop("keep")
+
+	m.now = func() time.Time { return now.Add(6 * time.Minute) }
+	if !m.IsIdle(sess) {
+		t.Fatal("precondition: expected idle after threshold")
+	}
+	if !m.SetKeep("keep", true) {
+		t.Fatal("SetKeep returned false for a live session")
+	}
+	if m.IsIdle(sess) || !sess.Keep() {
+		t.Fatal("expected pinned session to be reported non-idle")
+	}
+	if m.SetKeep("missing", true) {
+		t.Fatal("SetKeep should report false for an unknown session")
+	}
+	if !m.SetKeep("keep", false) {
+		t.Fatal("SetKeep unpin returned false")
+	}
+	if !m.IsIdle(sess) || sess.Keep() {
+		t.Fatal("expected idle detection to resume after unpin")
+	}
+}

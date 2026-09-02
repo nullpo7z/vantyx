@@ -408,7 +408,8 @@ type Manager struct {
 	sessionsByID   map[string]*Session // sessionID -> session
 	sessionIDByKey map[string]string   // key -> sessionID
 	now            func() time.Time
-	idleWarnAfter  time.Duration // 0 = idle warnings disabled
+	idleWarnAfter  time.Duration   // 0 = idle warnings disabled
+	keep           map[string]bool // sessionID -> intentionally left running
 }
 
 // NewManager creates a new bridge manager.
@@ -417,6 +418,7 @@ func NewManager() *Manager {
 		bridges:        make(map[string]*Bridge),
 		sessionsByID:   make(map[string]*Session),
 		sessionIDByKey: make(map[string]string),
+		keep:           make(map[string]bool),
 		now:            time.Now,
 	}
 }
@@ -499,6 +501,7 @@ func (m *Manager) RegisterSession(key string, sessionID string, userID, targetID
 		}
 		if cur, ok := m.sessionsByID[sessionID]; ok && cur.Bridge == b {
 			delete(m.sessionsByID, sessionID)
+			delete(m.keep, sessionID)
 		}
 		if m.sessionIDByKey[key] == sessionID {
 			delete(m.sessionIDByKey, key)
@@ -566,6 +569,7 @@ func (m *Manager) RemoveSession(sessionID string) {
 		ok = true
 		key = s.UserID + ":" + s.TargetID
 		delete(m.sessionsByID, sessionID)
+		delete(m.keep, sessionID)
 		if m.sessionIDByKey[key] == sessionID {
 			delete(m.sessionIDByKey, key)
 		}

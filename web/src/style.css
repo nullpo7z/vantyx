@@ -411,3 +411,60 @@ body.terminal-standalone #app {
 #app header .vantyx-page-subrow {
   padding: 0 1.5rem 0.5rem;
 }
+
+/* --- Mobile terminal accessory bar (Termius-style) ------------------ */
+/* Created only on touch devices by mobile_console.js. It rides directly
+   above the OS keyboard; the terminal is kept visible above it via the
+   visualViewport API, so nothing hides behind the keyboard. */
+.term-mobile-bar {
+  flex: 0 0 auto;
+  background: #0b1220;
+  border-top: 1px solid #1e293b;
+  padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.term-mobile-row {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.term-mobile-row::-webkit-scrollbar {
+  display: none;
+}
+.term-mobile-row + .term-mobile-row {
+  margin-top: 4px;
+}
+.term-mobile-key {
+  flex: 0 0 auto;
+  min-width: 40px;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.term-mobile-key:active {
+  background: #334155;
+}
+.term-mobile-key.is-active {
+  background: #0ea5e9;
+  border-color: #38bdf8;
+  color: #04283a;
+  font-weight: 700;
+}
+.term-mobile-key-wide {
+  min-width: 56px;
+}

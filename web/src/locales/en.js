@@ -1397,6 +1397,10 @@ const en = {
       'Username "{user}" received from the parent tab. Enter a password here to connect.',
     telnetHint:
       '[connected] Telnet connection established. If no login prompt appears, press Enter or check the saved credentials.',
+    mobileBarLabel: 'Terminal key bar',
+    keyEsc: 'Esc',
+    keyFnTitle: 'Function and extra keys',
+    keyHideKeyboard: 'Hide keyboard',
   },
   fileTransfersBar: {
     titleAll: 'File transfers',

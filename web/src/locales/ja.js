@@ -1349,6 +1349,10 @@ const ja = {
     parentTabReceivedNoUser: '親タブから認証情報を受信しましたが、ユーザー名が空でした。入力して接続してください。',
     parentTabReceivedNoPassword: '親タブからユーザー名「{user}」を受信しました。パスワードが空のため、この画面で入力して接続してください。',
     telnetHint: '[接続済み] Telnet に接続しました。ログイン画面が表示されない場合はキーボードで Enter を押すか、保存済み認証のユーザー名・パスワードを確認してください。',
+    mobileBarLabel: 'ターミナル用キーバー',
+    keyEsc: 'Esc',
+    keyFnTitle: 'ファンクションキー / 追加キー',
+    keyHideKeyboard: 'キーボードを隠す',
   },
   fileTransfersBar: {
     titleAll: 'ファイル転送',

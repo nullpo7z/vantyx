@@ -13,6 +13,7 @@ import { classifyTerminalWsFrameSync } from './terminal_ws_protocol.js'
 import { createHostKeyDialogController } from './host_key_dialog.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
 import { setupTerminalKeyboard } from './xterm_input.js'
+import { setupMobileConsole } from './mobile_console.js'
 import { refreshParticipantsDialog } from './participants_dialog.js'
 import { isSameOriginBroadcast } from './dom_helpers.js'
 
@@ -1113,10 +1114,34 @@ export function renderTerminalPage(container) {
     term.open(xtermEl)
     setupTerminalKeyboard(term, xtermEl)
     fitAddon.fit()
+    // Phone console accessory bar (Esc/Tab/Ctrl/Alt/arrows/Fn...) and
+    // keyboard-aware sizing. No-op on non-touch devices.
+    mobileConsole = setupMobileConsole({
+      shellEl: shellWrap,
+      xtermEl,
+      term,
+      sendData,
+      refit: () => {
+        try { fitAddon.fit() } catch { /* ignore */ }
+        if (currentWs && currentWs.readyState === WebSocket.OPEN) sendResize(currentWs)
+      },
+    })
   }
 
   /** 既存の term に WebSocket を接続（onData, resize 送信）。ensureTerm の後に呼ぶ。 */
   let currentWs = null
+  let mobileConsole = null
+  // sendData is the single path from any input source (the OS keyboard
+  // via term.onData, or the mobile toolbar) to the PTY. It enforces the
+  // collaborative write-token client-side; the bridge enforces it again
+  // server-side via SetWriter().
+  function sendData(data) {
+    if (!data) return
+    if (!holdsWriteToken()) return
+    if (currentWs && currentWs.readyState === WebSocket.OPEN) {
+      currentWs.send(new TextEncoder().encode(data))
+    }
+  }
   function attachWsToTerm(ws) {
     currentWs = ws
     term.focus()
@@ -1124,14 +1149,8 @@ export function renderTerminalPage(container) {
     if (!termStdinAttached) {
       termStdinAttached = true
       term.onData((data) => {
-        // Drop input unless we currently hold the write token.
-        // The bridge also enforces this server-side via SetWriter(),
-        // but doing it client-side makes UX predictable even when the
-        // viewer URL stays `mode=viewer` after token transfer.
-        if (!holdsWriteToken()) return
-        if (currentWs && currentWs.readyState === WebSocket.OPEN) {
-          currentWs.send(new TextEncoder().encode(data))
-        }
+        // Fold any armed mobile modifiers (Ctrl/Alt) into the keystroke.
+        sendData(mobileConsole ? mobileConsole.transformOutgoing(data) : data)
       })
     }
     if (!resizeObserver) {

@@ -118,6 +118,32 @@ export function renderApp(container) {
   const mainContent = document.getElementById('main-content')
   const userNameEl = document.getElementById('user-name')
   const logoutBtn = document.getElementById('logout-btn')
+
+  // Collapsible header menu (phones): the hamburger toggles the nav +
+  // account controls, which are a dropdown under the bar on narrow
+  // screens and an inline row on desktop. Choosing a destination or an
+  // account action closes it again.
+  const navMenuToggle = document.getElementById('nav-menu-toggle')
+  const headerInner = document.querySelector('.vantyx-app-header .vantyx-header-inner')
+  if (navMenuToggle && headerInner) {
+    const closeMenu = () => {
+      headerInner.classList.remove('menu-open')
+      navMenuToggle.setAttribute('aria-expanded', 'false')
+    }
+    navMenuToggle.addEventListener('click', () => {
+      const open = headerInner.classList.toggle('menu-open')
+      navMenuToggle.setAttribute('aria-expanded', open ? 'true' : 'false')
+    })
+    headerInner.addEventListener('click', (e) => {
+      if (e.target.closest('#nav-menu-toggle')) return
+      if (e.target.closest('.vantyx-nav-link, #logout-btn, #user-name, #theme-toggle')) closeMenu()
+    })
+    // Close when tapping outside the header.
+    document.addEventListener('click', (e) => {
+      if (!headerInner.classList.contains('menu-open')) return
+      if (!e.target.closest('.vantyx-app-header')) closeMenu()
+    })
+  }
   const navTargets = document.getElementById('nav-targets')
   const navSessions = document.getElementById('nav-sessions')
   const navRecordings = document.getElementById('nav-recordings')

@@ -468,3 +468,32 @@ body.terminal-standalone #app {
 .term-mobile-key-wide {
   min-width: 56px;
 }
+
+/* --- Narrow screens: compact standalone-page header (terminal / RDP /
+   VNC / files). The page-context label is dropped and the action
+   buttons tighten so they never overlap on a phone. --------------- */
+@media (max-width: 640px) {
+  #app header .vantyx-header-inner {
+    gap: 0.5rem;
+    padding: 0.5rem 0.625rem;
+    flex-wrap: wrap;
+  }
+  #app header .vantyx-header-start {
+    column-gap: 0.5rem;
+  }
+  #app header .vantyx-page-context {
+    display: none;
+  }
+  #app header .vantyx-header-end {
+    column-gap: 0.375rem;
+    row-gap: 0.375rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  #app header .vantyx-page-btn {
+    padding: 0.25rem 0.5rem;
+  }
+  #app header .vantyx-brand {
+    font-size: 0.875rem;
+  }
+}

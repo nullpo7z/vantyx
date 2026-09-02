@@ -1105,11 +1105,11 @@ router1,10.0.0.1,22,ssh,net/tokyo,core edge,admin,,true,false,false,,,</pre>
         : ''
 
       const addTargetBtnHtml = isManageMode
-        ? `<a href="/api/targets/export?format=csv" class="rounded border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm" title="${t('targets.exportCsvTitle')}">CSV</a>
-           <a href="/api/targets/export?format=json" class="rounded border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm" title="${t('targets.exportJsonTitle')}">JSON</a>
-           <button type="button" id="btn-import-targets" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('targets.importBtn')}</button>
-           <button type="button" id="btn-check-targets" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors disabled:opacity-50" ${targets.length ? '' : 'disabled'}>${t('targets.checkBtn')}</button>
-           <button type="button" id="btn-add-target-in-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50" ${selectedGroupId ? '' : 'disabled'}>${t('app.addTargetBtn')}</button>`
+        ? `<a href="/api/targets/export?format=csv" class="shrink-0 whitespace-nowrap rounded border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm" title="${t('targets.exportCsvTitle')}">CSV</a>
+           <a href="/api/targets/export?format=json" class="shrink-0 whitespace-nowrap rounded border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm" title="${t('targets.exportJsonTitle')}">JSON</a>
+           <button type="button" id="btn-import-targets" class="shrink-0 whitespace-nowrap rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('targets.importBtn')}</button>
+           <button type="button" id="btn-check-targets" class="shrink-0 whitespace-nowrap rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors disabled:opacity-50" ${targets.length ? '' : 'disabled'}>${t('targets.checkBtn')}</button>
+           <button type="button" id="btn-add-target-in-group" class="shrink-0 whitespace-nowrap rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50" ${selectedGroupId ? '' : 'disabled'}>${t('app.addTargetBtn')}</button>`
         : `<button type="button" id="btn-request-access" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('access.requestBtn')}</button>`
       const showMembersSection = isManageMode && isAdminRole && selectedGroupId
 
@@ -1130,12 +1130,12 @@ router1,10.0.0.1,22,ssh,net/tokyo,core edge,admin,,true,false,false,,,</pre>
             <div class="flex-1 flex flex-col gap-4 min-h-0">
               ${!isManageMode ? '<div id="idle-sessions-banner" class="hidden rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900"></div>' : ''}
               <section class="flex-1 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col min-h-0">
-                <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-                  <div>
-                    <h2 class="text-sm font-semibold text-slate-800">${escapeHtml(label)}</h2>
+                <div class="px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 bg-slate-50">
+                  <div class="min-w-0">
+                    <h2 class="text-sm font-semibold text-slate-800 truncate">${escapeHtml(label)}</h2>
                   </div>
-                  <div class="flex items-center gap-2">
-                    <span class="text-xs text-slate-500">${t('app.targetsSuffix', { n: targets.length })}</span>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-xs text-slate-500 whitespace-nowrap">${t('app.targetsSuffix', { n: targets.length })}</span>
                     ${addTargetBtnHtml}
                   </div>
                 </div>

@@ -132,14 +132,26 @@ export function setupMobileConsole({ shellEl, xtermEl, term, sendData, refit }) 
     b.textContent = label
     if (opts.title) b.title = opts.title
     if (opts.mod) b.dataset.mod = opts.mod
-    // Keep the terminal's hidden textarea focused: acting on pointerdown
-    // and preventing default stops the tap from stealing focus (which
-    // would dismiss the OS keyboard on every key press).
+    // Act on pointerdown, not click: preventDefault here keeps the
+    // terminal's hidden textarea focused (so the OS keyboard is not
+    // dismissed on every key), but on real touch it ALSO suppresses the
+    // synthesized click -- so binding the action to click meant keys
+    // like Tab and Ctrl never fired. Fire on pointerdown and swallow the
+    // trailing click so the action runs exactly once.
+    let firedFromPointer = false
     b.addEventListener('pointerdown', (e) => {
       e.preventDefault()
+      firedFromPointer = true
+      opts.onPress?.()
+      refocus()
     })
     b.addEventListener('click', (e) => {
       e.preventDefault()
+      if (firedFromPointer) {
+        firedFromPointer = false
+        return
+      }
+      // No preceding pointerdown (e.g. keyboard / assistive activation).
       opts.onPress?.()
       refocus()
     })

@@ -354,16 +354,22 @@ export function setupMobileConsole({ shellEl, xtermEl, term, sendData, refit }) 
     }
   }
 
-  // transformOutgoing folds armed modifiers into a single character
-  // typed on the OS keyboard, then releases the one-shots. Multi-byte
-  // input (IME, paste) passes through unchanged but still clears any
-  // armed modifier so it does not leak onto later input.
+  // transformOutgoing folds armed Ctrl/Alt into a character typed on the
+  // OS keyboard. Android soft keyboards often emit a stray empty or
+  // composition event just before the real keystroke; clearing the armed
+  // modifier on those would drop it before the user's key arrived (the
+  // "Ctrl then c just types c" bug), so the modifier is released ONLY
+  // when an actual single character is folded. Empty / non-single input
+  // (composition ticks, some pastes) passes through with the modifier
+  // still armed for the next real key.
   function transformOutgoing(data) {
-    if (!mods.ctrl && !mods.alt) return data
-    let out = data
-    if (data.length === 1) out = applyMods(data)
-    clearOneShots()
-    return out
+    if ((!mods.ctrl && !mods.alt) || !data) return data
+    if (data.length === 1) {
+      const out = applyMods(data)
+      clearOneShots()
+      return out
+    }
+    return data
   }
 
   return { transformOutgoing, destroy, isActive: true }

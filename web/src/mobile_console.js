@@ -132,28 +132,21 @@ export function setupMobileConsole({ shellEl, xtermEl, term, sendData, refit }) 
     b.textContent = label
     if (opts.title) b.title = opts.title
     if (opts.mod) b.dataset.mod = opts.mod
-    // Act on pointerdown, not click: preventDefault here keeps the
-    // terminal's hidden textarea focused (so the OS keyboard is not
-    // dismissed on every key), but on real touch it ALSO suppresses the
-    // synthesized click -- so binding the action to click meant keys
-    // like Tab and Ctrl never fired. Fire on pointerdown and swallow the
-    // trailing click so the action runs exactly once.
-    let firedFromPointer = false
+    // Act on pointerdown only, and preventDefault it. preventDefault
+    // keeps the terminal's hidden textarea focused (so the OS keyboard
+    // is not dismissed on every key) and, on touch, suppresses the
+    // synthesized click. Handling *only* pointerdown guarantees exactly
+    // one send per tap -- a click fallback risked firing a second time
+    // on some browsers, which sent e.g. Tab twice (turning a normal
+    // completion into an immediate candidate dump) and duplicated input.
     b.addEventListener('pointerdown', (e) => {
       e.preventDefault()
-      firedFromPointer = true
       opts.onPress?.()
       refocus()
     })
+    // Swallow the trailing click so it can never double-fire the action.
     b.addEventListener('click', (e) => {
       e.preventDefault()
-      if (firedFromPointer) {
-        firedFromPointer = false
-        return
-      }
-      // No preceding pointerdown (e.g. keyboard / assistive activation).
-      opts.onPress?.()
-      refocus()
     })
     return b
   }

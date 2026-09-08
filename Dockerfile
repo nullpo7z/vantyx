@@ -14,7 +14,7 @@ RUN npm run build
 # -----------------------------------------------------------------------------
 # Stage 2: Go binary
 # -----------------------------------------------------------------------------
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 WORKDIR /src
 
@@ -31,7 +31,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /out/vant
 # reproducible and CVE auditing is meaningful. The `community-edge`
 # overlay is only used to pull a FreeRDP 3.x build.
 # -----------------------------------------------------------------------------
-FROM alpine:3.23
+FROM alpine:3.24
 
 # asciinema-agg (GIF 用), ffmpeg (MP4 用), フォント (agg の描画用)
 # freerdp (3.x) + Xvfb + x11vnc: browser-based RDP via FreeRDP→Xvfb→x11vnc→noVNC

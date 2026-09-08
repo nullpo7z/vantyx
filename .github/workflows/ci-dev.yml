@@ -105,7 +105,19 @@ jobs:
           go-version: "1.26.3"
           cache: true
       - name: Run tests
-        run: go test ${{ matrix.pkgs }} -timeout 10m
+        run: |
+          set -o pipefail
+          go test ${{ matrix.pkgs }} -timeout 10m 2>&1 | tee "$RUNNER_TEMP/go-test.log"
+      # On failure, surface the failing tests as check-run annotations and
+      # in the job summary so they can be read without opening the raw log
+      # (annotations are also available through the public API).
+      - name: Report failing tests
+        if: failure()
+        run: |
+          pat='^(--- FAIL|FAIL|panic:)|_test\.go:[0-9]+:'
+          grep -E "$pat" "$RUNNER_TEMP/go-test.log" | head -40 > "$RUNNER_TEMP/failures.txt" || true
+          while IFS= read -r line; do echo "::error::${line}"; done < "$RUNNER_TEMP/failures.txt"
+          { echo '### Failing tests'; echo '```'; cat "$RUNNER_TEMP/failures.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Compute coverage (informational)
         if: matrix.id == 'httpapi'
         run: |

@@ -128,4 +128,4 @@ See [configuration.md](configuration.md).
 | CLI | `internal/sshd/cli_sharing.go` |
 | Frontend | `web/src/terminal_page.js`, `web/src/vnc_page.js`, `web/src/rdp_page.js`, `web/src/sharing_ui.js`, `web/src/invite_dialog.js`, `web/src/sharing_events.js` |
 
-Architecture: [ARCHITECTURE.md](ARCHITECTURE.md#collaborative-terminal-sessions).
+Architecture: [ARCHITECTURE.md](ARCHITECTURE.md#collaborative-sessions).

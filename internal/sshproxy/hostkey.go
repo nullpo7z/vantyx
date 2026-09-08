@@ -21,8 +21,9 @@ import (
 type BridgeOption func(*bridgeOptions)
 
 type bridgeOptions struct {
-	hostKeyFingerprint string
-	insecureSkipVerify bool
+	hostKeyFingerprint       string
+	insecureSkipVerify       bool
+	targetInsecureSkipVerify bool
 	// captured is populated by the host-key callback when a connection
 	// is rejected because no fingerprint was configured; callers may
 	// surface it via TOFU flows.
@@ -32,6 +33,9 @@ type bridgeOptions struct {
 	// Register exactly once after the SSH session is set up; nil sinks
 	// are ignored.
 	controlSink BridgeControlSink
+	// resizeRecorder, when set, is notified of every PTY resize so
+	// recordings can capture asciicast "r" events (see ResizeRecorder).
+	resizeRecorder ResizeRecorder
 }
 
 // WithHostKeyFingerprint sets the expected SHA-256 host-key fingerprint
@@ -46,12 +50,19 @@ func WithHostKeyFingerprint(fp string) BridgeOption {
 	}
 }
 
-// WithInsecureSkipHostKeyVerify disables host-key verification. It is
-// honored only when VANTYX_SSH_INSECURE_IGNORE_HOST_KEY=1 (so it cannot
-// be enabled by a target record alone). Intended for tests and emergency
-// break-glass; production deployments must record a fingerprint instead.
+// WithInsecureSkipHostKeyVerify disables host-key verification for all
+// targets when combined with VANTYX_SSH_INSECURE_IGNORE_HOST_KEY=1 or
+// when used alone in tests. Prefer [WithTargetInsecureSkipVerify] for
+// per-target break-glass scoped to one bastion destination.
 func WithInsecureSkipHostKeyVerify() BridgeOption {
 	return func(o *bridgeOptions) { o.insecureSkipVerify = true }
+}
+
+// WithTargetInsecureSkipVerify disables host-key verification for a
+// single target connection. Equivalent to setting
+// target.SSHHostKeyInsecureSkipVerify in the access layer (CWE-295).
+func WithTargetInsecureSkipVerify() BridgeOption {
+	return func(o *bridgeOptions) { o.targetInsecureSkipVerify = true }
 }
 
 // WithBridgeControlSink registers a sink that receives the live
@@ -59,6 +70,14 @@ func WithInsecureSkipHostKeyVerify() BridgeOption {
 // to wire up the collaborative-session writer / viewer hand-off.
 func WithBridgeControlSink(sink BridgeControlSink) BridgeOption {
 	return func(o *bridgeOptions) { o.controlSink = sink }
+}
+
+// WithResizeRecorder registers a recorder that is notified whenever the
+// target PTY is resized, so a recording can replay at the terminal
+// geometry the session actually ran at instead of the fixed size baked
+// into the cast header at start time.
+func WithResizeRecorder(rr ResizeRecorder) BridgeOption {
+	return func(o *bridgeOptions) { o.resizeRecorder = rr }
 }
 
 // WithCapturedFingerprint configures the bridge / host-key callback to
@@ -167,7 +186,7 @@ func hostKeyCallback(opts *bridgeOptions) ssh.HostKeyCallback {
 			return &HostKeyMismatchError{Host: hostname, Expected: fp, Got: got}
 		}
 	}
-	insecure := opts.insecureSkipVerify || os.Getenv("VANTYX_SSH_INSECURE_IGNORE_HOST_KEY") == "1"
+	insecure := opts.targetInsecureSkipVerify || opts.insecureSkipVerify || os.Getenv("VANTYX_SSH_INSECURE_IGNORE_HOST_KEY") == "1"
 	if insecure {
 		return func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			if opts.captured != nil {

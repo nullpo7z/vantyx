@@ -126,7 +126,7 @@ func TestOpen_DriverError(t *testing.T) {
 }
 
 func TestDSN(t *testing.T) {
-	const pragmas = "_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)"
+	const pragmas = "_txlock=immediate&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)"
 	tests := []struct {
 		path string
 		want string

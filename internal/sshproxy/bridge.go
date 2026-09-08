@@ -162,6 +162,20 @@ func (f StdinRecorderFunc) RecordInput(p []byte) {
 	f(p)
 }
 
+// ResizeRecorder is called when the target PTY is resized (e.g. from a
+// client's window-change), so a recording can capture the resize as an
+// asciicast "r" event. May be nil.
+type ResizeRecorder interface {
+	RecordResize(cols, rows int)
+}
+
+// ResizeRecorderFunc adapts a function to ResizeRecorder.
+type ResizeRecorderFunc func(cols, rows int)
+
+func (f ResizeRecorderFunc) RecordResize(cols, rows int) {
+	f(cols, rows)
+}
+
 // AuthMethods builds SSH auth methods from password and/or PEM private key (with optional passphrase).
 // Key is tried first when present. Used by bridge and by internal/sftp.
 func AuthMethods(password, privateKeyPEM, keyPassphrase string) ([]ssh.AuthMethod, error) {
@@ -355,7 +369,9 @@ func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.W
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	var cleanupOnce sync.Once
+	doCleanup := func() { cleanupOnce.Do(cleanup) }
+	defer doCleanup()
 
 	if resizeChan != nil && windowChange != nil {
 		go func() {
@@ -454,6 +470,15 @@ func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.W
 
 	select {
 	case <-ctx.Done():
+		// Tear the SSH session down first so the pumps' blocking reads
+		// return, then wait (bounded) for them to exit: otherwise the
+		// stdout pump could still be writing to localStdout after this
+		// function has returned to the caller.
+		doCleanup()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
 		return nil
 	case <-done:
 		return nil
@@ -505,6 +530,8 @@ type BridgeController interface {
 	// SetWriter promotes attached clients owned by userID to writer
 	// and demotes the rest. An empty userID demotes every client.
 	SetWriter(userID string)
+	// DetachUser closes every attached client owned by userID.
+	DetachUser(userID string)
 }
 
 // BridgeControlSink receives the controller exactly once when the
@@ -548,7 +575,7 @@ func RunBridgeDetachable(ctx context.Context, endMsg string, host string, port u
 		doCleanup()
 	}()
 
-	bridge := newSSHDetachableBridge(ctx, endMsg, stdin, output, windowChange, touch, tee, stdinRecorder, attachCh, externalResize)
+	bridge := newSSHDetachableBridge(ctx, endMsg, stdin, output, windowChange, touch, tee, stdinRecorder, attachCh, externalResize, o.resizeRecorder)
 	if o.controlSink != nil {
 		o.controlSink.Register(bridge)
 	}

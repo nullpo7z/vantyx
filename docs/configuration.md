@@ -26,6 +26,7 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 | `VANTYX_ALLOWED_HOSTS` | — | Comma-separated host allowlist for the HTTP redirector. Either this or `VANTYX_EXTERNAL_HOST` must be set. |
 | `VANTYX_CORS_ALLOWED_ORIGINS` | — | Comma-separated origins to mirror in CORS headers. When empty, no CORS headers are emitted. |
 | `VANTYX_DISABLE_ORIGIN_CHECK` | `0` | Set to `1` to skip the same-origin Origin/Referer check on cookie-authenticated mutations. **Never enable on production.** Automation / tests only. |
+| `VANTYX_DISABLE_SECURITY_HEADERS` | `0` | Set to `1` to omit CSP / X-Frame-Options / HSTS and related headers. **Tests only.** |
 | `VANTYX_TRUST_X_FORWARDED_FOR` | `0` | Set to `1` to honour `X-Forwarded-For` for the login rate limiter. |
 | `VANTYX_WS_ALLOWED_ORIGINS` | — | Comma-separated origins allowed to open WebSockets. Defaults to the request's own origin. |
 | `VANTYX_ALLOW_WS_NO_ORIGIN` | `0` | Set to `1` to permit WebSocket upgrades without an `Origin` header. Useful for local CLI tooling. |
@@ -36,7 +37,171 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 |----------|---------|-------------|
 | `VANTYX_LOGIN_RATE_LIMIT_N` | `5` | Maximum failed logins per IP within a 15-minute window before `429` is returned. |
 | `VANTYX_TERMINAL_SESSION_IDLE_WARN_AFTER` | `30m` | Duration (Go duration syntax) before an idle terminal session is flagged. `0` disables idle warnings. |
+
+A session that is meant to be left running (a long-running job, a Claude
+Code / agent session, a monitored tail) can be marked **Mark as left
+running** in the Sessions tab (`PUT /api/{terminal,vnc,rdp}/sessions/{id}/keep`
+`{ "keep": true }`, owner or admin). A marked session shows a *kept* badge
+and is never counted as idle, so the idle warning distinguishes genuinely
+abandoned sessions from ones deliberately left open. The mark is an
+in-memory hint on the live session (cleared when it ends) and does not
+extend any lifetime or block an admin terminate. Audited as
+`session_keep_set`.
 | `VANTYX_INVITATION_MAX_TTL_SECONDS` | `14400` | Maximum validity (`ttl_seconds`) for collaborative session invitations. Default TTL when omitted is 15 minutes. See [collaborative-sessions.md](collaborative-sessions.md). |
+| `VANTYX_REQUIRE_RECORDING_WITH_VIEWERS` | unset | When enabled (`1`, `true`, or `yes`), refuse collaborative invitations and joins unless `VANTYX_RECORDINGS_DIR` is set. |
+
+### Two-factor authentication (TOTP)
+
+TOTP needs no configuration: every user can enable it from **Account →
+Two-factor authentication** in the web UI (RFC 6238, SHA-1 / 30 s / 6 digits,
+compatible with Google Authenticator, Authy, 1Password, …). Enabling it issues
+eight single-use recovery codes that are shown once.
+
+- **Web UI**: `POST /api/login` answers `{"mfa_required":true,"mfa_token":…}`
+  instead of a session; the client completes with
+  `POST /api/login/totp {mfa_token, code}`. The token lives 5 minutes and is
+  discarded after 5 wrong codes (the login rate limiter applies as well).
+- **CLI gateway**: not affected — the gateway accepts **public keys only**
+  (no password or keyboard-interactive auth), so there is no password
+  entry point for TOTP to protect. Register keys under **Users → Public
+  keys**.
+- **Passkeys** (WebAuthn, see below) are an alternative second factor; a
+  user may have TOTP, passkeys, or both.
+- **SSO logins** (below) are not challenged for a local TOTP — the IdP owns
+  MFA for those users.
+- Users disable it with their password (`DELETE /api/me/totp`); admins can
+  clear a locked-out user's factor with `DELETE /api/users/{id}/totp`
+  (**Users → Reset 2FA**).
+- Secrets are stored AES-256-GCM encrypted with
+  `VANTYX_SSH_PASSWORD_ENCRYPTION_KEY`; recovery codes are stored as SHA-256
+  digests.
+
+### Passkeys / security keys (WebAuthn)
+
+Users register passkeys under **Account settings → Passkeys / security
+keys** (`POST /api/me/webauthn/register/begin|finish`, `GET/DELETE
+/api/me/webauthn[/{id}]`). A registered passkey makes password logins
+two-step exactly like TOTP: `POST /api/login` answers `mfa_required` with
+`methods` containing `webauthn` (and `totp` when both are set up), and the
+client completes with `POST /api/login/webauthn/begin` → browser
+`navigator.credentials.get()` → `POST /api/login/webauthn/finish`. Admin
+**Reset 2FA** clears passkeys together with TOTP. WebAuthn needs HTTPS (or
+`localhost`).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_WEBAUTHN_RP_ID` | request host | Relying-party ID (the site's registrable domain, e.g. `vantyx.example`). Set it behind a reverse proxy or when several hostnames serve the UI; it must match what users have in the address bar. |
+| `VANTYX_WEBAUTHN_ORIGINS` | `<scheme>://<host>` of the request | Comma-separated allowed origins for the ceremonies. |
+| `VANTYX_WEBAUTHN_RP_NAME` | `Vantyx` | Name shown by the authenticator prompt. |
+
+Audit events: `passkey_registered`, `passkey_register_failed`,
+`passkey_deleted`, `login_webauthn_ok`, `login_webauthn_failed`,
+`passkey_clone_warning`.
+
+### API tokens (automation)
+
+Every user can create bearer tokens under **Account settings → API tokens**
+(`POST /api/me/tokens {name, scope, expires_in_days}`; the plain token is
+returned once, only its SHA-256 is stored). Send them as
+`Authorization: Bearer vtx_…` to any `/api/...` endpoint: the request runs
+as the owning user with their role and group access, without a cookie
+(non-browser clients send no `Origin`/`Referer` and pass the CSRF check).
+Scope `read` allows `GET`/`HEAD` only; `write` allows every method.
+
+A leaked token must never turn into a broader credential, so some
+endpoints stay **session-only** whatever the scope (403
+`apiTokenNotAllowedHere`, audited as `api_token_denied_path`): login /
+logout / OIDC, `/api/me/tokens`, `/api/me/password`, `/api/me/totp`,
+`/api/me/webauthn`, `/api/me/ssh-keys`, `/api/settings/backups` (a
+snapshot contains every hash) and `/api/settings/webhooks`. User
+administration (`/api/users…`) and stored SSH keys (`/api/ssh-keys…`) are
+**read-only** for tokens: creating admins, resetting passwords / 2FA or
+adding keys needs a browser session. Owners revoke their own tokens
+(`DELETE /api/me/tokens/{id}`); admins list and revoke any user's
+(`GET/DELETE /api/users/{id}/tokens[/{id}]`). Audit events
+`api_token_created`, `api_token_revoked`, `api_token_auth_failed`,
+`api_token_denied_path`.
+
+## Single sign-on (OpenID Connect)
+
+Vantyx can act as an OIDC relying party (Authorization Code flow with PKCE
+S256 and nonce). SSO is enabled when both `VANTYX_OIDC_ISSUER` and
+`VANTYX_OIDC_CLIENT_ID` are set; the login page then shows a
+"Sign in with …" button. Password login stays available.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_OIDC_ISSUER` | — | Issuer URL used for discovery (`<issuer>/.well-known/openid-configuration`), e.g. `https://keycloak.example/realms/ops`, `https://login.microsoftonline.com/<tenant>/v2.0`, `https://<org>.okta.com`. Discovery happens lazily on the first login, so an unreachable IdP does not block start-up. |
+| `VANTYX_OIDC_DISCOVERY_URL` | = issuer | Base URL whose `/.well-known/openid-configuration` is fetched when it differs from the `iss` the IdP puts in ID tokens. Cloudflare Access SaaS apps need this: `VANTYX_OIDC_ISSUER=https://<team>.cloudflareaccess.com`, `VANTYX_OIDC_DISCOVERY_URL=https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<client-id>`. Tokens are still verified against `VANTYX_OIDC_ISSUER`. |
+| `VANTYX_OIDC_CLIENT_ID` | — | Client ID registered at the IdP. |
+| `VANTYX_OIDC_CLIENT_SECRET` | — | Client secret. Optional for public clients (PKCE is always used). |
+| `VANTYX_OIDC_REDIRECT_URL` | derived | Callback URL registered at the IdP. Defaults to `<scheme>://<host>/api/auth/oidc/callback` from the incoming request (honours `X-Forwarded-Proto`); set it explicitly behind a reverse proxy. |
+| `VANTYX_OIDC_SCOPES` | `openid profile email` | Space- or comma-separated scopes. `openid` is always added. |
+| `VANTYX_OIDC_USERNAME_CLAIM` | `preferred_username` | ID-token claim mapped to the Vantyx username. Falls back to `preferred_username`, then `email`. |
+| `VANTYX_OIDC_AUTO_CREATE_USERS` | `0` | `1`/`true`: create unknown users as role `user` with an unusable random password. Otherwise unknown identities are rejected with `not_provisioned`. |
+| `VANTYX_OIDC_LINK_EXISTING_USERS` | `0` | `1`/`true`: an IdP identity that is not linked yet may attach itself to the existing local **non-admin** user whose username equals the username claim (case-insensitive). Off by default because whoever controls that claim at the IdP could then sign in as that local user; enable it only when the IdP is the sole source of truth for usernames. Admin accounts are never linked this way (link them by creating the account through SSO or keep them local), and an `email_verified: false` claim blocks email-derived matches. Refusals are audited as `oidc_link_refused` (`reason` = `link_disabled` / `admin_account` / `email_unverified`). |
+| `VANTYX_OIDC_DISPLAY_NAME` | `SSO` | Label for the login button ("Sign in with *name*"). |
+| `VANTYX_OIDC_GROUPS_CLAIM` | `groups` | ID-token claim that lists the user's IdP groups (array of strings, or objects with `name`/`id`). Add the `groups` scope to `VANTYX_OIDC_SCOPES` for IdPs that need it (Cloudflare Access, Keycloak). |
+| `VANTYX_OIDC_GROUP_MAP` | — | `idpGroup=vantyxGroup` pairs separated by `,` or `;` (repeat an IdP group to grant several Vantyx groups, e.g. `netops=net,netops=net/tokyo`). On **every** login the user's memberships are reconciled: mapped groups present in the claim are granted, groups OIDC granted earlier but no longer present are revoked. Memberships an admin added by hand are never touched; unknown Vantyx groups are skipped (audited). |
+| `VANTYX_OIDC_ADMIN_GROUPS` | — | IdP groups whose members get role `admin`; when set, OIDC users outside them are kept at `user`. The last remaining admin is never demoted (audited as `role=kept_last_admin`). |
+
+Identity mapping on each login, in order: an existing link (`issuer`,
+`sub`) → with `VANTYX_OIDC_LINK_EXISTING_USERS=1`, a local non-admin user
+whose username equals the username claim (case-insensitive; the link is
+stored on first use, audited as `oidc_user_linked`) → auto-create when
+enabled (a clashing local username is refused rather than shadowed). Links
+survive username changes at the IdP. Deleting the local user removes its
+links. Deep links (`/?next=/terminal?…`) are carried through the IdP round
+trip; only same-origin paths are honoured.
+
+An SSO login does **not** go through the local second factor (TOTP /
+passkeys): the IdP is trusted to have done its own MFA, so enforce it there
+(Cloudflare Access policies, Keycloak required actions, …).
+
+Audit events: `oidc_login_started`, `oidc_login_ok`, `oidc_login_failed`
+(with `reason`), `oidc_user_created`, `oidc_user_linked`,
+`oidc_link_refused`, `oidc_groups_synced` (`added`, `removed`, `role`,
+`unknown_groups`).
+
+### Example: Cloudflare Access (Zero Trust) as the IdP
+
+1. Zero Trust dashboard → **Access → Applications → Add an application →
+   SaaS**, protocol **OIDC**. Redirect URL:
+   `https://<vantyx-host>/api/auth/oidc/callback`. Enable **PKCE**. Keep the
+   default scopes (`openid email profile`). Assign an Access policy (who may
+   log in) and save; note the *Client ID*, *Client secret* and the
+   endpoints shown.
+2. Cloudflare ID tokens carry `sub`, `email`, `name` (no
+   `preferred_username`), so map usernames to the e-mail address:
+
+   ```
+   VANTYX_OIDC_ISSUER=https://<team>.cloudflareaccess.com
+   VANTYX_OIDC_DISCOVERY_URL=https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<client-id>
+   VANTYX_OIDC_CLIENT_ID=<client-id>
+   VANTYX_OIDC_CLIENT_SECRET=<client-secret>
+   VANTYX_OIDC_REDIRECT_URL=https://<vantyx-host>/api/auth/oidc/callback
+   VANTYX_OIDC_USERNAME_CLAIM=email
+   VANTYX_OIDC_AUTO_CREATE_USERS=1
+   VANTYX_OIDC_DISPLAY_NAME=Cloudflare
+   # optional: let Access groups drive Vantyx groups / the admin role
+   VANTYX_OIDC_SCOPES=openid profile email groups
+   VANTYX_OIDC_GROUP_MAP=NetOps=net,NetOps=net/tokyo,Helpdesk=support
+   VANTYX_OIDC_ADMIN_GROUPS=Vantyx Admins
+   ```
+
+   If the discovery document's `issuer` turns out to equal the
+   `/cdn-cgi/access/sso/oidc/<client-id>` base URL, set `VANTYX_OIDC_ISSUER`
+   to that value instead and drop `VANTYX_OIDC_DISCOVERY_URL`; the
+   `oidc_login_failed` audit event (`reason=id_token_invalid`, "issuer did
+   not match") tells you which one applies.
+3. Without auto-create, pre-create the user with the e-mail address as
+   the username; Vantyx links the Cloudflare identity to it on first login.
+
+## Time and timezone
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_TIMEZONE` | `UTC` | IANA zone name (e.g. `Asia/Tokyo`) used for **every human-facing timestamp**: container logs, the audit log file and syslog forward, the web UI and the CLI gateway all show the same clock, so an entry on screen can be matched to a log line without conversion. Timestamps are written with an explicit offset (`2026-08-30T00:07:47+09:00`); database storage stays UTC. There is deliberately no per-user or UI override. An unknown name aborts start-up. |
 
 ## Storage
 
@@ -53,6 +218,90 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 |----------|---------|-------------|
 | `VANTYX_RECORDING_EXPORT_CONVERT_TIMEOUT` | `45m` | Maximum wall time for a single GIF/MP4 export conversion job. |
 | `VANTYX_RECORDING_EXPORT_COMPLETED_TTL` | `168h` | How long completed, failed, or cancelled export jobs (and their output files) are retained in memory and on disk before automatic cleanup. |
+
+## Backup and restore
+
+**System settings → Database backup** creates consistent online snapshots
+of the SQLite database (`VACUUM INTO`, verified with
+`PRAGMA integrity_check`, SHA-256 recorded in the audit log), lists /
+downloads / deletes them, and stages restores.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_BACKUP_DIR` | `<db dir>/backups` | Where snapshots are written (`vantyx-YYYYMMDD-HHMMSS.db`). Must be on local disk like the database itself. |
+| `VANTYX_BACKUP_KEEP` | `14` | Newest snapshots to keep; older ones are pruned after each backup. |
+| `VANTYX_BACKUP_INTERVAL` | — | Go duration (≥ `1h`, e.g. `24h`) for scheduled backups; empty = manual only. |
+
+**Restore** (from a stored snapshot or an uploaded `.db` file) is validated
+(SQLite header, `integrity_check`, `users` table present) and then
+*staged* as `<db>.restore-pending`. It is applied on the next start-up,
+before any connection opens: the current database is moved to
+`<db>.pre-restore-<timestamp>` (never deleted), WAL/SHM files are dropped
+and the snapshot takes its place (`restore_applied` audit event). Restart
+with `docker compose -f docker-compose.dev.yml restart` (or `up -d`). A
+staged restore can be cancelled until then.
+
+API: `GET/POST /api/settings/backups`, `GET/DELETE
+/api/settings/backups/{name}`, `POST/DELETE /api/settings/backups/restore`.
+Audit events: `backup_created`, `backup_failed`, `backup_downloaded`,
+`backup_deleted`, `restore_staged`, `restore_cancelled`, `restore_applied`.
+
+Snapshots and staged restore files never contain the `sessions` table (it
+is emptied in the copy, the live database is untouched): a backup file must
+not double as a session-hijack kit, and restoring an old snapshot must not
+bring back sessions revoked since. Everyone simply signs in again after a
+restore. Password hashes, encrypted credentials / TOTP secrets, passkey
+public keys and API-token hashes *are* in the file — treat backups as
+secrets.
+
+Backups cover the database only. Recording files
+(`VANTYX_RECORDINGS_DIR`), TLS certificates and `.env` (including
+`VANTYX_SSH_PASSWORD_ENCRYPTION_KEY`, without which stored credentials and
+TOTP secrets in a restored database cannot be decrypted) must be backed up
+separately.
+
+## Webhook notifications
+
+Admins register HTTP endpoints under **System settings → Webhook
+notifications** (`GET`/`PUT /api/settings/webhooks`, `POST
+/api/settings/webhooks/{id}/test`). Each endpoint subscribes to audit event
+names (exact, `*`, or globs such as `access_request_*`) and receives either
+generic JSON — `{"event","time","source","fields"}` with
+`X-Vantyx-Event` and, when a secret is set, `X-Vantyx-Signature:
+sha256=<HMAC-SHA256 of the body>` — or a Slack/Mattermost-style
+`{"text": …}` message (field values are escaped for Slack mrkdwn).
+Delivery is asynchronous (bounded queue, four workers, 5 s timeout, two
+retries with backoff; 4xx responses are not retried) and never blocks
+request handling. Loopback / link-local / metadata addresses are refused
+unless `VANTYX_WEBHOOK_ALLOW_RESTRICTED_HOSTS=1` — both for literal IPs in
+the URL and for whatever a host name *resolves to* at delivery time — and
+HTTP redirects are never followed, so a hop cannot lead to an internal
+address either.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_WEBHOOK_URL` | — | Seeds one endpoint when none is stored yet (later edits in the UI take precedence). |
+| `VANTYX_WEBHOOK_EVENTS` | security defaults | Comma-separated event patterns for the seeded endpoint (default: `login_failed, login_rate_limited, oidc_login_failed, totp_reset_by_admin, user_role_update, access_request_*, session_terminated_by_admin, retention_purge`). |
+| `VANTYX_WEBHOOK_SECRET` | — | HMAC secret for the seeded endpoint. |
+| `VANTYX_WEBHOOK_FORMAT` | `generic` | `generic` or `slack` for the seeded endpoint. |
+| `VANTYX_WEBHOOK_ALLOW_RESTRICTED_HOSTS` | `0` | Allow loopback / link-local webhook targets (labs only). |
+
+## Retention
+
+Age-based purge, all opt-in (empty or `0` = keep forever). The job runs a
+minute after start-up and then hourly; every run that removes something is
+audited as `retention_purge`, and admins can inspect the policy / trigger a
+run under **System settings → Retention policy** (`GET
+/api/settings/retention`, `POST /api/settings/retention/run`).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_RECORDING_RETENTION` | — | Delete recordings whose session ended longer ago than this (Go duration, e.g. `2160h` = 90 days): the row, the `.cast` / `.mp4` file and any export artefacts. Recordings still in progress are never touched. |
+| `VANTYX_AUDIT_RETENTION` | — | Delete `audit_logs` rows older than this. The audit log *file* / syslog forward are unaffected. |
+| `VANTYX_COMMAND_LOG_RETENTION` | = audit | Delete `command_logs` rows older than this. |
+| `VANTYX_MEMBERSHIP_EXPIRED_RETENTION` | `720h` | How long expired group memberships stay listed (greyed out) before the row is removed. |
+
+Values below one hour are raised to one hour.
 
 ## Access store performance tuning
 
@@ -73,7 +322,31 @@ Naming convention: `VANTYX_<SUBSYSTEM>_<NAME>`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VANTYX_SSH_LISTEN` | — | When set (for example `:2222`), the binary starts the CLI SSH gateway on this address. Leave unset to disable the gateway. |
+| `VANTYX_SSH_LISTEN` | — | When set (for example `:2222`), the binary starts the CLI SSH gateway on this address. Leave unset to disable the gateway. Authentication is **public-key only**: password and keyboard-interactive auth are not offered, so a leaked password cannot bypass the web UI's second factor. Admins register keys per user under **Users → Public keys** (`POST /api/users/{id}/ssh-keys`). |
+
+## Metrics (Prometheus)
+
+`GET /metrics` exposes Prometheus text-format metrics: HTTP requests by
+method / status class and latency, logins by outcome, audit and
+security-relevant event counters, live sessions by kind, open sharing
+rooms, users / targets / groups / recordings totals, pending access
+requests, export jobs by state, uptime and Go runtime basics. Nothing
+user-identifying is exported.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VANTYX_METRICS_TOKEN` | — | Bearer token Prometheus presents (`Authorization: Bearer …`). Without it only an admin session cookie can read `/metrics`. |
+
+Example scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: vantyx
+    scheme: https
+    tls_config: { insecure_skip_verify: true }   # self-signed certificate
+    authorization: { credentials: "<VANTYX_METRICS_TOKEN>" }
+    static_configs: [{ targets: ["vantyx.example:443"] }]
+```
 
 ## Audit forwarder
 

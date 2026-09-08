@@ -42,8 +42,18 @@ func TestManager_StartAndStopSession(t *testing.T) {
 	if got := len(m.ActiveIDs()); got != 1 {
 		t.Fatalf("expected 1 active session, got %d", got)
 	}
+	active := m.ActiveSessionsForUser("")
+	if len(active) != 1 {
+		t.Fatalf("ActiveSessionsForUser(\"\") = %d, want 1", len(active))
+	}
+	active = m.ActiveSessionsForUser("alice")
+	if len(active) != 0 {
+		t.Fatalf("ActiveSessionsForUser(alice) = %d, want 0", len(active))
+	}
 
-	m.Stop("s1")
+	if clean := m.Stop("s1"); !clean {
+		t.Fatalf("expected clean stop, got false")
+	}
 
 	if got := len(m.ActiveIDs()); got != 0 {
 		t.Fatalf("expected 0 active sessions after stop, got %d", got)
@@ -97,10 +107,43 @@ func TestManager_TouchUpdatesLastSeen(t *testing.T) {
 func TestManager_StopUnknownIDNoOp(t *testing.T) {
 	m := NewManager()
 	// Stop with non-existent ID must not block or panic.
-	m.Stop("nonexistent")
+	if clean := m.Stop("nonexistent"); !clean {
+		t.Fatalf("expected Stop on an unknown ID to report clean (true), got false")
+	}
 	if n := len(m.ActiveIDs()); n != 0 {
 		t.Fatalf("expected 0 active sessions, got %d", n)
 	}
+}
+
+// TestManager_StopReportsFalseWhenGoroutineHangs guards the fix for a
+// session goroutine that doesn't react to context cancellation (e.g. its
+// own cleanup call hung): Stop() must still force-remove the session
+// after stopTimeout instead of blocking forever, and must report false
+// so callers can audit/alert on the leak instead of it staying silent.
+func TestManager_StopReportsFalseWhenGoroutineHangs(t *testing.T) {
+	m := NewManager()
+	m.stopTimeout = 20 * time.Millisecond
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	_, err := m.Start("hung", StartOptions{}, func(ctx context.Context, _ *Session) {
+		close(started)
+		// Deliberately ignores ctx.Done() to simulate a goroutine
+		// blocked in a call that isn't context-aware.
+		<-release
+	})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	<-started
+
+	if clean := m.Stop("hung"); clean {
+		t.Fatalf("expected Stop to report false for a goroutine that outlives stopTimeout")
+	}
+	if n := len(m.ActiveIDs()); n != 0 {
+		t.Fatalf("expected session removed from the active set despite the goroutine still running, got %d active", n)
+	}
+	close(release) // let the leaked goroutine finish so the test doesn't leak past its own lifetime
 }
 
 func TestManager_IsIdle(t *testing.T) {
@@ -143,5 +186,40 @@ func TestManager_IdleWarnDisabled(t *testing.T) {
 
 	if m.IsIdle(sess) {
 		t.Fatal("expected IsIdle false when idleWarnAfter is 0")
+	}
+}
+
+// A session pinned via SetKeep is never reported idle, even past the
+// threshold; unpinning restores normal idle detection.
+func TestManager_KeepSuppressesIdle(t *testing.T) {
+	m := NewManager()
+	m.SetIdleWarnAfter(5 * time.Minute)
+	now := time.Now()
+	m.now = func() time.Time { return now }
+
+	sess, err := m.Start("keep", StartOptions{}, func(ctx context.Context, _ *Session) { <-ctx.Done() })
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer m.Stop("keep")
+
+	m.now = func() time.Time { return now.Add(6 * time.Minute) }
+	if !m.IsIdle(sess) {
+		t.Fatal("precondition: expected idle after threshold")
+	}
+	if !m.SetKeep("keep", true) {
+		t.Fatal("SetKeep returned false for a live session")
+	}
+	if m.IsIdle(sess) || !sess.Keep() {
+		t.Fatal("expected pinned session to be reported non-idle")
+	}
+	if m.SetKeep("missing", true) {
+		t.Fatal("SetKeep should report false for an unknown session")
+	}
+	if !m.SetKeep("keep", false) {
+		t.Fatal("SetKeep unpin returned false")
+	}
+	if !m.IsIdle(sess) || sess.Keep() {
+		t.Fatal("expected idle detection to resume after unpin")
 	}
 }

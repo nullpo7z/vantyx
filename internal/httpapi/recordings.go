@@ -356,7 +356,18 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 			defer serveFile.Close()
 			w.Header().Set("Content-Type", "video/mp4")
 			setAttachmentDisposition(w, filepath.Base(mediaPath))
-			_, _ = io.Copy(w, serveFile)
+			// Serve via ServeContent rather than io.Copy so the response
+			// carries Content-Length and honors Range requests. The
+			// browser <video> element needs both to make the timeline
+			// seekable (with a plain streamed body Chrome reports
+			// seekable=[0,0] and the user cannot scrub an RDP/VNC
+			// recording at all) and to know the total size up front.
+			fi, statErr := serveFile.Stat()
+			if statErr != nil {
+				writeInternalError(w, statErr)
+				return
+			}
+			http.ServeContent(w, r, filepath.Base(mediaPath), fi.ModTime(), serveFile)
 			return
 		case "gif":
 			job, err := a.enqueueRecordingExport(userID, recordingID, "gif", mediaPath)

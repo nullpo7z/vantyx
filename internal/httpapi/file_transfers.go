@@ -142,6 +142,8 @@ func (a *App) handleFileTransfersList(w http.ResponseWriter, r *http.Request) {
 
 // handleFileTransferGet returns a single job's snapshot. Only the
 // owner may read it.
+// handleFileTransferGet returns one job. Admins may read any user's job;
+// non-admins only their own.
 func (a *App) handleFileTransferGet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSONErrorKey(w, r, "common.methodNotAllowed", http.StatusMethodNotAllowed)
@@ -153,8 +155,8 @@ func (a *App) handleFileTransferGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "transfer_id")
-	j, ok := a.FileTransferManager.Get(id)
-	if !ok || j.UserID != userID {
+	j, ok := a.fileTransferJobForUser(userID, id)
+	if !ok {
 		writeJSONErrorKey(w, r, "common.notFound", http.StatusNotFound)
 		return
 	}
@@ -206,8 +208,8 @@ func (a *App) handleFileTransferContent(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	id := chi.URLParam(r, "transfer_id")
-	j, ok := a.FileTransferManager.Get(id)
-	if !ok || j.UserID != userID {
+	j, ok := a.fileTransferJobForUser(userID, id)
+	if !ok {
 		writeJSONErrorKey(w, r, "common.notFound", http.StatusNotFound)
 		return
 	}
@@ -427,4 +429,20 @@ func (a *App) handleFileTransferUpload(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		a.runUploadJob(ctx, job, target, backend, pathParam, tempPath, transfer)
 	}()
+}
+
+// fileTransferJobForUser returns a job when userID owns it or is admin.
+func (a *App) fileTransferJobForUser(userID, transferID string) (*filetransfer.Job, bool) {
+	j, ok := a.FileTransferManager.Get(transferID)
+	if !ok {
+		return nil, false
+	}
+	if j.UserID == userID {
+		return j, true
+	}
+	u, err := a.UserStore.GetByID(userID)
+	if err == nil && u != nil && u.Role == auth.RoleAdmin {
+		return j, true
+	}
+	return nil, false
 }

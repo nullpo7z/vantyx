@@ -25,11 +25,15 @@ export function buildAppShellHTML() {
 
   return `
     <div class="flex-1 flex flex-col">
-      <header class="text-white shadow z-10 shrink-0">
+      <header class="text-white shadow z-10 shrink-0 vantyx-app-header">
         <div class="vantyx-header-inner">
           <div class="vantyx-header-start">
-            <h1 class="vantyx-brand">${t('app.appName')}</h1>
-            <nav class="vantyx-nav" aria-label="${t('common.mainMenuLabel')}">
+            <h1 class="vantyx-brand"><a href="#" id="nav-brand" class="vantyx-brand-link" aria-label="${t('app.appName')}"><img src="/icon.svg" alt="" width="26" height="26" class="vantyx-brand-icon" decoding="async" /><span>${t('app.appName')}</span></a></h1>
+            <button type="button" id="nav-menu-toggle" class="vantyx-nav-toggle" aria-label="${t('common.mainMenuLabel')}" aria-controls="primary-nav" aria-expanded="false">
+              <svg class="vantyx-nav-toggle-open" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg>
+              <svg class="vantyx-nav-toggle-close" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+            <nav id="primary-nav" class="vantyx-nav" aria-label="${t('common.mainMenuLabel')}">
               <a href="#" id="nav-targets" class="vantyx-nav-link">${t('nav.home')}</a>
               <a href="#" id="nav-sessions" class="vantyx-nav-link hidden">${t('nav.sessions')}</a>
               <a href="#" id="nav-recordings" class="vantyx-nav-link hidden">${t('nav.recordings')}</a>
@@ -38,6 +42,8 @@ export function buildAppShellHTML() {
               <a href="#" id="nav-users" class="vantyx-nav-link hidden">${t('nav.users')}</a>
               <a href="#" id="nav-credentials" class="vantyx-nav-link hidden">${t('nav.credentials')}</a>
               <a href="#" id="nav-audit" class="vantyx-nav-link hidden">${t('nav.audit')}</a>
+              <a href="#" id="nav-access-requests" class="vantyx-nav-link hidden">${t('nav.accessRequests')}</a>
+              <a href="#" id="nav-system" class="vantyx-nav-link hidden">${t('nav.system')}</a>
               <a href="#" id="nav-settings" class="vantyx-nav-link hidden">${t('nav.settings')}</a>
               <a href="/docs" id="nav-api-ref" target="_blank" rel="noopener noreferrer" class="vantyx-nav-link hidden">${t('nav.apiRef')}</a>
             </nav>
@@ -59,7 +65,7 @@ export function buildAppShellHTML() {
           </div>
         </div>
       </header>
-      <main class="flex-1 overflow-auto p-6 flex flex-col items-center" id="main-content">
+      <main class="flex-1 overflow-auto p-3 sm:p-6 flex flex-col items-center" id="main-content">
         <div class="w-full max-w-5xl flex-1 flex flex-col">
           <p class="text-slate-500">${t('common.loading')}</p>
         </div>

@@ -22,6 +22,7 @@ var httpapiTestDBTemplate []byte
 //     production default was bumped above bcrypt.DefaultCost (L-3).
 func TestMain(m *testing.M) {
 	_ = os.Setenv("VANTYX_ALLOW_PLAINTEXT_SECRETS", "1")
+	_ = os.Setenv("VANTYX_ALLOW_RESTRICTED_HOSTS", "1")
 	auth.SetBcryptCostForTests(bcrypt.MinCost)
 	// Build a ready-to-use SQLite template once. Individual tests copy it
 	// into their TempDir, avoiding repeated schema migrations.

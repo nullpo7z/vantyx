@@ -101,6 +101,9 @@ func (s *auditSink) write(entry AuditEntry) {
 		}
 	}
 
+	// Webhook notifications (best-effort, async, filtered per endpoint).
+	globalWebhooks.dispatch(entry)
+
 	// Forward to external SIEM (best-effort).
 	s.mu.Lock()
 	fwd := s.forwarder
@@ -169,7 +172,7 @@ func (loggingAuditAdapter) Write(_ context.Context, evt logging.AuditEvent) {
 		return
 	}
 	sink.write(AuditEntry{
-		Time:   time.Now().UTC(),
+		Time:   time.Now(), // server zone (VANTYX_TIMEZONE); the DB insert above converts to UTC
 		Event:  evt.Event,
 		Fields: auditFields(evt.Fields),
 	})

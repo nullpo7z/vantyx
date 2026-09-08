@@ -3,6 +3,7 @@ package access
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // UserID identifies a user (e.g. session user).
@@ -36,6 +37,15 @@ type AccessGroup struct {
 	Name string
 }
 
+// Membership is one user_groups row as admins see it: ExpiresAt is nil
+// for permanent access. Expired memberships grant nothing but are
+// listed (Expired=true) so the reason for a lost permission is visible.
+type Membership struct {
+	UserID    UserID
+	ExpiresAt *time.Time
+	Expired   bool
+}
+
 // AccessGroupStore defines the behavior required for managing access groups
 // and their relationships to users and targets.
 // Implementations may derive the acting principal (who performed the change)
@@ -49,14 +59,49 @@ type AccessGroupStore interface {
 	// Delete removes an access group. Implementations should define whether this is
 	// a physical delete or a soft delete, and document the behavior.
 	Delete(ctx context.Context, id GroupID) error
+	// AddUserToGroup grants permanent membership (idempotent; clears an
+	// existing expiry).
 	AddUserToGroup(ctx context.Context, userID UserID, groupID GroupID) error
+	// AddUserToGroupUntil grants membership that stops granting access at
+	// expiresAt (nil = permanent). Re-adding an existing member updates
+	// the expiry.
+	AddUserToGroupUntil(ctx context.Context, userID UserID, groupID GroupID, expiresAt *time.Time) error
 	RemoveUserFromGroup(ctx context.Context, userID UserID, groupID GroupID) error
+	// MembershipsForGroup lists every membership row of the group,
+	// including expired ones, for the management UI.
+	MembershipsForGroup(ctx context.Context, groupID GroupID) ([]Membership, error)
+	// PurgeExpiredMemberships deletes memberships that expired before
+	// olderThan and returns how many rows went.
+	PurgeExpiredMemberships(ctx context.Context, olderThan time.Time) (int64, error)
+	// UserIDsForGroup returns the direct, non-expired members of the
+	// group. Members of ancestor groups also have access; see
+	// ancestorGroupIDs in httpapi for callers that need everyone with
+	// access through the group. The management UI uses
+	// MembershipsForGroup (which includes expired rows) instead.
 	UserIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]UserID, error)
 	AddTargetToGroup(ctx context.Context, groupID GroupID, targetID TargetID) error
 	// RemoveTargetFromGroup revokes the group's access to the target.
 	RemoveTargetFromGroup(ctx context.Context, groupID GroupID, targetID TargetID) error
+	// GroupIDsForTarget returns every group the target is directly
+	// assigned to via group_targets, independent of any user's
+	// visibility. Used to move a target between groups (remove from all
+	// current groups, then add to the new one).
+	GroupIDsForTarget(ctx context.Context, targetID TargetID) ([]GroupID, error)
+	// GroupIDsForUser returns the groups the user can see: the ones they
+	// are a member of or reach by tag, plus every descendant of those
+	// (group access is inherited down the "parent/child" ID hierarchy).
 	GroupIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]GroupID, error)
+	// AllGroupIDs returns every group ID (sorted, paginated via opts)
+	// regardless of membership. Only for admin management views, which
+	// bypass the membership/tag visibility rules that GroupIDsForUser
+	// enforces for ordinary users.
+	AllGroupIDs(ctx context.Context, opts *ListOpts) ([]GroupID, error)
+	// TargetIDsForGroup returns the targets assigned directly to the
+	// group (not those of its descendants; the tree lists them under
+	// their own group).
 	TargetIDsForGroup(ctx context.Context, groupID GroupID, opts *ListOpts) ([]TargetID, error)
+	// TargetIDsForUser returns every target the user may access: targets
+	// of their groups and of all descendant groups, plus tag matches.
 	TargetIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]TargetID, error)
 	// UserIDsForTarget returns user IDs that can access the target (group
 	// membership or matching tags). Used when listing invitation candidates.
@@ -72,4 +117,13 @@ type AccessGroupStore interface {
 var (
 	ErrGroupExists   = errors.New("access group already exists")
 	ErrGroupNotFound = errors.New("access group not found")
+	// ErrGroupNotEmpty is returned by Delete when the group still has
+	// targets directly assigned to it, or still has child groups (by
+	// the "parent/child" ID naming convention). Deleting it anyway
+	// would silently orphan those targets: group_targets rows cascade-
+	// delete with the group, so a target with no other group
+	// assignment would vanish from every tree view without being
+	// deleted itself. The caller must move or remove the targets /
+	// child groups first.
+	ErrGroupNotEmpty = errors.New("access group still has targets or child groups assigned")
 )

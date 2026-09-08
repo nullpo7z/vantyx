@@ -14,6 +14,9 @@ import (
 // or ("", err) when a storage error (e.g. database locked) occurs. Callers that need to return 500 on
 // storage errors should use this and call writeInternalError(w, err) when err != nil.
 func (a *App) currentUserIDWithError(r *http.Request) (string, error) {
+	if tok, ok := apiTokenFromContext(r); ok {
+		return tok.userID, nil
+	}
 	c, err := r.Cookie("vantyx_session")
 	if err != nil || c.Value == "" {
 		// No session cookie is "unauthenticated", not an error.
@@ -25,6 +28,11 @@ func (a *App) currentUserIDWithError(r *http.Request) (string, error) {
 			return "", nil
 		}
 		return "", err
+	}
+	// A disabled account is unauthenticated even if a session survived
+	// (sessions are revoked on disable, this is the belt to those braces).
+	if u, err := a.UserStore.GetByID(sess.UserID); err == nil && u != nil && u.Disabled {
+		return "", nil
 	}
 	return sess.UserID, nil
 }
@@ -42,32 +50,40 @@ func (a *App) currentUserID(r *http.Request) string {
 	return userID
 }
 
-// forcePasswordChangeMiddleware blocks all non-bootstrap requests
-// while the caller's account is flagged for forced rotation. Without
-// this guard the SPA's UI hint alone would leave the API reachable
-// (CWE-1188 / ASVS V2.10.4). The whitelist below covers the calls the
-// rotation flow itself needs:
+// forcePasswordChangeMiddleware blocks authenticated API and WebSocket
+// requests while the caller's account is flagged for forced rotation.
+// Without this guard the SPA's UI hint alone would leave sensitive
+// endpoints reachable (CWE-1188 / ASVS V2.10.4). The whitelist covers
+// the calls the rotation flow itself needs:
 //
 //   - GET /api/me               – display the "you must change" banner
 //   - POST /api/me/password     – the rotation itself
 //   - POST /api/logout          – escape hatch
-//   - GET /healthz, /api/spec   – infra / docs (no user data)
+//   - GET /healthz              – infra probe (no user data)
+//
+// GET /api/spec is intentionally *not* whitelisted: admins must rotate
+// before reading the OpenAPI document.
 func (a *App) forcePasswordChangeMiddleware(next http.Handler) http.Handler {
 	whitelist := map[string]struct{}{
-		"/api/me":          {},
-		"/api/me/password": {},
-		"/api/logout":      {},
-		"/api/login":       {},
-		"/healthz":         {},
+		"/api/me":                    {},
+		"/api/me/password":           {},
+		"/api/logout":                {},
+		"/api/login":                 {},
+		"/api/login/totp":            {},
+		"/api/login/webauthn/begin":  {},
+		"/api/login/webauthn/finish": {},
+		"/api/auth/methods":          {},
+		"/api/auth/oidc/login":       {},
+		"/api/auth/oidc/callback":    {},
+		"/healthz":                   {},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Static assets and SSE / WS handshakes are gated by their own
-		// auth checks; only consult the flag for /api/*.
-		if !strings.HasPrefix(r.URL.Path, "/api/") {
+		path := r.URL.Path
+		if !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/ws/") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if _, ok := whitelist[r.URL.Path]; ok {
+		if _, ok := whitelist[path]; ok {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -117,6 +133,27 @@ func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+// currentUserIsAdmin reports whether the authenticated user has the admin
+// role. Unlike requireAdmin it writes nothing to w: it is for handlers
+// that serve every authenticated user but widen what admins can see
+// (management views bypass membership/tag visibility). An unauthenticated
+// or unknown user is reported as not-admin with a nil error so callers
+// fall through to their normal, more restrictive path.
+func (a *App) currentUserIsAdmin(r *http.Request) (bool, error) {
+	userID, err := a.currentUserIDWithError(r)
+	if err != nil {
+		return false, err
+	}
+	if userID == "" || a.UserStore == nil {
+		return false, nil
+	}
+	u, err := a.UserStore.GetByID(userID)
+	if err != nil || u == nil {
+		return false, nil
+	}
+	return u.Role == auth.RoleAdmin, nil
 }
 
 // requireGroupMemberOrAdmin enforces that the current user is either an

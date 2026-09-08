@@ -95,6 +95,17 @@ func newRecordingExportJobID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// countByState tallies jobs per state for the metrics exporter.
+func (r *recordingExportRegistry) countByState() map[string]int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := map[string]int{}
+	for _, j := range r.jobs {
+		out[string(j.State)]++
+	}
+	return out
+}
+
 func (r *recordingExportRegistry) get(id string) (*recordingExportJob, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -110,6 +121,22 @@ func (r *recordingExportRegistry) remove(id string) (*recordingExportJob, bool) 
 		delete(r.jobs, id)
 	}
 	return j, ok
+}
+
+// removeForRecording drops every export job derived from recordingID and
+// returns them so the caller can cancel running ones and delete their
+// output files. Used when the source recording itself is deleted.
+func (r *recordingExportRegistry) removeForRecording(recordingID string) []*recordingExportJob {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []*recordingExportJob
+	for id, j := range r.jobs {
+		if j.RecordingID == recordingID {
+			out = append(out, j)
+			delete(r.jobs, id)
+		}
+	}
+	return out
 }
 
 func (r *recordingExportRegistry) listForViewer(userID string, includeAll bool) []*recordingExportJob {

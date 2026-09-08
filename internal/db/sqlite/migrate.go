@@ -265,6 +265,93 @@ func Migrate(db *sql.DB) error {
 			FOREIGN KEY (ssh_key_id) REFERENCES ssh_keys(id) ON DELETE SET NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_credential_identities_label ON credential_identities(label)`,
+		// Per-user TOTP second factor. secret_enc is the base32 secret
+		// encrypted with VANTYX_SSH_PASSWORD_ENCRYPTION_KEY; enabled=0
+		// means enrolment started but the first code was not confirmed
+		// yet. recovery_codes is a JSON array of SHA-256 hex digests of
+		// unused one-time recovery codes.
+		`CREATE TABLE IF NOT EXISTS user_totp (
+			user_id TEXT PRIMARY KEY,
+			secret_enc TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			recovery_codes TEXT NOT NULL DEFAULT '[]',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			confirmed_at TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		// OIDC identities linked to local users (issuer + subject is the
+		// stable identity; usernames/emails at the IdP may change).
+		`CREATE TABLE IF NOT EXISTS user_oidc_links (
+			issuer TEXT NOT NULL,
+			subject TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (issuer, subject),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_oidc_links_user ON user_oidc_links(user_id)`,
+		// Group memberships granted by the IdP's groups claim (see
+		// VANTYX_OIDC_GROUP_MAP). Tracked separately from user_groups so a
+		// login that no longer carries a group revokes only what OIDC
+		// granted, never memberships an admin added by hand.
+		// Access requests: a user asks for (time-limited) membership of a
+		// group; an admin approves (creating the membership) or denies.
+		`CREATE TABLE IF NOT EXISTS access_requests (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			group_id TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			duration_seconds INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at INTEGER NOT NULL,
+			decided_at INTEGER,
+			decided_by TEXT,
+			decision_note TEXT,
+			expires_at INTEGER,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_access_requests_user ON access_requests(user_id, created_at)`,
+		// API tokens (bearer credentials for automation); only the SHA-256
+		// of the token is stored.
+		// WebAuthn / passkey credentials (second factor); public keys only.
+		`CREATE TABLE IF NOT EXISTS user_webauthn_credentials (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			public_key BLOB NOT NULL,
+			attestation_type TEXT NOT NULL DEFAULT '',
+			aaguid BLOB,
+			sign_count INTEGER NOT NULL DEFAULT 0,
+			transports TEXT NOT NULL DEFAULT '[]',
+			backup_eligible INTEGER NOT NULL DEFAULT 0,
+			backed_up INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			last_used_at INTEGER,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_webauthn_user ON user_webauthn_credentials(user_id)`,
+		`CREATE TABLE IF NOT EXISTS api_tokens (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			token_hash TEXT NOT NULL UNIQUE,
+			prefix TEXT NOT NULL,
+			scope TEXT NOT NULL DEFAULT 'read',
+			created_at INTEGER NOT NULL,
+			expires_at INTEGER,
+			last_used_at INTEGER,
+			revoked_at INTEGER,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id)`,
+		`CREATE TABLE IF NOT EXISTS user_oidc_groups (
+			user_id TEXT NOT NULL,
+			group_id TEXT NOT NULL,
+			PRIMARY KEY (user_id, group_id),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (group_id) REFERENCES access_groups(id) ON DELETE CASCADE
+		)`,
 	}
 
 	for _, stmt := range stmts {
@@ -337,6 +424,11 @@ func applyAdditiveColumnPatches(ctx context.Context, db *sql.DB) error {
 		{"users", "role", `ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`},
 		{"users", "force_password_change", `ALTER TABLE users ADD COLUMN force_password_change INTEGER NOT NULL DEFAULT 0`},
 		{"users", "locale", `ALTER TABLE users ADD COLUMN locale TEXT NOT NULL DEFAULT ''`},
+		// Suspended accounts keep their rows but cannot authenticate.
+		{"users", "disabled", `ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`},
+		// Optional membership expiry (unix seconds, NULL = permanent). Expired
+		// rows grant nothing; they stay visible to admins until purged.
+		{"user_groups", "expires_at", `ALTER TABLE user_groups ADD COLUMN expires_at INTEGER`},
 		{"recordings", "session_name", `ALTER TABLE recordings ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`},
 		{"recordings", "session_description", `ALTER TABLE recordings ADD COLUMN session_description TEXT NOT NULL DEFAULT ''`},
 		{"targets", "sftp_enabled", `ALTER TABLE targets ADD COLUMN sftp_enabled INTEGER NOT NULL DEFAULT 1`},
@@ -344,6 +436,8 @@ func applyAdditiveColumnPatches(ctx context.Context, db *sql.DB) error {
 		{"targets", "tftp_enabled", `ALTER TABLE targets ADD COLUMN tftp_enabled INTEGER NOT NULL DEFAULT 0`},
 		{"targets", "ssh_host_key_fingerprint", `ALTER TABLE targets ADD COLUMN ssh_host_key_fingerprint TEXT NOT NULL DEFAULT ''`},
 		{"targets", "ssh_host_key_insecure_skip_verify", `ALTER TABLE targets ADD COLUMN ssh_host_key_insecure_skip_verify INTEGER NOT NULL DEFAULT 0`},
+		{"targets", "credential_identity_id", `ALTER TABLE targets ADD COLUMN credential_identity_id TEXT NOT NULL DEFAULT ''`},
+		{"targets", "ssh_key_id", `ALTER TABLE targets ADD COLUMN ssh_key_id TEXT NOT NULL DEFAULT ''`},
 		{"session_invitations", "max_uses", `ALTER TABLE session_invitations ADD COLUMN max_uses INTEGER`},
 		{"session_invitations", "use_count", `ALTER TABLE session_invitations ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0`},
 		{"session_invitations", "invite_group_id", `ALTER TABLE session_invitations ADD COLUMN invite_group_id TEXT`},

@@ -165,6 +165,20 @@ func StartServerIfNeeded(ctx context.Context, store access.TargetStore) {
 	}()
 }
 
+// Current returns the process-wide embedded TFTP server instance, or nil if
+// no TFTP target currently exists (server not started). Callers must not
+// retain the pointer across the server's lifecycle; always re-fetch via
+// Current() at the point of use, since NotifyTargetDeleted replaces it with
+// nil when the last TFTP target is removed.
+func Current() *Server {
+	defaultController.mu.Lock()
+	defer defaultController.mu.Unlock()
+	if !defaultController.running {
+		return nil
+	}
+	return defaultController.server
+}
+
 // NotifyTargetDeleted should be called after a TFTP target has been deleted
 // successfully.
 func NotifyTargetDeleted(proto access.Protocol) {

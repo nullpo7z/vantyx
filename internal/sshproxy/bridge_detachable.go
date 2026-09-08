@@ -41,6 +41,7 @@ type sshDetachableBridge struct {
 	closeStdin     func()
 	attachCh       <-chan session.AttachReq
 	externalResize <-chan TerminalSize
+	resizeRecorder ResizeRecorder
 }
 
 func newSSHDetachableBridge(
@@ -54,6 +55,7 @@ func newSSHDetachableBridge(
 	stdinRecorder StdinRecorder,
 	attachCh <-chan session.AttachReq,
 	externalResize <-chan TerminalSize,
+	resizeRecorder ResizeRecorder,
 ) *sshDetachableBridge {
 	stdinCh := make(chan []byte, 256)
 	var stdinCloseOnce sync.Once
@@ -74,6 +76,7 @@ func newSSHDetachableBridge(
 		closeStdin:     closeStdin,
 		attachCh:       attachCh,
 		externalResize: externalResize,
+		resizeRecorder: resizeRecorder,
 	}
 	return b
 }
@@ -186,6 +189,52 @@ func (b *sshDetachableBridge) SetWriter(userID string) {
 	}
 }
 
+// demoteOtherWritersLocked downgrades every currently-attached client
+// except newEntry to read-only. Called whenever a new writer attaches
+// (browser or SSH console) so the single-active-writer invariant holds
+// even outside the explicit sharing/invite flow -- e.g. resuming the
+// same session from the SSH CLI while it's already open in a browser
+// tab (or vice versa) must not let both sides drive stdin at once.
+// Caller must hold clientMu.
+func (b *sshDetachableBridge) demoteOtherWritersLocked(newEntry *clientEntry) {
+	for c := range b.clients {
+		if c != newEntry {
+			c.canWrite = false
+		}
+	}
+}
+
+// DetachUser closes every attached client owned by userID.
+func (b *sshDetachableBridge) DetachUser(userID string) {
+	if userID == "" {
+		return
+	}
+	b.clientMu.Lock()
+	toClose := make([]*clientEntry, 0)
+	for c := range b.clients {
+		if c.userID == userID {
+			toClose = append(toClose, c)
+		}
+	}
+	for _, c := range toClose {
+		delete(b.clients, c)
+	}
+	b.clientMu.Unlock()
+	for _, c := range toClose {
+		// Tell the client *why* on the connection itself before closing
+		// it. The out-of-band SSE notification can lose the race with the
+		// close (the page then shows a generic "disconnected" screen), but
+		// a frame on this socket is always observed before onclose.
+		_ = c.w.WriteText([]byte(kickedEndMsg))
+		_ = c.w.Close()
+	}
+}
+
+// kickedEndMsg is the session_ended frame sent to a client that the
+// session owner removed. The SPA maps it to the "you were removed"
+// screen instead of the generic session-ended one.
+const kickedEndMsg = "session_ended: kicked"
+
 func (b *sshDetachableBridge) runExternalResize() {
 	if b.externalResize == nil || b.windowChange == nil {
 		return
@@ -201,6 +250,9 @@ func (b *sshDetachableBridge) runExternalResize() {
 				}
 				if sz.Cols > 0 && sz.Rows > 0 {
 					_ = b.windowChange(sz.Cols, sz.Rows)
+					if b.resizeRecorder != nil {
+						b.resizeRecorder.RecordResize(sz.Cols, sz.Rows)
+					}
 				}
 			}
 		}
@@ -212,6 +264,9 @@ func (b *sshDetachableBridge) attachWebSocket(conn *websocket.Conn, mode session
 	w := &wsWriterAdapter{conn}
 	entry := &clientEntry{w: w, canWrite: mode != session.AttachModeViewer, userID: userID}
 	b.clientMu.Lock()
+	if entry.canWrite {
+		b.demoteOtherWritersLocked(entry)
+	}
 	b.clients[entry] = struct{}{}
 	b.clientMu.Unlock()
 	replay := b.output.Bytes()
@@ -261,6 +316,9 @@ func (b *sshDetachableBridge) readWebSocket(entry *clientEntry, conn *websocket.
 				b.clientMu.Unlock()
 				if canWrite {
 					_ = b.windowChange(rm.Cols, rm.Rows)
+					if b.resizeRecorder != nil {
+						b.resizeRecorder.RecordResize(rm.Cols, rm.Rows)
+					}
 				}
 				continue
 			}
@@ -286,6 +344,9 @@ func (b *sshDetachableBridge) readWebSocket(entry *clientEntry, conn *websocket.
 func (b *sshDetachableBridge) attachStream(sa *StreamAttach, mode session.AttachMode, userID string) {
 	entry := &clientEntry{w: sa, canWrite: mode != session.AttachModeViewer, userID: userID}
 	b.clientMu.Lock()
+	if entry.canWrite {
+		b.demoteOtherWritersLocked(entry)
+	}
 	b.clients[entry] = struct{}{}
 	b.clientMu.Unlock()
 	replay := b.output.Bytes()

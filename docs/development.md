@@ -120,8 +120,10 @@ file for production-style runs.
 **Typical flow**
 
 1. Develop on `dev` (or branch off `dev`, then merge back via PR).
-2. When ready to release, open a PR **`dev` → `main`**, wait for CI, merge.
-3. After `main` is updated, build and push the Docker image from `main` (`:latest` and the short commit SHA tag).
+2. Finalize [`CHANGELOG.md`](../CHANGELOG.md) on `dev` (move `[Unreleased]` → `[X.Y.Z]`).
+3. Open a PR **`dev` → `main`**, wait for CI, merge.
+4. On `main`: tag `vX.Y.Z`, create a [GitHub Release](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository) with that changelog section as the notes.
+5. Build and push Docker from `main`: `:latest`, short commit SHA (`:abc1234`), and `:vX.Y.Z`.
 
 Do not merge feature branches directly into `main`; land on `dev` first so integration history stays linear.
 
@@ -204,15 +206,63 @@ Add domain-specific keys (`recording_id`, `transfer_id`, `host`, …) as
 needed; pick the most specific name and document it next to the
 emitting code.
 
+## OWASP ZAP（脆弱性診断）
+
+セキュリティヘッダは `internal/httpapi/security_headers.go` で全 HTTP ルートに付与されます（静的資産・`/healthz` 含む）。本番は **HTTPS `:8443`** で診断してください（`:8080` は HTTP→HTTPS リダイレクト専用）。
+
+```bash
+export VANTYX_ZAP_PASSWORD='admin-password'
+chmod +x scripts/zap/*.sh
+
+# 未認証ベースライン
+ZAP_TARGET=https://host.docker.internal:8443 ./scripts/zap/run-baseline.sh
+
+# 認証済み（/api/* を含む）
+./scripts/zap/run-baseline-auth.sh
+
+# OpenAPI（セーフモード既定）
+./scripts/zap/run-api-scan.sh
+```
+
+詳細: [`scripts/zap/README.ja.md`](../scripts/zap/README.ja.md)。レポートは `zap-reports/` に出力されます。
+
 ## Releases
 
 Releases follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
-[Semantic Versioning](https://semver.org/). To cut one:
+[Semantic Versioning](https://semver.org/). Each production cut produces **three
+artifacts** from the same `main` commit, all published by the
+[`Release` workflow](../.github/workflows/release.yml) -- nothing is pushed
+to Docker Hub from a developer machine:
 
-1. Move the entries under `Unreleased` in [`CHANGELOG.md`](../CHANGELOG.md)
-   into a new dated `X.Y.Z` section.
-2. Tag the commit `vX.Y.Z`.
-3. Draft a GitHub Release with the changelog section as the description.
+| Artifact | Example |
+|----------|---------|
+| Git tag + GitHub Release | `v0.4.0` with the matching CHANGELOG section as notes |
+| Docker Hub | `nullpo7z/vantyx:latest`, `:abc1234` (short SHA), `:v0.4.0` |
+
+To cut one:
+
+1. On **`dev`**, move the entries under `[Unreleased]` in [`CHANGELOG.md`](../CHANGELOG.md)
+   into a new dated `## [X.Y.Z] – YYYY-MM-DD` section; commit and push.
+2. Open a PR **`dev` → `main`** and merge it once the `ci-ok` check is green
+   (`main` is protected: no direct pushes, no force-pushes, CI required).
+3. Tag the merge commit on `main` and push the tag:
+   `git fetch origin main && git tag vX.Y.Z origin/main && git push origin vX.Y.Z`.
+4. The `Release` workflow verifies the tag is on `main` and that
+   `CHANGELOG.md` has a `## [X.Y.Z]` section, builds the image once, pushes
+   the three Docker Hub tags, scans the published image (informational) and
+   creates the GitHub Release. Watch it under **Actions → Release**.
+
+Prerequisites (one-time): repository secrets `DOCKERHUB_USERNAME` and
+`DOCKERHUB_TOKEN` (a Docker Hub access token with write scope).
 
 Until `1.0.0`, the project uses `0.y.z` pre-release versioning and breaking
 changes can land in any `0.y` bump.
+
+### CI overview
+
+| Workflow | Trigger | What it does |
+|----------|---------|--------------|
+| `CI` (`ci-dev.yml`) | push / PR on `dev`, `main` | gofmt + vet + golangci-lint, frontend lint + production build, Go tests (4 groups), `-race` on the concurrency packages, govulncheck, Docker image build. `ci-ok` aggregates them and is the only required check on `main`. |
+| `Weekly checks` (`ci-weekly.yml`) | Monday 06:00 UTC, manual | Markdown link check, Trivy + `npm audit` on **both** `main` and `dev`; opens/updates a `ci`-labelled issue on failure. |
+| `Release` (`release.yml`) | tag `vX.Y.Z` | Publishes Docker Hub tags and the GitHub Release (see above). |
+| Dependabot | weekly | Grouped minor/patch bumps, PRs target `dev`. |

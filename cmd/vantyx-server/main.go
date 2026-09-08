@@ -23,6 +23,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	// Embeds the IANA timezone database in the binary so VANTYX_TIMEZONE
+	// resolves even though the container image has no tzdata package.
+	_ "time/tzdata"
 
 	"github.com/nullpo7z/vantyx/internal/httpapi"
 	"github.com/nullpo7z/vantyx/internal/sshd"
@@ -34,45 +37,23 @@ const (
 	defaultKeyFile            = "/app/certs/tls.key"
 	defaultRedirect           = ":8080"
 	defaultHTTPS              = ":8443"
-	hstsMaxAge                = "31536000"
-	hstsIncludeSubdomains     = "includeSubDomains"
 	defaultShutdownTimeoutSec = 10
-	// CSP: default self; script/style from self + unpkg (Swagger UI).
-	// script-src には以下 2 つのインライン初期化スクリプトの sha256 ハッシュを含める（ASVS V14.4.3）:
-	//   - 'sha256-s8+L0bCTMcFupV+e7ZrRCMZiZTxI6IiNza6yMagaWHs=' : /docs (Swagger UI) の起動スクリプト
-	//   - 'sha256-35xcTuqYk4DXbahDhOkqFlRN1S9LOUWqKshTkAh51qQ=' : SPA index.html のテーマ/ロケール初期化（FOUC 防止のため <html class="dark"> と lang を先に確定）
-	// wasm-unsafe-eval は asciinema-player の WebAssembly 用、img-src data: は noVNC のカーソル画像用。
-	// CSP rationale:
-	//   - script-src: 'self' + the SHA-256 hash of the two known
-	//     inline initialisers (Swagger UI bootstrap on /docs, SPA
-	//     theme bootstrap in index.html). 'unsafe-hashes' was
-	//     removed because we no longer ship inline event handlers.
-	//     'wasm-unsafe-eval' is needed by asciinema-player.
-	//   - style-src: 'unsafe-inline' remains because Tailwind ships
-	//     hashed inline <style> blocks and xterm.js writes inline
-	//     styles at runtime. Migrating to nonce-based CSP requires
-	//     plumbing a per-request nonce through the SPA bootstrap
-	//     and is tracked separately.
-	//   - connect-src restricts where XHR / fetch / WebSocket can
-	//     reach (ASVS V14.4.6); 'self' is sufficient since Vantyx
-	//     does not call third-party APIs.
-	//   - frame-ancestors 'none' & base-uri 'self' prevent
-	//     clickjacking and <base> hijacking (ASVS V14.4.4).
-	//   - object-src 'none' blocks Flash/PDF embed attack surface.
-	//   - form-action 'self' stops form-based exfiltration.
-	cspValue = "default-src 'self'; " +
-		"script-src 'self' https://unpkg.com 'sha256-s8+L0bCTMcFupV+e7ZrRCMZiZTxI6IiNza6yMagaWHs=' 'sha256-35xcTuqYk4DXbahDhOkqFlRN1S9LOUWqKshTkAh51qQ=' 'wasm-unsafe-eval'; " +
-		"style-src 'self' https://unpkg.com 'unsafe-inline'; " +
-		"img-src 'self' data:; " +
-		"connect-src 'self' ws: wss:; " +
-		"frame-ancestors 'none'; " +
-		"base-uri 'self'; " +
-		"object-src 'none'; " +
-		"form-action 'self'"
 )
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	// One clock for everything a person reads: container logs, the audit
+	// file / syslog forward, the web UI and the CLI. Installing it as
+	// time.Local makes every time.Now() (and slog's timestamps) carry
+	// this zone's offset; storage keeps using explicit UTC.
+	loc, err := httpapi.LoadTimezoneFromEnv()
+	if err != nil {
+		slog.Error("invalid timezone", "error", err)
+		os.Exit(1)
+	}
+	time.Local = loc
+	slog.Info("timezone", "zone", loc.String())
 
 	certFile := filepath.Clean(defaultCertFile)
 	if v := os.Getenv("VANTYX_TLS_CERT_FILE"); v != "" {
@@ -130,7 +111,7 @@ func main() {
 	ctx := context.Background()
 	tftp.DisableAtStartup(ctx, app.TargetStore)
 	tftp.StartServerIfNeeded(ctx, app.TargetStore)
-	httpsHandler := securityHeadersMiddleware(corsMiddleware(app.NewRouter()))
+	httpsHandler := corsMiddleware(app.NewRouter())
 	// ReadTimeout covers the whole request including body; increase via VANTYX_HTTPS_READ_TIMEOUT_SEC for large uploads, or use TimeoutHandler/MaxBytesReader in router.
 	httpsServer := &http.Server{
 		Addr:              httpsAddr,
@@ -163,17 +144,21 @@ func main() {
 		}
 		var err error
 		sshServer, err = sshd.NewServer(sshd.Config{
-			UserStore:      app.UserStore,
-			TargetStore:    app.TargetStore,
-			GroupStore:     app.AccessGroupStore,
-			SessionManager: app.TerminalSessionManager,
-			RecordingsDir:  recordingDir,
-			RecordingStore: recordingStore,
+			UserStore:       app.UserStore,
+			TargetStore:     app.TargetStore,
+			GroupStore:      app.AccessGroupStore,
+			SessionManager:  app.TerminalSessionManager,
+			RecordingsDir:   recordingDir,
+			RecordingStore:  recordingStore,
+			SharingRegistry: app.SharingRegistry,
+			SharingStore:    app.SharingStore,
+			SharingBridges:  app.SharingBridges,
 		})
 		if err != nil {
 			slog.Error("sshd setup failed", "error", err)
 			os.Exit(1)
 		}
+		app.CLISessionCloser = sshServer
 		go func() {
 			if err := sshServer.ListenAndServe(sshListen); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
 				slog.Error("sshd failed", "error", err)
@@ -257,19 +242,6 @@ func main() {
 	if hasServerError {
 		os.Exit(1)
 	}
-}
-
-// securityHeadersMiddleware sets security headers on all HTTPS responses (ASVS V8.2.1, V8.2.2, V14.4.1, V14.4.3, V14.4.4, V14.4.6).
-func securityHeadersMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Strict-Transport-Security", "max-age="+hstsMaxAge+"; "+hstsIncludeSubdomains)
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", cspValue)
-		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		w.Header().Set("Cache-Control", "no-store, max-age=0")
-		next.ServeHTTP(w, r)
-	})
 }
 
 // corsMiddleware adds CORS headers when VANTYX_CORS_ALLOWED_ORIGINS is set (ASVS V14.4.2). Comma-separated list, e.g. https://app.example.com.

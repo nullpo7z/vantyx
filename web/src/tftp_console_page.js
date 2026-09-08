@@ -56,7 +56,29 @@ export function renderTFTPConsolePage(container) {
   let term = null
   let fitAddon = null
   let sshWs = null
+  let sshStdinAttached = false
+  let sshBeforeUnloadAttached = false
   let currentSessionId = resumeSessionId || ''
+  let writeWindowExpiresAt = null
+  let writeWindowTimer = null
+  let writeWindowEventSource = null
+  let writeWindowReconnectTimer = null
+
+  function stopWriteWindowTimer() {
+    if (writeWindowTimer) {
+      clearInterval(writeWindowTimer)
+      writeWindowTimer = null
+    }
+  }
+
+  function stopWriteWindowEvents() {
+    if (writeWindowReconnectTimer) {
+      clearTimeout(writeWindowReconnectTimer)
+      writeWindowReconnectTimer = null
+    }
+    writeWindowEventSource?.close()
+    writeWindowEventSource = null
+  }
 
   function setError(msg) {
     const el = container.querySelector('#tftp-error')
@@ -174,6 +196,18 @@ export function renderTFTPConsolePage(container) {
                 </label>
               </div>
             </div>
+            <div id="tftp-write-window-box" class="mx-4 mb-2 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+              <div class="flex items-center gap-2 flex-wrap text-[11px]">
+                <span class="font-medium text-amber-800">${t('tftpConsole.writeWindowLabel')}</span>
+                <span id="tftp-write-window-status" class="text-amber-700 truncate"></span>
+                <div class="flex items-center gap-2 ml-auto">
+                  <input type="number" min="1" id="tftp-write-window-ttl" class="rounded border border-slate-300 px-2 py-1 text-[11px] w-24 bg-white" placeholder="${t('tftpConsole.writeWindowTtlPlaceholder')}" />
+                  <button type="button" id="tftp-write-window-open" class="rounded bg-amber-600 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-amber-700">${t('tftpConsole.writeWindowOpenBtn')}</button>
+                  <button type="button" id="tftp-write-window-close" class="rounded border border-amber-300 bg-white px-3 py-1.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100 hidden">${t('tftpConsole.writeWindowCloseBtn')}</button>
+                </div>
+              </div>
+              <p class="text-[11px] text-amber-700 mt-1">${t('tftpConsole.writeWindowHint')}</p>
+            </div>
             <p id="tftp-error" class="px-4 text-xs text-red-600 hidden"></p>
             <div id="tftp-files-list" class="flex-1 min-h-0 overflow-auto bg-white border-t border-slate-200"></div>
           </section>
@@ -218,6 +252,8 @@ export function renderTFTPConsolePage(container) {
     `
 
     function closeWindow() {
+      stopWriteWindowTimer()
+      stopWriteWindowEvents()
       try { sshWs?.close() } catch { /* ignore */ }
       if (window.opener && !window.opener.closed) {
         try { window.opener.focus() } catch { /* ignore */ }
@@ -283,6 +319,96 @@ export function renderTFTPConsolePage(container) {
         }
       })
     }
+
+    const writeWindowTtlInput = container.querySelector('#tftp-write-window-ttl')
+    const writeWindowOpenBtn = container.querySelector('#tftp-write-window-open')
+    const writeWindowCloseBtn = container.querySelector('#tftp-write-window-close')
+
+    function renderWriteWindowStatus(ip) {
+      const statusEl = container.querySelector('#tftp-write-window-status')
+      if (!statusEl) return
+      if (!writeWindowExpiresAt) {
+        statusEl.textContent = ''
+        writeWindowCloseBtn?.classList.add('hidden')
+        return
+      }
+      if (writeWindowExpiresAt.getTime() - Date.now() <= 0) {
+        writeWindowExpiresAt = null
+        stopWriteWindowTimer()
+        statusEl.textContent = ''
+        writeWindowCloseBtn?.classList.add('hidden')
+        return
+      }
+      statusEl.textContent = t('tftpConsole.writeWindowOpenUntil', {
+        ip,
+        time: writeWindowExpiresAt.toLocaleTimeString(),
+      })
+      writeWindowCloseBtn?.classList.remove('hidden')
+    }
+
+    // Sets local state from a server-reported status and (re)starts the
+    // countdown timer. Shared by the initial page-load status fetch and
+    // the open-button handler so both paths render identically.
+    function applyWriteWindowStatus(open, ip, expiresAtIso) {
+      writeWindowExpiresAt = open && expiresAtIso ? new Date(expiresAtIso) : null
+      stopWriteWindowTimer()
+      if (writeWindowExpiresAt) {
+        writeWindowTimer = setInterval(() => renderWriteWindowStatus(ip), 1000)
+      }
+      renderWriteWindowStatus(ip)
+    }
+
+    // Live status via SSE instead of a one-shot GET on load: the stream's
+    // first message is the current status (so this also replaces the old
+    // "query on load" bootstrap), and every later open/close/reset by any
+    // tab or operator arrives immediately after, with no polling.
+    function connectWriteWindowEvents() {
+      if (!tftpTargetId) return
+      writeWindowEventSource = API.subscribeTFTPWriteWindowEvents(
+        tftpTargetId,
+        (status) => {
+          applyWriteWindowStatus(!!(status && status.open), (status && status.client_ip) || '', status && status.expires_at)
+        },
+        () => {
+          // Reconnect after a short delay; until then the panel just
+          // keeps showing the last known state instead of erroring out.
+          writeWindowEventSource = null
+          writeWindowReconnectTimer = setTimeout(connectWriteWindowEvents, 5000)
+        },
+      )
+    }
+    connectWriteWindowEvents()
+
+    writeWindowOpenBtn?.addEventListener('click', async () => {
+      if (!tftpTargetId) return
+      const ttlRaw = (writeWindowTtlInput?.value || '').trim()
+      const ttlSeconds = ttlRaw ? Number(ttlRaw) : undefined
+      setError('')
+      try {
+        // The authorized IP is fixed to the target's configured Host and
+        // decided server-side; the response echoes it back for display.
+        const resp = await API.tftpServerOpenWriteWindow(tftpTargetId, ttlSeconds)
+        applyWriteWindowStatus(true, (resp && resp.client_ip) || '', resp && resp.expires_at)
+      } catch (e) {
+        setError(e.message || t('tftpConsole.writeWindowOpenFailed'))
+      }
+    })
+
+    writeWindowCloseBtn?.addEventListener('click', async () => {
+      if (!tftpTargetId) return
+      setError('')
+      try {
+        await API.tftpServerCloseWriteWindow(tftpTargetId)
+      } catch (e) {
+        setError(e.message || t('tftpConsole.writeWindowCloseFailed'))
+        return
+      }
+      writeWindowExpiresAt = null
+      stopWriteWindowTimer()
+      const statusEl = container.querySelector('#tftp-write-window-status')
+      if (statusEl) statusEl.textContent = t('tftpConsole.writeWindowClosed')
+      writeWindowCloseBtn.classList.add('hidden')
+    })
 
     container.addEventListener('click', async (e) => {
       const row = e.target.closest('.tftp-row')
@@ -467,11 +593,30 @@ export function renderTFTPConsolePage(container) {
         function connectSSH(authPayload) {
           if (authPayload) lastAuthPayload = authPayload
           hostKeyCtrl.resetHostKeyError()
-          const ws = new WebSocket(currentSessionId ? getWsUrlResume(currentSessionId) : getWsUrlNew())
+          const isResume = !!currentSessionId
+          const ws = new WebSocket(isResume ? getWsUrlResume(currentSessionId) : getWsUrlNew())
           ws.binaryType = 'arraybuffer'
           sshWs = ws
+          let sawError = false
+          let sawFirstMessage = false
+          // A resumed session already had real output at some point, so
+          // a bare close shouldn't be treated as "never connected" and
+          // fall back to the credential form. For a fresh connect this
+          // only flips true once actual terminal/binary output arrives
+          // -- the session_id meta frame alone is sent before the
+          // bridge even attempts to authenticate, so it can't be used
+          // as proof the login succeeded (mirrors terminal_page.js).
+          let sawRealSession = isResume
+          const connectTimeout = window.setTimeout(() => {
+            if (sawFirstMessage) return
+            sawError = true
+            showCredError(t('tftpConsole.connectTimedOut'))
+            credsWrap?.classList.remove('hidden')
+            xtermEl?.classList.add('hidden')
+            try { ws.close() } catch { /* ignore */ }
+          }, 20000)
           ws.onopen = () => {
-            if (!currentSessionId && authPayload) {
+            if (!isResume && authPayload) {
               try {
                 ws.send(JSON.stringify(authPayload))
               } catch {
@@ -482,6 +627,8 @@ export function renderTFTPConsolePage(container) {
             term.focus()
           }
           ws.onmessage = (ev) => {
+            sawFirstMessage = true
+            window.clearTimeout(connectTimeout)
             const frame = classifyTerminalWsFrameSync(ev.data)
             if (frame.kind === 'empty' || frame.kind === 'ready' || frame.kind === 'swallow') {
               return
@@ -491,42 +638,74 @@ export function renderTFTPConsolePage(container) {
               if (hostKeyCtrl.handleHostKeyMeta(ws, obj)) return
               if (!currentSessionId && typeof obj.session_id === 'string' && obj.session_id) {
                 currentSessionId = obj.session_id
-                hideCredsShowTerm()
               }
               return
             }
             if (typeof ev.data === 'string') {
               if (ev.data.startsWith('error:')) {
+                sawError = true
                 showCredError(ev.data.replace(/^error:\s*/, ''))
                 credsWrap?.classList.remove('hidden')
                 xtermEl?.classList.add('hidden')
+                try { ws.close() } catch { /* ignore */ }
                 return
               }
               if (frame.kind === 'terminal' && frame.text) {
+                sawRealSession = true
                 hideCredsShowTerm()
                 term.write(frame.text)
               }
             } else {
+              sawRealSession = true
               hideCredsShowTerm()
               term.write(new Uint8Array(ev.data))
             }
           }
+          // onerror deliberately does NOT touch the UI: its firing order
+          // relative to onmessage/onclose is not reliably guaranteed
+          // across browsers, so anything shown here can race with, and
+          // clobber, a real "error: ..." message onmessage already
+          // surfaced. onclose always fires last and is the single place
+          // that decides what to show (see terminal_page.js for the
+          // same pattern and the incident that motivated it).
+          ws.onerror = () => {}
           ws.onclose = () => {
+            window.clearTimeout(connectTimeout)
             if (hostKeyCtrl.getSawHostKeyError()) return
-            term.write(`\r\n${t('tftpConsole.connectionClosed')}\r\n`)
-          }
-          ws.onerror = () => {
-            term.write(`\r\n${t('tftpConsole.wsError')}\r\n`)
-          }
-          term.onData((data) => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(new TextEncoder().encode(data))
+            if (sawError) return // already shown via onmessage above
+            if (sawRealSession) {
+              term.write(`\r\n${t('tftpConsole.connectionClosed')}\r\n`)
+              return
             }
-          })
-          window.addEventListener('beforeunload', () => {
-            try { ws.close() } catch { /* ignore */ }
-            try { resizeObserver.disconnect() } catch { /* ignore */ }
-          }, { once: true })
+            // Never received anything at all, or got a session_id but
+            // the bridge died before any real shell output arrived
+            // (e.g. an auth failure whose "error: ..." frame didn't
+            // make it before the socket closed) -- don't leave the
+            // user staring at a blank/hidden screen with no feedback.
+            currentSessionId = ''
+            showCredError(t(useStoredCredentials ? 'tftpConsole.closedNoFirstStored' : 'tftpConsole.closedNoFirstNew'))
+            credsWrap?.classList.remove('hidden')
+            xtermEl?.classList.add('hidden')
+          }
+          // Guard both registrations: connectSSH re-runs on every reconnect
+          // (credential retry, host-key-adopt reconnect), and without these
+          // flags each call would stack another term.onData closure and
+          // another never-removed beforeunload listener.
+          if (!sshStdinAttached) {
+            sshStdinAttached = true
+            term.onData((data) => {
+              if (sshWs && sshWs.readyState === WebSocket.OPEN) {
+                sshWs.send(new TextEncoder().encode(data))
+              }
+            })
+          }
+          if (!sshBeforeUnloadAttached) {
+            sshBeforeUnloadAttached = true
+            window.addEventListener('beforeunload', () => {
+              try { sshWs && sshWs.close() } catch { /* ignore */ }
+              try { resizeObserver.disconnect() } catch { /* ignore */ }
+            })
+          }
         }
 
         function startConnect(authPayload) {

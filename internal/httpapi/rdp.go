@@ -15,6 +15,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/rdpproxy"
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
+	"github.com/nullpo7z/vantyx/internal/session"
 	"github.com/nullpo7z/vantyx/internal/vncproxy"
 )
 
@@ -87,6 +88,7 @@ type RDPSessionItem struct {
 	LastSeen    time.Time `json:"last_seen"`
 	Idle        bool      `json:"idle"`
 	IdleSeconds int       `json:"idle_seconds,omitempty"`
+	Keep        bool      `json:"keep"`
 }
 
 func rdpSessionItemFrom(s rdpvnc.Session, mgr *rdpvnc.Manager) RDPSessionItem {
@@ -97,9 +99,12 @@ func rdpSessionItemFrom(s rdpvnc.Session, mgr *rdpvnc.Manager) RDPSessionItem {
 		CreatedAt:  s.CreatedAt,
 		LastSeen:   s.LastSeen(),
 	}
-	if mgr != nil && mgr.IsIdle(&s) {
-		item.Idle = true
-		item.IdleSeconds = int(mgr.IdleDuration(&s).Seconds())
+	if mgr != nil {
+		item.Keep = mgr.IsKept(s.ID)
+		if mgr.IsIdle(&s) {
+			item.Idle = true
+			item.IdleSeconds = int(mgr.IdleDuration(&s).Seconds())
+		}
 	}
 	return item
 }
@@ -179,6 +184,9 @@ func (a *App) handleRDPSessionDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	a.finishVideoRecording(sessionID)
 	a.RDPVNCManager.RemoveSession(sessionID)
+	if a.SharingRegistry != nil {
+		a.SharingRegistry.Remove(sessionID)
+	}
 	audit("rdp_session_stop", auditFields{
 		"session_id": sessionID,
 		"user_id":    userID,
@@ -192,7 +200,66 @@ func (a *App) handleRDPSessionDelete(w http.ResponseWriter, r *http.Request) {
 // handleRDPBrowserWebSocket launches xfreerdp→Xvfb→x11vnc, then proxies the
 // resulting VNC stream over WebSocket so noVNC in the browser can display it.
 func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) {
-	targetID := r.URL.Query().Get("target_id")
+	targetID := strings.TrimSpace(r.URL.Query().Get("target_id"))
+	sessionIDParam := strings.TrimSpace(r.URL.Query().Get("session_id"))
+	mode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
+	viewer := mode == "viewer"
+
+	// Shared-session attach: resolve target from the existing browser RDP session.
+	if sessionIDParam != "" && a.RDPVNCManager != nil {
+		if sharedSess, ok := a.RDPVNCManager.GetSession(sessionIDParam); ok && sharedSess.Bridge != nil {
+			if targetID == "" {
+				targetID = sharedSess.TargetID
+			} else if targetID != sharedSess.TargetID {
+				writeJSONErrorKey(w, r, "sessions.notFoundOrAccessDenied", http.StatusNotFound)
+				return
+			}
+			userID, target, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
+			if !ok {
+				return
+			}
+			if target.Protocol != access.ProtocolRDP {
+				writeJSONErrorKey(w, r, "rdp.notRDP", http.StatusBadRequest)
+				return
+			}
+			if viewer {
+				room, _ := a.SharingRegistry.Get(sharedSess.ID)
+				if room == nil || !room.IsParticipant(userID) {
+					writeJSONErrorKey(w, r, "sessions.notFoundOrAccessDenied", http.StatusNotFound)
+					return
+				}
+			} else if sharedSess.UserID != userID {
+				writeJSONErrorKey(w, r, "sessions.notFoundOrAccessDenied", http.StatusNotFound)
+				return
+			}
+			a.startRDPBridgeProxyIfNeeded(sharedSess)
+			wsConn, err := wsUpgrader.Upgrade(w, r, nil)
+			if err != nil {
+				writeJSONErrorKey(w, r, "rdp.startFailed", http.StatusInternalServerError)
+				return
+			}
+			attachMode := session.AttachModeWriter
+			if viewer {
+				attachMode = session.AttachModeViewer
+			}
+			if sharedSess.AttachCh != nil {
+				select {
+				case sharedSess.AttachCh <- session.AttachReq{
+					Conn:     wsConn,
+					UserID:   userID,
+					Username: a.usernameFor(r.Context(), userID),
+					Mode:     attachMode,
+				}:
+				default:
+					_ = wsConn.Close()
+				}
+			} else {
+				_ = wsConn.Close()
+			}
+			return
+		}
+	}
+
 	userID, target, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
 	if !ok {
 		return
@@ -223,6 +290,7 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 			if ew == width && eh == height {
 				sessionID = existingSess.ID
 				targetAddr = fmt.Sprintf("127.0.0.1:%d", existingSess.Bridge.VNCPort())
+				a.startRDPBridgeProxyIfNeeded(existingSess)
 				audit("rdp_browser_reconnect", auditFields{
 					"user_id":    userID,
 					"target_id":  targetID,
@@ -266,7 +334,15 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 			}
 			sess := a.RDPVNCManager.RegisterSession(bridgeKey, sid, userID, targetID, target.Name, width, height, bridge)
 			sessionID = sess.ID
-			a.startRDPVideoRecording(r.Context(), sessionID, userID, targetID, bridge.Display(), width, height)
+			a.startRDPBridgeProxyIfNeeded(sess)
+			// Detached background context, same rationale as rdpvnc.Start
+			// above: r.Context() is canceled the moment this handler
+			// returns (a few lines below), which would otherwise kill the
+			// just-started ffmpeg recording via exec.CommandContext
+			// before it captures any real video. Recording lifecycle is
+			// tied to the RDP session itself via finishVideoRecording
+			// (wired to bridge.Done() just below), not to this request.
+			a.startRDPVideoRecording(context.Background(), sessionID, userID, targetID, bridge.Display(), width, height)
 			go func(id string, done <-chan struct{}) {
 				<-done
 				a.finishVideoRecording(id)
@@ -295,13 +371,45 @@ func (a *App) handleRDPBrowserWebSocket(w http.ResponseWriter, r *http.Request) 
 		}
 		return
 	}
-	defer wsConn.Close()
 
+	attachMode := session.AttachModeWriter
+	if viewer {
+		attachMode = session.AttachModeViewer
+	}
 	if sessionID == "" && a.RDPVNCManager != nil {
 		if existingSess, ok := a.RDPVNCManager.GetSessionByKey(bridgeKey); ok {
 			sessionID = existingSess.ID
 		}
 	}
+	if viewer && sessionID != "" {
+		room, _ := a.SharingRegistry.Get(sessionID)
+		if room == nil || !room.IsParticipant(userID) {
+			_ = wsConn.Close()
+			writeJSONErrorKey(w, r, "sessions.notFoundOrAccessDenied", http.StatusNotFound)
+			return
+		}
+	}
+	var rdpSess *rdpvnc.Session
+	if a.RDPVNCManager != nil && sessionID != "" {
+		rdpSess, _ = a.RDPVNCManager.GetSession(sessionID)
+	}
+	if rdpSess != nil && rdpSess.AttachCh != nil {
+		select {
+		case rdpSess.AttachCh <- session.AttachReq{Conn: wsConn, UserID: userID, Username: a.usernameFor(r.Context(), userID), Mode: attachMode}:
+			if !viewer && a.SharingBridges != nil {
+				if controller, ok := a.SharingBridges.Get(session.ID(sessionID)); ok {
+					if room, ok := a.SharingRegistry.Get(sessionID); ok {
+						controller.SetWriter(roomWriterID(room))
+					}
+				}
+			}
+		default:
+			_ = wsConn.Close()
+		}
+		return
+	}
+	defer wsConn.Close()
+
 	var touch func()
 	if a.RDPVNCManager != nil && sessionID != "" {
 		sid := sessionID

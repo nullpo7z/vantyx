@@ -14,8 +14,14 @@ type videoRecordingStopper interface {
 }
 
 type videoRecordingHandle struct {
-	stop    videoRecordingStopper
-	path    string
+	stop videoRecordingStopper
+	path string
+	// cancel cancels the recording context created in
+	// startVideoRecording. It is invoked once the capture has been
+	// stopped so the parent-cancellation monitor goroutine exits instead
+	// of blocking forever (the capture is decoupled from the HTTP request
+	// via context.Background(), so nothing else ever cancels recCtx).
+	cancel  context.CancelFunc
 	release func()
 }
 
@@ -137,7 +143,13 @@ func (a *App) registerVideoRecording(sessionID string, stopper videoRecordingSto
 		a.stopVideoRecordingHandle(prev)
 		reg.mu.Lock()
 	}
-	reg.active[sessionID] = &videoRecordingHandle{stop: stopper, path: path, release: release}
+	// Carry the recording's cancel func (registered by beginPending) onto
+	// the handle so stopVideoRecordingHandle can release recCtx and let
+	// the monitor goroutine exit. It may be absent if finishVideoRecording
+	// already cancelled+removed it in a race, in which case recCtx is
+	// already done and nil here is correct.
+	cancel := reg.pending[sessionID]
+	reg.active[sessionID] = &videoRecordingHandle{stop: stopper, path: path, cancel: cancel, release: release}
 	delete(reg.pending, sessionID)
 	reg.mu.Unlock()
 }
@@ -148,6 +160,14 @@ func (a *App) stopVideoRecordingHandle(handle *videoRecordingHandle) {
 	}
 	if handle.stop != nil {
 		_ = handle.stop.Stop()
+	}
+	// Cancel recCtx only after the capture is stopped: Stop() SIGINTs
+	// ffmpeg so it finalizes the mp4, then cancelling its (already-exited)
+	// exec context is a harmless no-op that also unblocks the monitor
+	// goroutine from startVideoRecording. Cancelling before Stop would
+	// SIGKILL ffmpeg and truncate the recording.
+	if handle.cancel != nil {
+		handle.cancel()
 	}
 	if handle.release != nil {
 		handle.release()
@@ -173,6 +193,11 @@ func (a *App) finishVideoRecording(sessionID string) {
 	if started && a != nil && a.DB != nil {
 		endedAt := time.Now().UTC().Format("2006-01-02 15:04:05")
 		_ = a.UpdateRecordingEnded(context.Background(), sessionID, endedAt)
+	}
+	// ffmpeg has exited (Stop waited for it), so the fragmented MP4 is
+	// complete: rewrite it as a faststart MP4 in the background (B-1).
+	if ok && started && handle != nil && handle.path != "" {
+		a.remuxRecordingAsync(sessionID, handle.path)
 	}
 }
 

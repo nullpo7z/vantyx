@@ -127,10 +127,23 @@ func (a *App) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 	ch := a.SessionEventBroker.SubscribeFor(userID)
 	defer a.SessionEventBroker.Unsubscribe(ch)
 
+	// Without a periodic write, a reverse proxy's idle timeout can silently
+	// kill this stream during quiet periods (no participant/write-token
+	// activity), forcing an unnecessary client reconnect.
+	keepalive := time.NewTicker(25 * time.Second)
+	defer keepalive.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-keepalive.C:
+			if _, err := w.Write([]byte(": keep-alive\n\n")); err != nil {
+				return
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
 		case msg, ok := <-ch:
 			if !ok {
 				return
@@ -292,6 +305,64 @@ func (a *App) handleFileTransferEvents(w http.ResponseWriter, r *http.Request) {
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
+		}
+	}
+}
+
+// TFTPWriteWindowEventBroker streams write-window status changes for the
+// embedded TFTP server to every subscriber currently watching a given
+// target (e.g. multiple browser tabs / operators with the same target's
+// TFTP console page open), so an open/close made by one is reflected in
+// all the others immediately instead of only on next page load.
+//
+// Unlike SessionEventBroker (per-user) or FileTransferEventBroker
+// (per-user), subscribers here are keyed by targetID: write-window state
+// is a property of the target, not of any one user, and every subscriber
+// has already passed the same getTFTPServerTarget access check as the
+// GET/POST/DELETE handlers before Subscribe is ever called.
+type TFTPWriteWindowEventBroker struct {
+	mu      sync.RWMutex
+	clients map[chan []byte]string // channel -> targetID
+}
+
+// NewTFTPWriteWindowEventBroker creates a new broker.
+func NewTFTPWriteWindowEventBroker() *TFTPWriteWindowEventBroker {
+	return &TFTPWriteWindowEventBroker{clients: make(map[chan []byte]string)}
+}
+
+// Subscribe registers a subscriber for events belonging to targetID.
+func (b *TFTPWriteWindowEventBroker) Subscribe(targetID string) chan []byte {
+	ch := make(chan []byte, 8)
+	b.mu.Lock()
+	b.clients[ch] = targetID
+	b.mu.Unlock()
+	return ch
+}
+
+// Unsubscribe removes the channel and closes it.
+func (b *TFTPWriteWindowEventBroker) Unsubscribe(ch chan []byte) {
+	b.mu.Lock()
+	delete(b.clients, ch)
+	b.mu.Unlock()
+	close(ch)
+}
+
+// Publish sends payload to every subscriber currently watching targetID
+// (non-blocking; a slow/stuck client just misses this update, matching
+// the other brokers in this file).
+func (b *TFTPWriteWindowEventBroker) Publish(targetID string, payload []byte) {
+	if len(payload) == 0 {
+		return
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for ch, tid := range b.clients {
+		if tid != targetID {
+			continue
+		}
+		select {
+		case ch <- payload:
+		default:
 		}
 	}
 }

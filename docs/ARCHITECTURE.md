@@ -79,26 +79,31 @@ graph TD
     end
 ```
 
-### Collaborative terminal sessions
+### Collaborative sessions
 
 User-facing guide: [collaborative-sessions.md](collaborative-sessions.md).
 
-Terminal sessions can have multiple attached clients. Exactly one
-client holds the *write token* and may forward keystrokes to the
-target; the others attach as read-only viewers and the bridge drops
-their stdin server-side.
+SSH/Telnet, VNC, and browser RDP sessions can have multiple attached clients.
+Exactly one client holds the *write token* and may forward input to the
+target; viewers attach read-only and the bridge drops their input
+server-side. The CLI (`internal/sshd`) supports view-only attach via
+`join` / `watch`.
 
-The detachable bridges in
-[`internal/sshproxy/bridge_detachable.go`](../internal/sshproxy/bridge_detachable.go)
-and
-[`internal/telnetproxy/bridge_detachable.go`](../internal/telnetproxy/bridge_detachable.go)
-keep an internal map of clients, fan target output out to every one
-of them, and expose a `BridgeController.SetWriter(userID)` hook
-that the HTTP layer uses to switch the writer at runtime without
-disconnecting anyone.
+Detachable bridges:
 
-Room state (owner, current writer, participants, pending control
-requests) lives in [`internal/sharing.Registry`](../internal/sharing).
+| Protocol | Package |
+|----------|---------|
+| SSH | [`internal/sshproxy/bridge_detachable.go`](../internal/sshproxy/bridge_detachable.go) |
+| Telnet | [`internal/telnetproxy/bridge_detachable.go`](../internal/telnetproxy/bridge_detachable.go) |
+| VNC / RDP (RFB) | [`internal/vncproxy/bridge_detachable.go`](../internal/vncproxy/bridge_detachable.go) |
+
+Each bridge tracks clients, fans output (or uses per-viewer upstream TCP for
+VNC), and exposes `SetWriter(userID)` and `DetachUser(userID)` via
+`sharing.BridgeControl`. Kick and invitation revoke call `DetachUser` to
+close live attaches immediately.
+
+Room state lives in [`internal/sharing.Registry`](../internal/sharing).
+Shared join/kick logic is in [`internal/sharing/service.go`](../internal/sharing/service.go).
 Persisted invitations live in the `session_invitations` table and
 are accessed through `sharing.Store`. Tokens are stored as SHA-256
 hashes only; the plain token is returned exactly once at creation

@@ -2,6 +2,15 @@ services:
   vantyx:
     image: nullpo7z/vantyx:latest
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     ports:
       - "80:8080"
       - "443:8443"
@@ -15,6 +24,8 @@ services:
       - VANTYX_SSH_LISTEN=:2222
       - VANTYX_RECORDINGS_DIR=/app/recordings
       - VANTYX_SSH_PASSWORD_ENCRYPTION_KEY=${VANTYX_SSH_PASSWORD_ENCRYPTION_KEY}
+      - VANTYX_SQLITE_PATH=/app/data/vantyx.db
+      - VANTYX_SSH_HOST_KEY_PATH=/app/data/sshd_host_key.pem
     volumes:
       - /path/to/vantyx/certs:/app/certs # Make sure this directory exists
       - /path/to/vantyx/data:/app/data

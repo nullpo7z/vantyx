@@ -9,6 +9,7 @@
 
 import { applyStoredTheme } from './theme.js'
 import { applyHtmlLangAttribute, applyServerLocale, registerServerSync, t } from './i18n.js'
+import { applyServerTimezone } from './timezone.js'
 import API from './api.js'
 import { initFileTransferManager } from './file_transfer_manager.js'
 import {
@@ -35,16 +36,20 @@ applyHtmlLangAttribute()
 registerServerSync((locale) => API.updateLocale(locale).catch(() => undefined))
 
 /**
- * Apply the locale value returned by `/api/login` or `/api/me` if one
- * is present. Server-supplied locale overrides what was cached in
- * localStorage from a previous browser, so the user sees the same UI
- * language they last picked even on a fresh device.
+ * Apply the locale/timezone values returned by `/api/login` or
+ * `/api/me` if present. The locale is a per-user preference (a
+ * server value overrides the localStorage cache); the timezone is the
+ * admin-set site-wide value and is authoritative even when empty
+ * ("browser local"), so a zone cached from an older build is dropped.
  *
- * @param {{locale?: string} | null | undefined} me
+ * @param {{locale?: string, timezone?: string} | null | undefined} me
  */
 function syncLocaleFromServer(me) {
   if (me && typeof me.locale === 'string' && me.locale) {
     applyServerLocale(me.locale)
+  }
+  if (me && typeof me.timezone === 'string') {
+    applyServerTimezone(me.timezone)
   }
 }
 

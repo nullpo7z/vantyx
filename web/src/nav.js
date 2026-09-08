@@ -13,6 +13,8 @@ let state = {
   navUsers: null,
   navCredentials: null,
   navAudit: null,
+  navAccessRequests: null,
+  navSystem: null,
   navSettings: null,
   navApiRef: null,
   getMe: null,
@@ -28,6 +30,8 @@ function navLinks() {
     navUsers,
     navCredentials,
     navAudit,
+    navAccessRequests,
+    navSystem,
     navSettings,
     navApiRef,
   } = state
@@ -40,24 +44,32 @@ function navLinks() {
     navUsers,
     navCredentials,
     navAudit,
+    navAccessRequests,
+    navSystem,
     navSettings,
     navApiRef,
   ].filter(Boolean)
 }
 
+// "Account settings" is deliberately NOT admin-only: it holds per-user
+// preferences (language, password, 2FA, SSH keys) every user needs to
+// reach (E-8). Server-wide settings live under the admin-only "System
+// settings" entry.
 function isAdminOnlyNav(el) {
-  const { navGroups, navUsers, navCredentials, navAudit, navSettings, navApiRef } = state
+  const { navGroups, navUsers, navCredentials, navAudit, navAccessRequests, navSystem, navApiRef } = state
   return (
     el === navGroups ||
     el === navUsers ||
     el === navCredentials ||
     el === navAudit ||
-    el === navSettings ||
+    el === navAccessRequests ||
+    el === navSystem ||
     el === navApiRef
   )
 }
 
 function setNavLinkVisible(el, visible) {
+  if (!el) return
   if (visible) {
     el.classList.remove('hidden')
   } else {
@@ -77,6 +89,8 @@ function setNavLinkVisible(el, visible) {
  * @param {HTMLElement} opts.navUsers
  * @param {HTMLElement} opts.navCredentials
  * @param {HTMLElement} opts.navAudit
+ * @param {HTMLElement} [opts.navAccessRequests]
+ * @param {HTMLElement} [opts.navSystem]
  * @param {HTMLElement} opts.navSettings
  * @param {() => ({role: string} | null)} opts.getMe
  * @param {() => void} opts.onHome
@@ -87,6 +101,8 @@ function setNavLinkVisible(el, visible) {
  * @param {() => void} opts.onUsers
  * @param {() => void} opts.onCredentials
  * @param {() => void} opts.onAudit
+ * @param {() => void} [opts.onAccessRequests]
+ * @param {() => void} [opts.onSystem]
  * @param {() => void} opts.onSettings
  */
 export function initNav({
@@ -98,6 +114,8 @@ export function initNav({
   navUsers,
   navCredentials,
   navAudit,
+  navAccessRequests,
+  navSystem,
   navSettings,
   getMe,
   onHome,
@@ -108,6 +126,8 @@ export function initNav({
   onUsers,
   onCredentials,
   onAudit,
+  onAccessRequests,
+  onSystem,
   onSettings,
 }) {
   const navApiRef = document.getElementById('nav-api-ref')
@@ -120,6 +140,8 @@ export function initNav({
     navUsers,
     navCredentials,
     navAudit,
+    navAccessRequests,
+    navSystem,
     navSettings,
     navApiRef,
     getMe,
@@ -191,11 +213,30 @@ export function initNav({
     })
   }
 
-  if (navSettings) {
-    navSettings.addEventListener('click', (e) => {
+  if (navAccessRequests) {
+    navAccessRequests.addEventListener('click', (e) => {
       e.preventDefault()
       const me = state.getMe && state.getMe()
       if (!me || me.role !== 'admin') return
+      if (typeof onAccessRequests === 'function') onAccessRequests()
+    })
+  }
+
+  if (navSystem) {
+    navSystem.addEventListener('click', (e) => {
+      e.preventDefault()
+      const me = state.getMe && state.getMe()
+      if (!me || me.role !== 'admin') return
+      if (typeof onSystem === 'function') onSystem()
+    })
+  }
+
+  if (navSettings) {
+    navSettings.addEventListener('click', (e) => {
+      e.preventDefault()
+      // Account settings is for every signed-in user (E-8 / R-4).
+      const me = state.getMe && state.getMe()
+      if (!me) return
       if (typeof onSettings === 'function') onSettings()
     })
   }
@@ -205,7 +246,7 @@ export function initNav({
  * Mark the supplied tab as active and refresh per-link visibility based
  * on the current user's role.
  *
- * @param {'targets'|'sessions'|'recordings'|'recordingExports'|'groups'|'users'|'credentials'|'audit'|'settings'} tab
+ * @param {'targets'|'sessions'|'recordings'|'recordingExports'|'groups'|'users'|'credentials'|'audit'|'accessRequests'|'system'|'settings'} tab
  */
 export function setActiveNav(tab) {
   const { navTargets, navRecordings, navGroups, getMe } = state
@@ -228,6 +269,8 @@ export function setActiveNav(tab) {
     users: state.navUsers,
     credentials: state.navCredentials,
     audit: state.navAudit,
+    accessRequests: state.navAccessRequests,
+    system: state.navSystem,
     settings: state.navSettings,
   }[tab]
 
@@ -243,10 +286,12 @@ export function setActiveNav(tab) {
  *   shown.
  */
 export function showAuthenticatedNav(isAdmin) {
-  const { navSessions, navRecordings, navRecordingExports } = state
+  const { navSessions, navRecordings, navRecordingExports, navSettings } = state
   setNavLinkVisible(navSessions, true)
   setNavLinkVisible(navRecordings, true)
   setNavLinkVisible(navRecordingExports, true)
+  // Account settings holds per-user preferences (E-8).
+  setNavLinkVisible(navSettings, true)
   if (isAdmin) {
     for (const el of navLinks()) {
       if (isAdminOnlyNav(el)) {

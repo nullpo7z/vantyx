@@ -12,6 +12,15 @@ function slugFromLabel(label) {
     .slice(0, 48)
 }
 
+function downloadTextFile(filename, content) {
+  const blob = new Blob([content], { type: 'text/plain' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
 function keyTypeLabel(keyType) {
   const v = (keyType || '').trim()
   if (!v || v === 'UNKNOWN') return t('app.credentialKeyTypeUnknown')
@@ -67,7 +76,10 @@ export async function renderCredentialsPage({ mainContent, escapeHtml }) {
       <section>
         <div class="flex items-center justify-between gap-3 mb-3">
           <h3 class="text-sm font-semibold text-slate-800 uppercase tracking-wide">${t('app.sshKeysSection')}</h3>
-          <button type="button" id="cred-page-add-key" class="rounded bg-sky-600 px-3 py-2 text-xs font-medium text-white hover:bg-sky-700 shadow-sm">${t('app.sshKeyAdd')}</button>
+          <div class="flex gap-2">
+            <button type="button" id="cred-page-generate-key" class="rounded border border-sky-600 px-3 py-2 text-xs font-medium text-sky-700 hover:bg-sky-50 shadow-sm">${t('app.sshKeyGenerate')}</button>
+            <button type="button" id="cred-page-add-key" class="rounded bg-sky-600 px-3 py-2 text-xs font-medium text-white hover:bg-sky-700 shadow-sm">${t('app.sshKeyAdd')}</button>
+          </div>
         </div>
         <div id="cred-page-keys" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
       </section>
@@ -292,6 +304,132 @@ export async function renderCredentialsPage({ mainContent, escapeHtml }) {
         errEl.classList.remove('hidden')
       }
     })
+  }
+
+  function showKeyGenerate() {
+    const dlg = credentialDialog()
+    if (!dlg) return
+    dlg.classList.remove('hidden')
+    dlg.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 border border-slate-200/50 overflow-hidden">
+          <div class="px-5 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+            <h3 class="font-semibold text-slate-800">${t('app.sshKeyGenerate')}</h3>
+            <button type="button" id="key-gen-close" class="text-2xl text-slate-500">&times;</button>
+          </div>
+          <form id="key-gen-form" class="px-6 py-5 space-y-4">
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.credentialsName')}</label>
+              <input type="text" id="key-gen-label" class="w-full rounded border border-slate-300 px-3 py-2 text-sm" required />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.sshKeyGenerateType')}</label>
+              <select id="key-gen-type" class="w-full rounded border border-slate-300 px-3 py-2 text-sm bg-white">
+                <option value="ed25519" selected>${t('app.sshKeyGenerateTypeEd25519')}</option>
+                <option value="rsa">${t('app.sshKeyGenerateTypeRsa')}</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.credentialsPassphrase')}</label>
+              <input type="password" id="key-gen-pp" class="w-full rounded border border-slate-300 px-3 py-2 text-sm" autocomplete="new-password" />
+              <p class="text-xs text-slate-500 mt-1">${t('app.sshKeyGeneratePpHint')}</p>
+            </div>
+            <p id="key-gen-error" class="text-sm text-red-600 hidden"></p>
+            <div class="flex justify-end gap-2">
+              <button type="button" id="key-gen-cancel" class="rounded border px-3 py-2 text-xs">${t('common.cancel')}</button>
+              <button type="submit" id="key-gen-submit" class="rounded bg-sky-600 text-white px-3 py-2 text-xs">${t('app.sshKeyGenerateSubmit')}</button>
+            </div>
+          </form>
+        </div>
+      </div>`
+    const close = () => closeDialog(dlg)
+    dlg.querySelector('#key-gen-close').addEventListener('click', close)
+    dlg.querySelector('#key-gen-cancel').addEventListener('click', close)
+    dlg.querySelector('#key-gen-form').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const errEl = dlg.querySelector('#key-gen-error')
+      errEl.classList.add('hidden')
+      const label = dlg.querySelector('#key-gen-label').value.trim()
+      const id = slugFromLabel(label) || `key-${Date.now()}`
+      const keyType = dlg.querySelector('#key-gen-type').value
+      const passphrase = dlg.querySelector('#key-gen-pp').value
+      const submitBtn = dlg.querySelector('#key-gen-submit')
+      submitBtn.disabled = true
+      try {
+        const result = await API.generateSSHKey({ id, label, key_type: keyType, passphrase })
+        showKeyGenerateResult(result)
+      } catch (err) {
+        errEl.textContent = err.message || t('app.sshKeyGenerateFailed')
+        errEl.classList.remove('hidden')
+        submitBtn.disabled = false
+      }
+    })
+  }
+
+  function showKeyGenerateResult(result) {
+    const dlg = credentialDialog()
+    if (!dlg) return
+    dlg.classList.remove('hidden')
+    dlg.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 border border-slate-200/50 overflow-hidden">
+          <div class="px-5 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+            <h3 class="font-semibold text-slate-800">${t('app.sshKeyGenerateDoneTitle')}</h3>
+          </div>
+          <div class="px-6 py-5 space-y-4">
+            <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">${t('app.sshKeyGenerateRevealWarning')}</p>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.sshKeyGeneratePrivateKeyLabel')}</label>
+              <textarea id="key-gen-result-private" rows="8" readonly class="w-full rounded border border-slate-300 px-2 py-2 text-xs font-mono bg-slate-50">${escapeHtml(result.private_key || '')}</textarea>
+              <div class="flex gap-2 mt-2">
+                <button type="button" id="key-gen-download" class="rounded border border-slate-300 px-2 py-1 text-xs">${t('app.sshKeyGenerateDownload')}</button>
+                <button type="button" id="key-gen-copy-private" class="rounded border border-slate-300 px-2 py-1 text-xs">${t('common.copy')}</button>
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.sshKeyGeneratePublicKeyLabel')}</label>
+              <input type="text" id="key-gen-result-public" readonly value="${escapeHtml(result.public_key || '')}" class="w-full rounded border border-slate-300 px-2 py-2 text-xs font-mono bg-slate-50" />
+              <div class="flex gap-2 mt-2">
+                <button type="button" id="key-gen-copy-public" class="rounded border border-slate-300 px-2 py-1 text-xs">${t('common.copy')}</button>
+              </div>
+              <p class="text-xs text-slate-500 mt-1">${t('app.sshKeyGeneratePublicKeyHint')}</p>
+            </div>
+            <p id="key-gen-copy-status" class="text-xs text-emerald-600 hidden"></p>
+          </div>
+          <div class="px-6 py-4 bg-slate-50 flex justify-end border-t border-slate-200">
+            <button type="button" id="key-gen-done" class="rounded bg-sky-600 text-white px-3 py-2 text-xs">${t('common.close')}</button>
+          </div>
+        </div>
+      </div>`
+    const statusEl = dlg.querySelector('#key-gen-copy-status')
+    const showCopied = () => {
+      statusEl.textContent = t('common.copied')
+      statusEl.classList.remove('hidden')
+    }
+    dlg.querySelector('#key-gen-download').addEventListener('click', () => {
+      downloadTextFile(result.id || 'id_ed25519', result.private_key || '')
+    })
+    dlg.querySelector('#key-gen-copy-private').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(result.private_key || '')
+        showCopied()
+      } catch {
+        dlg.querySelector('#key-gen-result-private').select()
+      }
+    })
+    dlg.querySelector('#key-gen-copy-public').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(result.public_key || '')
+        showCopied()
+      } catch {
+        dlg.querySelector('#key-gen-result-public').select()
+      }
+    })
+    const done = async () => {
+      closeDialog(dlg)
+      await refreshAll()
+    }
+    dlg.querySelector('#key-gen-done').addEventListener('click', done)
   }
 
   function showKeyEdit(id, label) {
@@ -525,6 +663,7 @@ export async function renderCredentialsPage({ mainContent, escapeHtml }) {
   }
 
   mainContent.querySelector('#cred-page-add-key').addEventListener('click', showKeyAdd)
+  mainContent.querySelector('#cred-page-generate-key').addEventListener('click', showKeyGenerate)
   mainContent.querySelector('#cred-page-add-identity').addEventListener('click', showIdentityAdd)
 
   await refreshAll()

@@ -94,6 +94,47 @@ func TestSQLiteAccessGroupStore_RemoveTargetFromGroup(t *testing.T) {
 	}
 }
 
+func TestSQLiteAccessGroupStore_GroupIDsForTarget(t *testing.T) {
+	ctx := context.Background()
+	groups, targets := newTestSQLiteStores(t)
+	_, _ = groups.Create(ctx, "g1", "G1")
+	_, _ = groups.Create(ctx, "g2", "G2")
+	_, _ = targets.CreateWithPath(ctx, "t1", "n", "127.0.0.1", 22, ProtocolSSH, GroupID("g1"), "g1", "", "", "", "", true, false, false)
+
+	got, err := groups.GroupIDsForTarget(ctx, "t1")
+	if err != nil {
+		t.Fatalf("GroupIDsForTarget (none yet): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no groups before AddTargetToGroup, got %v", got)
+	}
+
+	if err := groups.AddTargetToGroup(ctx, "g1", "t1"); err != nil {
+		t.Fatalf("AddTargetToGroup g1: %v", err)
+	}
+	if err := groups.AddTargetToGroup(ctx, "g2", "t1"); err != nil {
+		t.Fatalf("AddTargetToGroup g2: %v", err)
+	}
+	got, err = groups.GroupIDsForTarget(ctx, "t1")
+	if err != nil {
+		t.Fatalf("GroupIDsForTarget: %v", err)
+	}
+	if len(got) != 2 || got[0] != "g1" || got[1] != "g2" {
+		t.Fatalf("expected [g1 g2] sorted, got %v", got)
+	}
+
+	if err := groups.RemoveTargetFromGroup(ctx, "g1", "t1"); err != nil {
+		t.Fatalf("RemoveTargetFromGroup g1: %v", err)
+	}
+	got, err = groups.GroupIDsForTarget(ctx, "t1")
+	if err != nil {
+		t.Fatalf("GroupIDsForTarget after remove: %v", err)
+	}
+	if len(got) != 1 || got[0] != "g2" {
+		t.Fatalf("expected [g2] after removing g1, got %v", got)
+	}
+}
+
 func TestSQLiteTargetStore_ListByProtocol(t *testing.T) {
 	ctx := context.Background()
 	groups, targets := newTestSQLiteStores(t)

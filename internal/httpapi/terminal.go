@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/i18n"
 	"github.com/nullpo7z/vantyx/internal/proxyerrors"
 	"github.com/nullpo7z/vantyx/internal/recording"
 	"github.com/nullpo7z/vantyx/internal/session"
@@ -30,6 +31,23 @@ func supportsDetachableTerminal(p access.Protocol) bool {
 	return p == access.ProtocolSSH || p == access.ProtocolTelnet
 }
 
+// closeWSGracefully performs a proper WebSocket closing handshake
+// (a Close control frame) instead of just dropping the TCP connection.
+// Use this whenever a text frame (e.g. "error: ...") was just written and
+// must reliably reach the client before the socket goes away: a bare
+// conn.Close() right after WriteMessage can race with delivery of that
+// frame and/or read as an abnormal closure, which browsers surface as a
+// WebSocket "error" event — the frontend then shows a generic "can't
+// reach the backend" message that overwrites or races with the real one
+// that was just sent, even though the server behaved correctly and the
+// failure was something specific (e.g. wrong credentials).
+func closeWSGracefully(conn *websocket.Conn) {
+	_ = conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		time.Now().Add(2*time.Second))
+	_ = conn.Close()
+}
+
 // listTerminalSessions is satisfied by [*session.Manager] for
 // GET /api/terminal/sessions.
 type listTerminalSessions interface {
@@ -42,7 +60,10 @@ type terminalSessionStarter interface {
 	Start(id session.ID, opts session.StartOptions, fn func(context.Context, *session.Session)) (*session.Session, error)
 	Get(id session.ID) (*session.Session, bool)
 	Touch(id session.ID)
-	Stop(id session.ID)
+	// Stop cancels and waits for the session's goroutine to exit,
+	// reporting false if it had to be force-removed after timing out
+	// (see [session.Manager.Stop]).
+	Stop(id session.ID) bool
 }
 
 // writeJSON serialises v as JSON to w. Caller should not have written
@@ -87,7 +108,7 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	targetID := r.URL.Query().Get("target_id")
-	userID, target, ok := a.getSessionAndTargetWithAccess(w, r, targetID)
+	userID, target, ok := a.getSessionAndTargetForWS(w, r, targetID)
 	if !ok {
 		return
 	}
@@ -120,8 +141,8 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 			"target_id": targetID,
 			"error":     err.Error(),
 		})
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+err.Error()))
-		_ = conn.Close()
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+terminalCredentialErrorMessage(r, err)))
+		closeWSGracefully(conn)
 		return
 	}
 	audit("terminal_ws_credentials_ok", auditFields{
@@ -166,7 +187,15 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 			rows = n
 		}
 	}
+	// The session goroutine's context is a fresh context.Background()
+	// derivative (see session.Manager.Start) so it outlives this
+	// request -- but that also means it loses the request's resolved
+	// locale, silently reverting any bridge error text sent later
+	// (auth failures, etc.) to English regardless of the user's saved
+	// preference. Carry the locale forward explicitly.
+	requestLocale := i18n.FromContext(r.Context())
 	_, err = a.TerminalSessionManager.Start(id, opts, func(ctx context.Context, termSess *session.Session) {
+		ctx = i18n.WithLocale(ctx, requestLocale)
 		a.runDetachableBridge(ctx, termSess, a.TerminalSessionManager, id, conn, target, creds, cols, rows)
 		if a.SessionEventBroker != nil {
 			a.SessionEventBroker.Broadcast()
@@ -192,6 +221,64 @@ func (a *App) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	if a.SessionEventBroker != nil {
 		a.SessionEventBroker.Broadcast()
 	}
+}
+
+// getSessionAndTargetForWS is getSessionAndTargetWithAccess for the
+// WebSocket handshake. A plain 403 on the handshake is invisible to the
+// browser (the WebSocket API only surfaces a generic close), so the SPA
+// showed "check the target, network and saved credentials" for a target
+// the user simply isn't allowed to reach (E-9). When access is denied we
+// complete the upgrade, send a localized "error: forbidden" frame the
+// page can display verbatim, audit terminal_ws_forbidden, and close.
+// Every other failure keeps the plain HTTP response.
+func (a *App) getSessionAndTargetForWS(w http.ResponseWriter, r *http.Request, targetID string) (string, *access.Target, bool) {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		writeJSONErrorKey(w, r, "common.targetIDRequired", http.StatusBadRequest)
+		return "", nil, false
+	}
+	userID := a.currentUserID(r)
+	if userID == "" {
+		writeJSONErrorKey(w, r, "common.unauthorized", http.StatusUnauthorized)
+		return "", nil, false
+	}
+	ctx := r.Context()
+	target, err := a.TargetStore.Get(ctx, access.TargetID(targetID))
+	if err != nil {
+		audit("target_not_found", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+		})
+		writeJSONErrorKey(w, r, "common.targetNotFound", http.StatusNotFound)
+		return "", nil, false
+	}
+	allowed, err := a.userCanAccessTarget(ctx, userID, access.TargetID(targetID))
+	if err != nil {
+		writeInternalError(w, err)
+		return "", nil, false
+	}
+	if !allowed {
+		audit("terminal_ws_forbidden", auditFields{
+			"user_id":   userID,
+			"target_id": targetID,
+		})
+		// Only attempt the upgrade on a real WebSocket handshake: on a
+		// plain HTTP request gorilla's Upgrade writes its own 400 before
+		// returning, which would mask the 403.
+		if !websocket.IsWebSocketUpgrade(r) {
+			writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
+			return "", nil, false
+		}
+		conn, upErr := wsUpgrader.Upgrade(w, r, nil)
+		if upErr != nil {
+			// Upgrade already wrote an HTTP error response.
+			return "", nil, false
+		}
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: "+localizedMessage(r, "common.forbidden")))
+		closeWSGracefully(conn)
+		return "", nil, false
+	}
+	return userID, target, true
 }
 
 // handleTerminalAttach handles the resume / viewer branch of /ws/ssh.
@@ -259,7 +346,7 @@ func (a *App) handleTerminalAttach(w http.ResponseWriter, r *http.Request, userI
 		}
 	default:
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: session attach slot busy"))
-		_ = conn.Close()
+		closeWSGracefully(conn)
 	}
 }
 
@@ -285,6 +372,9 @@ type TerminalSessionItem struct {
 	LastSeen    time.Time `json:"last_seen"`
 	Idle        bool      `json:"idle"`
 	IdleSeconds int       `json:"idle_seconds,omitempty"`
+	// Keep is true when the owner (or an admin) pinned the session as
+	// intentionally left running, so it is not flagged idle.
+	Keep bool `json:"keep"`
 	// Role indicates how the current user is attached to this session:
 	// "owner" if they own the underlying terminal (and therefore are
 	// the default writer), or "viewer" if they have joined via a
@@ -307,6 +397,7 @@ func terminalSessionItemFrom(sess *session.Session, mgr *session.Manager, protoc
 		CreatedAt:   sess.CreatedAt(),
 		LastSeen:    sess.LastSeen(),
 	}
+	item.Keep = sess.Keep()
 	if mgr != nil && mgr.IsIdle(sess) {
 		item.Idle = true
 		item.IdleSeconds = int(mgr.IdleDuration(sess).Seconds())
@@ -424,11 +515,23 @@ func (a *App) handleTerminalSessionDelete(w http.ResponseWriter, r *http.Request
 		writeJSONErrorKey(w, r, "common.forbidden", http.StatusForbidden)
 		return
 	}
-	a.TerminalSessionManager.Stop(id)
-	audit("terminal_session_stop", auditFields{
+	stoppedClean := a.TerminalSessionManager.Stop(id)
+	if a.SharingRegistry != nil {
+		a.SharingRegistry.Remove(sessionID)
+	}
+	auditFieldsForStop := auditFields{
 		"session_id": sessionID,
 		"user_id":    userID,
-	})
+	}
+	if !stoppedClean {
+		// The bridge goroutine didn't exit within the manager's stop
+		// timeout and was force-removed anyway; its resources (PTY,
+		// socket) may still be leaking. Surface it in the audit trail
+		// since the session.Manager layer has no way to escalate
+		// further on its own.
+		auditFieldsForStop["clean_stop"] = false
+	}
+	audit("terminal_session_stop", auditFieldsForStop)
 	if a.SessionEventBroker != nil {
 		a.SessionEventBroker.Broadcast()
 	}
@@ -454,7 +557,7 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 	}{SessionID: string(id)})
 	touch := func() { manager.Touch(id) }
 
-	tee, stdinRecorder, recordingCloser := a.setupRecording(ctx, termSess, id, cols, rows)
+	tee, stdinRecorder, resizeRecorder, recordingCloser := a.setupRecording(ctx, termSess, id, cols, rows)
 	if recordingCloser != nil {
 		defer recordingCloser()
 	}
@@ -463,6 +566,10 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 	// Initial WebSocket attach is the session owner. Pass user metadata
 	// down so the bridge knows who to consider as the writer.
 	ownerAttach := session.AttachReq{Conn: conn, UserID: termSess.UserID, Mode: session.AttachModeWriter}
+	if a.SharingRegistry != nil {
+		a.ensureRoomFor(termSess)
+		defer a.SharingRegistry.Remove(string(id))
+	}
 	if a.SharingBridges != nil {
 		defer a.SharingBridges.Unregister(id)
 	}
@@ -480,14 +587,11 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		if a.SharingBridges != nil {
 			sink = telnetBridgeSink{id: id, br: a.SharingBridges}
 		}
-		bridgeErr = telnetproxy.RunBridgeDetachable(ctx, endMsg, target.Host, target.Port, creds.Username, creds.Password, termSess.Output, termSess.AttachCh, ownerAttach, touch, tee, telStdin, cols, rows, nil, sink)
+		bridgeErr = telnetproxy.RunBridgeDetachable(ctx, endMsg, target.Host, target.Port, creds.Username, creds.Password, termSess.Output, termSess.AttachCh, ownerAttach, touch, tee, telStdin, cols, rows, nil, sink, resizeRecorder)
 	default:
 		endReason = "ssh_session_closed"
 		endMsg = "session_ended: SSH session closed"
-		opts := []sshproxy.BridgeOption{sshproxy.WithHostKeyFingerprint(target.SSHHostKeyFingerprint)}
-		if a.SharingBridges != nil {
-			opts = append(opts, sshproxy.WithBridgeControlSink(sshBridgeSink{id: id, br: a.SharingBridges}))
-		}
+		opts := sshBridgeOptions(target, sshproxy.WithBridgeControlSink(sshBridgeSink{id: id, br: a.SharingBridges}), sshproxy.WithResizeRecorder(resizeRecorder))
 		bridgeErr = sshproxy.RunBridgeDetachable(ctx, endMsg, target.Host, target.Port, creds.Username, creds.Password, creds.PrivateKey, creds.PrivateKeyPassphrase, termSess.Output, termSess.AttachCh, ownerAttach, touch, tee, stdinRecorder, cols, rows, nil, opts...)
 	}
 	if bridgeErr != nil {
@@ -513,7 +617,7 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 		})
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(endMsg))
 	}
-	_ = conn.Close()
+	closeWSGracefully(conn)
 	// Returning from this callback lets the Manager goroutine close
 	// sess.done and call delete(m.sessions, id). Calling
 	// manager.Stop(id) here would deadlock because Stop waits on
@@ -525,10 +629,10 @@ func (a *App) runDetachableBridge(ctx context.Context, termSess *session.Session
 // recorder, and a closer that flushes / closes the cast file and
 // updates the recordings table. When recording is disabled all three
 // return values are zero.
-func (a *App) setupRecording(ctx context.Context, termSess *session.Session, id session.ID, cols, rows int) (io.Writer, sshproxy.StdinRecorder, func()) {
+func (a *App) setupRecording(ctx context.Context, termSess *session.Session, id session.ID, cols, rows int) (io.Writer, sshproxy.StdinRecorder, sshproxy.ResizeRecorder, func()) {
 	recordingDir := os.Getenv("VANTYX_RECORDINGS_DIR")
 	if recordingDir == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	_ = os.MkdirAll(recordingDir, 0750) // #nosec G703 -- path from env, dir is admin-configured.
 	// Session IDs are RFC3339Nano timestamps containing colons. Replace
@@ -546,7 +650,7 @@ func (a *App) setupRecording(ctx context.Context, termSess *session.Session, id 
 			"path":       castPath,
 			"error":      err.Error(),
 		})
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	startedAt := time.Now().UTC()
 	w, h := cols, rows
@@ -575,7 +679,7 @@ func (a *App) setupRecording(ctx context.Context, termSess *session.Session, id 
 			_, _ = a.DB.ExecContext(context.Background(), `UPDATE recordings SET ended_at = ? WHERE id = ?`, time.Now().UTC().Format("2006-01-02 15:04:05"), string(id))
 		}
 	}
-	return asc, asc, closer
+	return asc, asc, asc, closer
 }
 
 // wrapWithCommandLog adds a command-log recorder on top of an existing

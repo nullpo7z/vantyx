@@ -12,9 +12,11 @@ import {
   bindSessionListActions,
   countIdleSessions,
 } from './session_list_shared.js'
-import { renderUserInfo } from './account_page.js'
+import { renderAccountPage } from './account_page.js'
+import { formatDateTime } from './datetime.js'
+import { renderSystemSettingsPage } from './system_settings_page.js'
+import { renderAccessRequestsAdminPage, renderMyAccessRequests, showAccessRequestModal } from './access_requests.js'
 import { renderAuditPage } from './audit_page.js'
-import { renderSettingsPage } from './settings_page.js'
 import { renderGroupTargetsTable } from './targets_page.js'
 import { renderCredentialsPage } from './credentials_page.js'
 import {
@@ -22,7 +24,7 @@ import {
   SFTP_DISABLED_TAG,
   TREE_MAIN_CLASS,
 } from './constants.js'
-import { escapeHtml, renderTagPills, fillExistingTagsPicker, authMethodLabel } from './dom_helpers.js'
+import { escapeHtml, renderTagPills, fillExistingTagsPicker, authMethodLabel, isSameOriginBroadcast } from './dom_helpers.js'
 import {
   randomToken,
   openPopup,
@@ -103,6 +105,11 @@ function setupGlobalRealtimeWatches() {
   })
 }
 
+// Sentinel key for the tree's synthetic "root" node in an expanded-groups
+// Set (real group IDs never contain this, they're limited to
+// [a-zA-Z0-9_-] segments joined by "/").
+const ROOT_TOGGLE_ID = '__root__'
+
 export function renderApp(container) {
   // 画面遷移（renderApp 再呼び出し）時にも保存済みテーマを必ず適用し直す。
   applyStoredTheme()
@@ -111,6 +118,32 @@ export function renderApp(container) {
   const mainContent = document.getElementById('main-content')
   const userNameEl = document.getElementById('user-name')
   const logoutBtn = document.getElementById('logout-btn')
+
+  // Collapsible header menu (phones): the hamburger toggles the nav +
+  // account controls, which are a dropdown under the bar on narrow
+  // screens and an inline row on desktop. Choosing a destination or an
+  // account action closes it again.
+  const navMenuToggle = document.getElementById('nav-menu-toggle')
+  const headerInner = document.querySelector('.vantyx-app-header .vantyx-header-inner')
+  if (navMenuToggle && headerInner) {
+    const closeMenu = () => {
+      headerInner.classList.remove('menu-open')
+      navMenuToggle.setAttribute('aria-expanded', 'false')
+    }
+    navMenuToggle.addEventListener('click', () => {
+      const open = headerInner.classList.toggle('menu-open')
+      navMenuToggle.setAttribute('aria-expanded', open ? 'true' : 'false')
+    })
+    headerInner.addEventListener('click', (e) => {
+      if (e.target.closest('#nav-menu-toggle')) return
+      if (e.target.closest('.vantyx-nav-link, #logout-btn, #user-name, #theme-toggle')) closeMenu()
+    })
+    // Close when tapping outside the header.
+    document.addEventListener('click', (e) => {
+      if (!headerInner.classList.contains('menu-open')) return
+      if (!e.target.closest('.vantyx-app-header')) closeMenu()
+    })
+  }
   const navTargets = document.getElementById('nav-targets')
   const navSessions = document.getElementById('nav-sessions')
   const navRecordings = document.getElementById('nav-recordings')
@@ -119,13 +152,15 @@ export function renderApp(container) {
   const navUsers = document.getElementById('nav-users')
   const navCredentials = document.getElementById('nav-credentials')
   const navAudit = document.getElementById('nav-audit')
+  const navAccessRequests = document.getElementById('nav-access-requests')
+  const navSystem = document.getElementById('nav-system')
   const navSettings = document.getElementById('nav-settings')
 
   let meData = null
   let groupsCache = null
   let selectedGroupId = ''
-  const expandedGroups = new Set()
-  const recordingsExpandedGroups = new Set()
+  const expandedGroups = new Set([ROOT_TOGGLE_ID])
+  const recordingsExpandedGroups = new Set([ROOT_TOGGLE_ID])
   /** 録画ページ用: 選択中のグループID・ターゲットID（サーバー）・表示名 */
   let selectedRecordingsGroupId = ''
   let selectedRecordingsTargetId = ''
@@ -194,13 +229,7 @@ export function renderApp(container) {
 
   function showUserInfo() {
     if (!meData) return
-    setActiveNav('recordings')
-    renderUserInfo({
-      mainContent,
-      meData,
-      escapeHtml,
-      onChangePassword: () => showChangePasswordModal(),
-    })
+    showSettings()
   }
 
   async function showUsersPage() {
@@ -232,6 +261,7 @@ export function renderApp(container) {
       sessionEndModal,
       openTerminalTab: openTerminalTabWithParent,
       getRdpResolutionForTarget,
+      isAdmin: !!(meData && meData.role === 'admin'),
     })
   }
 
@@ -300,76 +330,31 @@ export function renderApp(container) {
     await renderAuditPage({ mainContent, meData, setActiveNav })
   }
 
-  async function showSettings() {
+  // Access requests (admin only): approve / deny membership requests.
+  async function showAccessRequests() {
+    if (!meData || meData.role !== 'admin') return
     disconnectAppSessionEvents()
-    await renderSettingsPage(mainContent)
+    await renderAccessRequestsAdminPage(mainContent, { onDecided: () => { groupsCache = null } })
   }
 
-  function showChangePasswordModal() {
-    const modal = document.getElementById('change-password-modal')
-    modal.classList.remove('hidden')
-    modal.innerHTML = `
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-        <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden border border-slate-200/50">
-          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-            <h3 class="font-semibold text-slate-800">${t('app.changePasswordTitle')}</h3>
-            <button id="change-password-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
-          </div>
-          <form id="change-password-form">
-            <div class="px-6 py-5 space-y-5">
-              <div>
-                <label for="change-password-current" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldCurrentPassword')}</label>
-                <input type="password" id="change-password-current" autocomplete="current-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderCurrentPassword')}" />
-              </div>
-              <div>
-                <label for="change-password-new" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldNewPassword')}</label>
-                <input type="password" id="change-password-new" autocomplete="new-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderStrong')}" />
-              </div>
-              <div>
-                <label for="change-password-confirm" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldNewPasswordConfirm')}</label>
-                <input type="password" id="change-password-confirm" autocomplete="new-password" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderConfirm')}" />
-              </div>
-              <p id="change-password-error" class="text-sm text-red-600 hidden"></p>
-            </div>
-            <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-              <button type="button" id="change-password-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
-              <button type="submit" id="change-password-submit" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors">${t('app.submitChange')}</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    `
-    const close = () => {
-      modal.classList.add('hidden')
-      modal.innerHTML = ''
+  // System settings (admin only): server-wide knobs such as audit forwarding.
+  async function showSystemSettings() {
+    if (!meData || meData.role !== 'admin') return
+    disconnectAppSessionEvents()
+    await renderSystemSettingsPage(mainContent)
+  }
+
+  // Account settings: profile, language, password, 2FA and SSH keys.
+  // Also opened from the user name in the header.
+  async function showSettings() {
+    disconnectAppSessionEvents()
+    try {
+      meData = await API.me()
+      userNameEl.textContent = meData.username
+    } catch {
+      /* keep the cached meData */
     }
-    modal.querySelector('#change-password-close').addEventListener('click', close)
-    modal.querySelector('#change-password-cancel').addEventListener('click', close)
-    modal.querySelector('#change-password-form').addEventListener('submit', async (e) => {
-      e.preventDefault()
-      const errorEl = modal.querySelector('#change-password-error')
-      const submitBtn = modal.querySelector('#change-password-submit')
-      const current = modal.querySelector('#change-password-current').value
-      const newPass = modal.querySelector('#change-password-new').value
-      const confirmPass = modal.querySelector('#change-password-confirm').value
-      errorEl.classList.add('hidden')
-      if (newPass !== confirmPass) {
-        errorEl.textContent = t('app.passwordMismatch')
-        errorEl.classList.remove('hidden')
-        return
-      }
-      submitBtn.disabled = true
-      try {
-        await API.changePassword(current, newPass)
-        close()
-        showUserInfo()
-      } catch (err) {
-        errorEl.textContent = err.message || t('app.passwordChangeFailed')
-        errorEl.classList.remove('hidden')
-      } finally {
-        submitBtn.disabled = false
-      }
-    })
+    await renderAccountPage(mainContent, { meData })
   }
 
   function showEditTagsModal({ type, id, label, currentTags, onSaved }) {
@@ -459,6 +444,11 @@ export function renderApp(container) {
                   <option value="">${t('app.pickPlaceholder')}</option>
                 </select>
               </div>
+              <div>
+                <label for="add-member-expires" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldMemberExpires')}</label>
+                <input type="datetime-local" id="add-member-expires" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
+                <p class="mt-1 text-xs text-slate-500">${t('app.memberExpiresHint')}</p>
+              </div>
               <p id="add-member-error" class="text-sm text-red-600 hidden"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
@@ -501,9 +491,20 @@ export function renderApp(container) {
       const userId = selectEl.value?.trim()
       if (!userId) return
       errorEl.classList.add('hidden')
+      const expiresRaw = modal.querySelector('#add-member-expires').value
+      let expiresAt = ''
+      if (expiresRaw) {
+        const d = new Date(expiresRaw)
+        if (Number.isNaN(d.getTime()) || d.getTime() <= Date.now()) {
+          errorEl.textContent = t('app.memberExpiresInvalid')
+          errorEl.classList.remove('hidden')
+          return
+        }
+        expiresAt = d.toISOString()
+      }
       submitBtn.disabled = true
       try {
-        await API.addGroupMember(groupId, userId)
+        await API.addGroupMember(groupId, userId, expiresAt)
         close()
         groupsCache = null
         await showTreeView('manage', true)
@@ -512,6 +513,64 @@ export function renderApp(container) {
         errorEl.classList.remove('hidden')
       } finally {
         submitBtn.disabled = false
+      }
+    })
+  }
+
+  function showImportTargetsModal() {
+    const modal = document.getElementById('change-password-modal')
+    if (!modal) return
+    const close = () => {
+      modal.classList.add('hidden')
+      modal.innerHTML = ''
+    }
+    modal.classList.remove('hidden')
+    modal.innerHTML = `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 overflow-hidden border border-slate-200/50 max-h-[90vh] flex flex-col">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+            <h3 class="font-semibold text-slate-800">${t('targets.importTitle')}</h3>
+            <button id="imp-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
+          </div>
+          <div class="px-6 py-5 overflow-auto space-y-4">
+            <p class="text-sm text-slate-600">${t('targets.importIntro')}</p>
+            <pre class="rounded bg-slate-50 border border-slate-200 px-3 py-2 text-[11px] font-mono text-slate-700 overflow-x-auto">name,host,port,protocol,group_id,tags,ssh_username,ssh_password,sftp_enabled,ftp_enabled,tftp_enabled,ssh_host_key_fingerprint,credential_identity_id,ssh_key_id
+router1,10.0.0.1,22,ssh,net/tokyo,core edge,admin,,true,false,false,,,</pre>
+            <div class="flex flex-wrap items-center gap-3">
+              <input type="file" id="imp-file" accept=".csv,.json,text/csv,application/json" class="text-sm" />
+              <label class="flex items-center gap-1.5 text-sm text-slate-700"><input type="checkbox" id="imp-dry" class="h-4 w-4" checked /> ${t('targets.importDryRun')}</label>
+              <button type="button" id="imp-run" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm disabled:opacity-50">${t('targets.importRun')}</button>
+              <span id="imp-status" class="text-xs text-slate-600"></span>
+            </div>
+            <div id="imp-results"></div>
+          </div>
+        </div>
+      </div>`
+    modal.querySelector('#imp-close').addEventListener('click', async () => {
+      close()
+      groupsCache = null
+      await showTreeView('manage', true)
+    })
+    const statusEl = modal.querySelector('#imp-status')
+    const resultsEl = modal.querySelector('#imp-results')
+    modal.querySelector('#imp-run').addEventListener('click', async (e) => {
+      const file = modal.querySelector('#imp-file').files[0]
+      if (!file) return
+      const dryRun = modal.querySelector('#imp-dry').checked
+      e.currentTarget.disabled = true
+      statusEl.textContent = t('targets.importRunning')
+      try {
+        const res = await API.targetsImport(file, { dryRun })
+        statusEl.textContent = t(dryRun ? 'targets.importDryResult' : 'targets.importResult', { rows: res.rows, created: res.created, skipped: res.skipped, failed: res.failed })
+        const cls = { created: 'text-emerald-700', valid: 'text-emerald-700', skipped: 'text-amber-700', error: 'text-red-600' }
+        resultsEl.innerHTML = `<table class="min-w-full text-left text-xs"><thead class="bg-slate-50 border-b border-slate-200"><tr><th class="px-2 py-1">#</th><th class="px-2 py-1">${t('common.name')}</th><th class="px-2 py-1">${t('common.status')}</th><th class="px-2 py-1">${t('targets.importDetail')}</th></tr></thead><tbody>${(res.results || [])
+          .map((r) => `<tr class="border-b border-slate-100"><td class="px-2 py-1 text-slate-500">${r.row}</td><td class="px-2 py-1">${escapeHtml(r.name || '')}</td><td class="px-2 py-1 font-medium ${cls[r.status] || ''}">${escapeHtml(r.status)}</td><td class="px-2 py-1 text-slate-600">${escapeHtml(r.error || r.id || '')}</td></tr>`)
+          .join('')}</tbody></table>`
+        if (!dryRun) groupsCache = null
+      } catch (err) {
+        statusEl.textContent = err.message || t('common.errorOccurred')
+      } finally {
+        e.currentTarget.disabled = false
       }
     })
   }
@@ -862,9 +921,15 @@ export function renderApp(container) {
       const token = randomToken()
       pendingTerminalCreds[token] = { targetId, targetName, protocol, password: password || '', passphrase: isTelnet ? '' : (passphrase || ''), sessionName, sessionDesc, useStoredCredentials: true }
       params.set('channel', token)
+      // needs_password / needs_passphrase drive which fields the terminal
+      // page's own retry form shows if the broadcast-supplied credentials
+      // turn out to be wrong -- must be set for every launch path, not
+      // just the one with a custom toUrl(), or a retry after a failed
+      // login shows session name/description only with no way to fix
+      // the password.
+      params.set('needs_password', needsPassword ? '1' : '0')
+      params.set('needs_passphrase', needsPassphrase ? '1' : '0')
       if (urlOpts?.toUrl) {
-        params.set('needs_password', needsPassword ? '1' : '0')
-        params.set('needs_passphrase', needsPassphrase ? '1' : '0')
         openTerminalTabWithParent(urlOpts.toUrl(params))
       } else {
         openTerminalTabWithParent(`/terminal?${params.toString()}`)
@@ -878,6 +943,7 @@ export function renderApp(container) {
         delete pendingTerminalCreds[token]
       }, 15_000)
       bc.onmessage = (ev) => {
+        if (!isSameOriginBroadcast(ev)) return
         if (ev?.data?.type !== 'ready') return
         if (ev?.data?.target_id !== channelTargetId) return
         const creds = pendingTerminalCreds[token]
@@ -903,9 +969,15 @@ export function renderApp(container) {
     })
   }
 
-  function showSSHCredentialModal(targetId, targetName, protocol = 'ssh', urlOpts = null) {
+  function showSSHCredentialModal(targetId, targetName, protocol = 'ssh', urlOpts = null, hasSshKey = false) {
     const isTelnet = protocol === 'telnet'
     const authLabel = isTelnet ? 'Telnet' : 'SSH'
+    // The passphrase field only makes sense when the target already has
+    // a private key stored server-side (no username, otherwise this
+    // wouldn't be the no-stored-credentials modal) that this connection
+    // could unlock. For a plain password-only target it's just
+    // confusing noise, so hide it unless has_ssh_key says a key exists.
+    const showPassphraseField = !isTelnet && hasSshKey
     const modal = document.getElementById('ssh-credential-modal')
     modal.classList.remove('hidden')
     modal.innerHTML = `
@@ -926,10 +998,10 @@ export function renderApp(container) {
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldAuthPassword', { auth: authLabel })}</label>
                 <input type="password" id="ssh-cred-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
               </div>
-              ${isTelnet ? '' : `<div>
+              ${showPassphraseField ? `<div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldPassphraseOpt')}</label>
                 <input type="password" id="ssh-cred-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderPassphraseOpt')}" />
-              </div>`}
+              </div>` : ''}
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldSessionName')}</label>
                 <input type="text" id="ssh-cred-session-name" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderSessionName')}" />
@@ -977,7 +1049,7 @@ export function renderApp(container) {
         p.set('session_description', sessionDesc)
         url = urlOpts.toUrl(p)
       } else {
-        url = `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=${encodeURIComponent(protocol)}&channel=${encodeURIComponent(token)}`
+        url = `/terminal?target_id=${encodeURIComponent(targetId)}&target_name=${encodeURIComponent(targetName || '')}&protocol=${encodeURIComponent(protocol)}&channel=${encodeURIComponent(token)}&has_ssh_key=${hasSshKey ? '1' : '0'}`
       }
       // NOTE: ターミナルの「戻る/セッション終了」で元タブに戻れるよう、opener を残す（noreferrer/noopener は付けない）
       openTerminalTabWithParent(url)
@@ -990,6 +1062,7 @@ export function renderApp(container) {
         delete pendingTerminalCreds[token]
       }, 15_000)
       bc.onmessage = (ev) => {
+        if (!isSameOriginBroadcast(ev)) return
         if (ev?.data?.type !== 'ready') return
         if (ev?.data?.target_id !== channelTargetId) return
         const creds = pendingTerminalCreds[token]
@@ -1058,15 +1131,20 @@ export function renderApp(container) {
         : ''
 
       const addTargetBtnHtml = isManageMode
-        ? `<button type="button" id="btn-add-target-in-group" class="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50" ${selectedGroupId ? '' : 'disabled'}>${t('app.addTargetBtn')}</button>`
-        : ''
+        ? `<a href="/api/targets/export?format=csv" class="shrink-0 whitespace-nowrap rounded border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm" title="${t('targets.exportCsvTitle')}">CSV</a>
+           <a href="/api/targets/export?format=json" class="shrink-0 whitespace-nowrap rounded border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm" title="${t('targets.exportJsonTitle')}">JSON</a>
+           <button type="button" id="btn-import-targets" class="shrink-0 whitespace-nowrap rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('targets.importBtn')}</button>
+           <button type="button" id="btn-check-targets" class="shrink-0 whitespace-nowrap rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors disabled:opacity-50" ${targets.length ? '' : 'disabled'}>${t('targets.checkBtn')}</button>
+           <button type="button" id="btn-add-target-in-group" class="shrink-0 whitespace-nowrap rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50" ${selectedGroupId ? '' : 'disabled'}>${t('app.addTargetBtn')}</button>`
+        : `<button type="button" id="btn-request-access" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('access.requestBtn')}</button>`
       const showMembersSection = isManageMode && isAdminRole && selectedGroupId
 
       mainContent.innerHTML = `
         <div class="w-full h-full flex flex-col gap-4">
           ${!isManageMode ? '<section id="incoming-invitations-banner" class="hidden w-full bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-4 space-y-3"></section>' : ''}
-          <div class="flex gap-6 w-full flex-1 min-h-0">
-            <aside class="w-64 flex-col border-r border-slate-200 bg-white shadow-sm shrink-0 rounded-lg overflow-hidden flex">
+          ${!isManageMode ? '<section id="my-access-requests" class="hidden w-full bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-3 space-y-2"></section>' : ''}
+          <div class="flex flex-col md:flex-row gap-4 md:gap-6 w-full flex-1 min-h-0">
+            <aside class="w-full md:w-80 flex-col border-b md:border-b-0 md:border-r border-slate-200 bg-white shadow-sm md:shrink-0 rounded-lg overflow-hidden flex max-h-[45vh] md:max-h-none">
               <div class="px-4 py-3 border-b border-slate-200 text-sm font-semibold text-slate-700 flex items-center justify-between">
                 <span>${t('app.accessGroupsTitle')}</span>
                 ${addGroupBtnHtml}
@@ -1078,17 +1156,17 @@ export function renderApp(container) {
             <div class="flex-1 flex flex-col gap-4 min-h-0">
               ${!isManageMode ? '<div id="idle-sessions-banner" class="hidden rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900"></div>' : ''}
               <section class="flex-1 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col min-h-0">
-                <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-                  <div>
-                    <h2 class="text-sm font-semibold text-slate-800">${escapeHtml(label)}</h2>
+                <div class="px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 bg-slate-50">
+                  <div class="min-w-0">
+                    <h2 class="text-sm font-semibold text-slate-800 truncate">${escapeHtml(label)}</h2>
                   </div>
-                  <div class="flex items-center gap-2">
-                    <span class="text-xs text-slate-500">${t('app.targetsSuffix', { n: targets.length })}</span>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-xs text-slate-500 whitespace-nowrap">${t('app.targetsSuffix', { n: targets.length })}</span>
                     ${addTargetBtnHtml}
                   </div>
                 </div>
                 <div class="px-5 py-4">
-                  ${renderGroupTargetsTable(targets, mode, escapeHtml, renderTagPills)}
+                  ${renderGroupTargetsTable(targets, mode, escapeHtml, renderTagPills, selectedGroupId)}
                   ${showMembersSection ? `<div id="group-members-container" class="mt-6 border-t border-slate-200 pt-4"><p class="text-slate-500">${t('app.loading')}</p></div>` : ''}
                 </div>
               </section>
@@ -1126,9 +1204,14 @@ export function renderApp(container) {
                 </div>
               `
               const rows = (members || []).map((m) => `
-                <tr class="border-b border-slate-200 hover:bg-slate-50">
+                <tr class="border-b border-slate-200 hover:bg-slate-50${m.expired ? ' opacity-60' : ''}">
                   <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(m.id)}</td>
                   <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(m.username)}</td>
+                  <td class="px-4 py-2 text-sm text-slate-600 whitespace-nowrap">${
+                    m.expires_at
+                      ? `${escapeHtml(formatDateTime(m.expires_at))}${m.expired ? ` <span class="ml-1 inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">${t('app.memberExpired')}</span>` : ''}`
+                      : `<span class="text-slate-400">${t('app.memberNoExpiry')}</span>`
+                  }</td>
                   <td class="px-4 py-2 text-right">
                     <button type="button" class="remove-member-btn rounded border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50" data-user-id="${escapeHtml(m.id)}">${t('app.delete')}</button>
                   </td>
@@ -1147,10 +1230,11 @@ export function renderApp(container) {
                       <tr>
                         <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('app.memberHeaderId')}</th>
                         <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('app.memberHeaderName')}</th>
+                        <th class="px-4 py-2 text-xs font-semibold text-slate-700">${t('app.memberHeaderExpires')}</th>
                         <th class="px-4 py-2"></th>
                       </tr>
                     </thead>
-                    <tbody>${rows || `<tr><td colspan="3" class="px-4 py-4 text-center text-slate-500">${t('app.noMembers')}</td></tr>`}</tbody>
+                    <tbody>${rows || `<tr><td colspan="4" class="px-4 py-4 text-center text-slate-500">${t('app.noMembers')}</td></tr>`}</tbody>
                   </table>
                 </div>
               `
@@ -1193,8 +1277,53 @@ export function renderApp(container) {
         }
       }
 
+      // Access requests live on the home view for every user.
+      mainContent.querySelector('#btn-request-access')?.addEventListener('click', () => {
+        showAccessRequestModal({
+          onCreated: () => renderMyAccessRequests(mainContent.querySelector('#my-access-requests')),
+        })
+      })
+      if (!isManageMode) {
+        renderMyAccessRequests(mainContent.querySelector('#my-access-requests'), {
+          onChanged: () => { groupsCache = null },
+        })
+      }
       if (isManageMode) {
         mainContent.querySelector('#btn-add-group')?.addEventListener('click', showAddGroupModal)
+        mainContent.querySelector('#btn-import-targets')?.addEventListener('click', () => showImportTargetsModal())
+        mainContent.querySelector('#btn-check-targets')?.addEventListener('click', async (e) => {
+          const btn = e.currentTarget
+          const cells = [...mainContent.querySelectorAll('.reach-status')]
+          const ids = cells.map((c) => c.dataset.reachId).filter(Boolean)
+          if (!ids.length) return
+          btn.disabled = true
+          cells.forEach((c) => { c.textContent = '…'; c.className = 'reach-status text-slate-400' })
+          try {
+            const res = await API.targetsCheck(ids)
+            const byId = {}
+            ;(res.results || []).forEach((r) => { byId[r.id] = r })
+            cells.forEach((c) => {
+              const r = byId[c.dataset.reachId]
+              if (!r) return
+              if (r.reachable) {
+                c.textContent = `✓ ${r.latency_ms} ms`
+                c.className = 'reach-status text-emerald-700'
+              } else if (r.error && r.error.startsWith('udp')) {
+                c.textContent = t('targets.reachSkipped')
+                c.className = 'reach-status text-slate-400'
+                c.title = r.error
+              } else {
+                c.textContent = `✗ ${t('targets.reachUnreachable')}`
+                c.className = 'reach-status text-red-600'
+                c.title = r.error || ''
+              }
+            })
+          } catch (err) {
+            await uiAlert(err.message || t('common.errorOccurred'))
+          } finally {
+            btn.disabled = false
+          }
+        })
         mainContent.querySelector('#btn-add-target-in-group')?.addEventListener('click', () => {
           if (!selectedGroupId) return
           showAddTargetModal()
@@ -1211,7 +1340,10 @@ export function renderApp(container) {
               ssh_username: btn.dataset.targetSshUsername || '',
               tags: (btn.dataset.targetTags || '').split(',').map((s) => s.trim()).filter(Boolean),
               has_ssh_key: btn.dataset.targetHasSshKey === '1',
+              has_passphrase: btn.dataset.targetHasPassphrase === '1',
               needs_passphrase: btn.dataset.targetNeedsPassphrase === '1',
+              credential_identity_id: btn.dataset.targetCredentialIdentityId || '',
+              ssh_key_id: btn.dataset.targetSshKeyId || '',
               group_id: btn.dataset.targetGroupId || '',
               has_tftp_for_host: btn.dataset.targetHasTftpForHost === '1',
               tftp_target_id: btn.dataset.targetTftpId || '',
@@ -1401,7 +1533,7 @@ export function renderApp(container) {
             if (btn.dataset.hasStoredCredentials) {
               showStoredCredentialModal(id, name, btn.dataset.needsPassword === '1', btn.dataset.needsPassphrase === '1', protocol)
             } else {
-              showSSHCredentialModal(id, name, protocol)
+              showSSHCredentialModal(id, name, protocol, null, btn.dataset.hasSshKey === '1')
             }
           })
         })
@@ -1505,7 +1637,7 @@ export function renderApp(container) {
                             urlOpts,
                           )
                         } else {
-                          showSSHCredentialModal(sshTarget.id, sshTarget.name || targetName, 'ssh', urlOpts)
+                          showSSHCredentialModal(sshTarget.id, sshTarget.name || targetName, 'ssh', urlOpts, !!sshTarget.has_ssh_key)
                         }
                       },
                     })
@@ -1615,6 +1747,40 @@ export function renderApp(container) {
       `
       if (isManageMode) {
         mainContent.querySelector('#btn-add-group')?.addEventListener('click', showAddGroupModal)
+        mainContent.querySelector('#btn-import-targets')?.addEventListener('click', () => showImportTargetsModal())
+        mainContent.querySelector('#btn-check-targets')?.addEventListener('click', async (e) => {
+          const btn = e.currentTarget
+          const cells = [...mainContent.querySelectorAll('.reach-status')]
+          const ids = cells.map((c) => c.dataset.reachId).filter(Boolean)
+          if (!ids.length) return
+          btn.disabled = true
+          cells.forEach((c) => { c.textContent = '…'; c.className = 'reach-status text-slate-400' })
+          try {
+            const res = await API.targetsCheck(ids)
+            const byId = {}
+            ;(res.results || []).forEach((r) => { byId[r.id] = r })
+            cells.forEach((c) => {
+              const r = byId[c.dataset.reachId]
+              if (!r) return
+              if (r.reachable) {
+                c.textContent = `✓ ${r.latency_ms} ms`
+                c.className = 'reach-status text-emerald-700'
+              } else if (r.error && r.error.startsWith('udp')) {
+                c.textContent = t('targets.reachSkipped')
+                c.className = 'reach-status text-slate-400'
+                c.title = r.error
+              } else {
+                c.textContent = `✗ ${t('targets.reachUnreachable')}`
+                c.className = 'reach-status text-red-600'
+                c.title = r.error || ''
+              }
+            })
+          } catch (err) {
+            await uiAlert(err.message || t('common.errorOccurred'))
+          } finally {
+            btn.disabled = false
+          }
+        })
       }
     }
   }
@@ -1624,150 +1790,156 @@ export function renderApp(container) {
     modal.classList.remove('hidden')
     modal.innerHTML = `
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-        <div class="bg-white rounded-lg shadow-xl w-full max-w-xl mx-4 overflow-hidden border border-slate-200/50">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
             <h3 class="font-semibold text-slate-800">${t('app.addTargetTitle')}</h3>
             <button id="add-target-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="add-target-form">
-            <div class="px-6 py-5 space-y-5 max-h-[70vh] overflow-y-auto">
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldName')}</label>
-                <input type="text" id="add-target-name" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.placeholderTargetName')}" />
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetGroupLabel')}</label>
-                <div class="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-800 bg-slate-50 font-mono">${escapeHtml(selectedGroupId || 'root')}</div>
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetHost')}</label>
-                <input type="text" id="add-target-host" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400 font-mono" placeholder="${t('app.placeholderHost')}" />
-              </div>
-              <div class="grid grid-cols-2 gap-4">
-                <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetPort')}</label>
-                  <input type="number" id="add-target-port" min="1" max="65535" value="22" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
-                </div>
-                <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetProto')}</label>
-                  <select id="add-target-protocol" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
-                    <option value="ssh">SSH</option>
-                    <option value="telnet">Telnet</option>
-                    <option value="vnc">VNC</option>
-                    <option value="rdp">RDP</option>
-                    <option value="tftp">TFTP</option>
-                    <option value="ftp">FTP</option>
-                  </select>
-                </div>
-              </div>
-              <div id="add-target-host-key-wrap" class="rounded border border-slate-200 bg-slate-50 px-4 py-3 hidden">
-                <div class="flex items-center justify-between mb-2">
-                  <p class="text-xs font-medium text-slate-700">${t('hostKey.sectionTitle')}</p>
-                  <button type="button" id="add-target-host-key-refetch" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 shadow-sm">${t('hostKey.refetch')}</button>
-                </div>
-                <p class="text-[11px] text-slate-500 mb-1">${t('hostKey.fingerprintLabel')}</p>
-                <div id="add-target-host-key-fp" class="font-mono text-xs break-all bg-white border border-slate-200 rounded px-2 py-1.5 text-slate-700 select-all min-h-[2rem]">${t('hostKey.notRegistered')}</div>
-                <p id="add-target-host-key-status" class="text-[11px] text-slate-500 mt-1"></p>
-              </div>
-              <div id="add-target-rdp-res-wrap" class="grid grid-cols-2 gap-4 hidden">
-                <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpWidth')}</label>
-                  <input type="number" id="add-target-rdp-width" min="640" max="3840" value="1920" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
-                </div>
-                <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpHeight')}</label>
-                  <input type="number" id="add-target-rdp-height" min="480" max="2160" value="1080" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
-                </div>
-              </div>
-              <div id="add-target-file-protocols-wrap" class="space-y-3 hidden">
-                <p class="text-xs font-medium text-slate-700">${t('app.fileProtocolHeading')}</p>
-                <div class="space-y-2 pl-0">
-                  <label id="add-target-sftp-label" class="flex items-start gap-2 cursor-pointer hidden">
-                    <input type="checkbox" id="add-target-enable-sftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-                    <span class="text-sm text-slate-800">${t('app.sftpLabel')}</span>
-                  </label>
-                  <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" id="add-target-enable-ftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-                    <span class="text-sm text-slate-800">FTP</span>
-                  </label>
-                  <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" id="add-target-enable-tftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-                    <span class="text-sm text-slate-800">${t('app.tftpLabel')}</span>
-                  </label>
-                </div>
-              </div>
-              <div id="add-target-cred-fields">
-                <div class="flex items-start justify-between gap-3 mb-3">
-                  <div class="flex-1 space-y-2">
-                    <label class="block text-xs font-medium text-slate-600">${t('app.targetCredentialMode')}</label>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="add-target-cred-mode" value="identity" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" checked />
-                      <span class="text-sm text-slate-800">${t('app.targetCredentialModeIdentity')}</span>
-                    </label>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="add-target-cred-mode" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">${t('app.targetCredentialModeKey')}</span>
-                    </label>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="add-target-cred-mode" value="manual" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">${t('app.targetCredentialModeManual')}</span>
-                    </label>
+            <div class="px-6 py-5 max-h-[85vh] overflow-y-auto">
+              <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-5">
+                <div class="space-y-5">
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldName')}</label>
+                    <input type="text" id="add-target-name" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.placeholderTargetName')}" />
                   </div>
-                  <div class="shrink-0 pt-5">
-                    <button type="button" id="add-target-manage-credentials" class="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">
-                      ${t('app.manageCredentials')}
-                    </button>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetGroupLabel')}</label>
+                    <div class="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-800 bg-slate-50 font-mono">${escapeHtml(selectedGroupId || 'root')}</div>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetHost')}</label>
+                    <input type="text" id="add-target-host" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400 font-mono" placeholder="${t('app.placeholderHost')}" />
+                  </div>
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetPort')}</label>
+                      <input type="number" id="add-target-port" min="1" max="65535" value="22" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
+                    </div>
+                    <div>
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetProto')}</label>
+                      <select id="add-target-protocol" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                        <option value="ssh">SSH</option>
+                        <option value="telnet">Telnet</option>
+                        <option value="vnc">VNC</option>
+                        <option value="rdp">RDP</option>
+                        <option value="tftp">TFTP</option>
+                        <option value="ftp">FTP</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div id="add-target-host-key-wrap" class="rounded border border-slate-200 bg-slate-50 px-4 py-3 hidden">
+                    <div class="flex items-center justify-between mb-2">
+                      <p class="text-xs font-medium text-slate-700">${t('hostKey.sectionTitle')}</p>
+                      <button type="button" id="add-target-host-key-refetch" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 shadow-sm">${t('hostKey.refetch')}</button>
+                    </div>
+                    <p class="text-[11px] text-slate-500 mb-1">${t('hostKey.fingerprintLabel')}</p>
+                    <div id="add-target-host-key-fp" class="font-mono text-xs break-all bg-white border border-slate-200 rounded px-2 py-1.5 text-slate-700 select-all min-h-[2rem]">${t('hostKey.notRegistered')}</div>
+                    <p id="add-target-host-key-status" class="text-[11px] text-slate-500 mt-1"></p>
+                  </div>
+                  <div id="add-target-rdp-res-wrap" class="grid grid-cols-2 gap-4 hidden">
+                    <div>
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpWidth')}</label>
+                      <input type="number" id="add-target-rdp-width" min="640" max="3840" value="1920" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
+                    </div>
+                    <div>
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpHeight')}</label>
+                      <input type="number" id="add-target-rdp-height" min="480" max="2160" value="1080" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
+                    </div>
+                  </div>
+                  <div id="add-target-file-protocols-wrap" class="space-y-3 hidden">
+                    <p class="text-xs font-medium text-slate-700">${t('app.fileProtocolHeading')}</p>
+                    <div class="space-y-2 pl-0">
+                      <label id="add-target-sftp-label" class="flex items-start gap-2 cursor-pointer hidden">
+                        <input type="checkbox" id="add-target-enable-sftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                        <span class="text-sm text-slate-800">${t('app.sftpLabel')}</span>
+                      </label>
+                      <label class="flex items-start gap-2 cursor-pointer">
+                        <input type="checkbox" id="add-target-enable-ftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                        <span class="text-sm text-slate-800">FTP</span>
+                      </label>
+                      <label class="flex items-start gap-2 cursor-pointer">
+                        <input type="checkbox" id="add-target-enable-tftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                        <span class="text-sm text-slate-800">${t('app.tftpLabel')}</span>
+                      </label>
+                    </div>
                   </div>
                 </div>
-                <div id="add-target-identity-wrap" class="mb-4">
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetCredentialIdentity')}</label>
-                  <select id="add-target-credential-identity" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
-                    <option value="">${t('app.credentialsNone')}</option>
-                  </select>
-                </div>
-                <div id="add-target-ssh-key-wrap" class="mb-4 hidden">
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetCredentialKey')}</label>
-                  <select id="add-target-ssh-key" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
-                    <option value="">${t('app.credentialsPickKey')}</option>
-                  </select>
-                </div>
-                <div id="add-target-auth-type-wrap" class="space-y-3 hidden">
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.authMethodLabel')}</label>
-                  <div class="space-y-2">
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="add-target-auth-type" value="password" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" checked />
-                      <span class="text-sm text-slate-800">${t('app.authPassword')}</span>
-                    </label>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="add-target-auth-type" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">${t('app.authPublicKey')}</span>
-                    </label>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="add-target-auth-type" value="key_passphrase" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">${t('app.authPublicKeyWithPp')}</span>
-                    </label>
-                  </div>
-                </div>
-                <div class="space-y-5 mt-4">
-                  <div id="add-target-username-wrap">
-                    <label id="add-target-username-label" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetUsernameOpt')}</label>
-                    <input type="text" id="add-target-ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.placeholderRoot')}" />
-                  </div>
-                  <div id="add-target-password-wrap">
-                    <label id="add-target-password-label" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetPasswordOpt')}</label>
-                    <input type="password" id="add-target-ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.targetPasswordHint')}" />
-                  </div>
-                  <div id="add-target-key-wrap" class="hidden">
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetPrivateKeyLabel')}</label>
-                    <textarea id="add-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono placeholder-slate-400" placeholder="${t('app.targetPrivateKeyPlaceholder')}"></textarea>
-                  </div>
-                  <div id="add-target-passphrase-wrap" class="hidden">
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetKeyPassphraseLabel')}</label>
-                    <input type="password" id="add-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.targetKeyPassphrasePlaceholder')}" />
+                <div class="space-y-5">
+                  <div id="add-target-cred-fields">
+                    <div class="flex items-start justify-between gap-3 mb-3">
+                      <div class="flex-1 space-y-2">
+                        <label class="block text-xs font-medium text-slate-600">${t('app.targetCredentialMode')}</label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="add-target-cred-mode" value="identity" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" checked />
+                          <span class="text-sm text-slate-800">${t('app.targetCredentialModeIdentity')}</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="add-target-cred-mode" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                          <span class="text-sm text-slate-800">${t('app.targetCredentialModeKey')}</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="add-target-cred-mode" value="manual" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                          <span class="text-sm text-slate-800">${t('app.targetCredentialModeManual')}</span>
+                        </label>
+                      </div>
+                      <div class="shrink-0 pt-5">
+                        <button type="button" id="add-target-manage-credentials" class="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">
+                          ${t('app.manageCredentials')}
+                        </button>
+                      </div>
+                    </div>
+                    <div id="add-target-identity-wrap" class="mb-4">
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetCredentialIdentity')}</label>
+                      <select id="add-target-credential-identity" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                        <option value="">${t('app.credentialsNone')}</option>
+                      </select>
+                    </div>
+                    <div id="add-target-ssh-key-wrap" class="mb-4 hidden">
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetCredentialKey')}</label>
+                      <select id="add-target-ssh-key" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                        <option value="">${t('app.credentialsPickKey')}</option>
+                      </select>
+                    </div>
+                    <div id="add-target-auth-type-wrap" class="space-y-3 hidden">
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.authMethodLabel')}</label>
+                      <div class="space-y-2">
+                        <label class="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="add-target-auth-type" value="password" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" checked />
+                          <span class="text-sm text-slate-800">${t('app.authPassword')}</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="add-target-auth-type" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                          <span class="text-sm text-slate-800">${t('app.authPublicKey')}</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="add-target-auth-type" value="key_passphrase" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                          <span class="text-sm text-slate-800">${t('app.authPublicKeyWithPp')}</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="space-y-5 mt-4">
+                      <div id="add-target-username-wrap">
+                        <label id="add-target-username-label" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetUsernameOpt')}</label>
+                        <input type="text" id="add-target-ssh-username" autocomplete="username" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.placeholderRoot')}" />
+                      </div>
+                      <div id="add-target-password-wrap">
+                        <label id="add-target-password-label" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetPasswordOpt')}</label>
+                        <input type="password" id="add-target-ssh-password" autocomplete="current-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.targetPasswordHint')}" />
+                      </div>
+                      <div id="add-target-key-wrap" class="hidden">
+                        <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetPrivateKeyLabel')}</label>
+                        <textarea id="add-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono placeholder-slate-400" placeholder="${t('app.targetPrivateKeyPlaceholder')}"></textarea>
+                      </div>
+                      <div id="add-target-passphrase-wrap" class="hidden">
+                        <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetKeyPassphraseLabel')}</label>
+                        <input type="password" id="add-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.targetKeyPassphrasePlaceholder')}" />
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
-              <p id="add-target-error" class="text-sm text-red-600 hidden"></p>
+              <p id="add-target-error" class="text-sm text-red-600 hidden mt-5"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
               <button type="button" id="add-target-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.addTargetCancel')}</button>
@@ -2169,158 +2341,182 @@ export function renderApp(container) {
 
   function showEditTargetModal(target) {
     const modal = document.getElementById('add-target-modal')
+    const allGroups = Array.isArray(groupsCache) ? groupsCache : (groupsCache?.items || [])
+    const currentGroupId = target.group_id || ''
+    const editGroupOptions = allGroups
+      .slice()
+      .sort((a, b) => (a.id || '').localeCompare(b.id || ''))
+      .map((g) => `<option value="${escapeHtml(g.id)}" ${g.id === currentGroupId ? 'selected' : ''}>${escapeHtml(g.id)}</option>`)
+      .join('')
+    // 資格情報の使い方の初期選択: ターゲットが最後に Identity / SSH Key
+    // ライブラリのどのエントリから設定されたかを反映する（無ければ手入力）。
+    const initialCredMode = target.credential_identity_id
+      ? 'identity'
+      : (target.ssh_key_id ? 'key' : 'manual')
     modal.classList.remove('hidden')
     modal.innerHTML = `
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-        <div class="bg-white rounded-lg shadow-xl w-full max-w-xl mx-4 overflow-hidden border border-slate-200/50">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl mx-4 overflow-hidden border border-slate-200/50">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
             <h3 class="font-semibold text-slate-800">${t('app.editTargetTitle')}</h3>
             <button id="edit-target-close" class="text-slate-500 hover:text-slate-700 text-2xl leading-none transition-colors">&times;</button>
           </div>
           <form id="edit-target-form" data-edit-target-id="${escapeHtml(target.id)}">
-            <div class="px-6 py-5 space-y-5 max-h-[70vh] overflow-y-auto">
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldName')}</label>
-                <input type="text" id="edit-target-name" required value="${escapeHtml(target.name)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetHost')}</label>
-                <input type="text" id="edit-target-host" required value="${escapeHtml(target.host)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
-              </div>
-              <div class="grid grid-cols-2 gap-4">
-                <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetPort')}</label>
-                  <input type="number" id="edit-target-port" min="1" max="65535" value="${target.port || 22}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
-                </div>
-                <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetProto')}</label>
-                  <select id="edit-target-protocol" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
-                    <option value="ssh" ${(target.protocol || 'ssh') === 'ssh' ? 'selected' : ''}>SSH</option>
-                    <option value="telnet" ${target.protocol === 'telnet' ? 'selected' : ''}>Telnet</option>
-                    <option value="vnc" ${target.protocol === 'vnc' ? 'selected' : ''}>VNC</option>
-                    <option value="rdp" ${target.protocol === 'rdp' ? 'selected' : ''}>RDP</option>
-                    <option value="tftp" ${target.protocol === 'tftp' ? 'selected' : ''}>TFTP</option>
-                    <option value="ftp" ${target.protocol === 'ftp' ? 'selected' : ''}>FTP</option>
-                  </select>
-                </div>
-              </div>
-              <div id="edit-target-cred-fields">
-                <div class="flex items-start justify-between gap-3 mb-3">
-                  <div class="flex-1 space-y-2">
-                    <label class="block text-xs font-medium text-slate-600">${t('app.targetCredentialMode')}</label>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="edit-target-cred-mode" value="identity" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">${t('app.targetCredentialModeIdentity')}</span>
-                    </label>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="edit-target-cred-mode" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">${t('app.targetCredentialModeKey')}</span>
-                    </label>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="edit-target-cred-mode" value="manual" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" checked />
-                      <span class="text-sm text-slate-800">${t('app.targetCredentialModeManual')}</span>
-                    </label>
+            <div class="px-6 py-5 max-h-[85vh] overflow-y-auto">
+              <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-5">
+                <div class="space-y-5">
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldName')}</label>
+                    <input type="text" id="edit-target-name" required value="${escapeHtml(target.name)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
                   </div>
-                  <div class="shrink-0 pt-5">
-                    <button type="button" id="edit-target-manage-credentials" class="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">
-                      ${t('app.manageCredentials')}
-                    </button>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetHost')}</label>
+                    <input type="text" id="edit-target-host" required value="${escapeHtml(target.host)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
                   </div>
-                </div>
-                <div id="edit-target-identity-wrap" class="mb-4 hidden">
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetCredentialIdentity')}</label>
-                  <select id="edit-target-credential-identity" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
-                    <option value="">${t('app.credentialsNone')}</option>
-                  </select>
-                </div>
-                <div id="edit-target-ssh-key-wrap" class="mb-4 hidden">
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetCredentialKey')}</label>
-                  <select id="edit-target-ssh-key" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
-                    <option value="">${t('app.credentialsPickKey')}</option>
-                  </select>
-                </div>
-                <div id="edit-target-auth-type-wrap" class="space-y-3 hidden">
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.authMethodLabel')}</label>
-                  <div class="space-y-2">
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="edit-target-auth-type" value="password" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">${t('app.authPassword')}</span>
-                    </label>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="edit-target-auth-type" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">${t('app.authPublicKey')}</span>
-                    </label>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="edit-target-auth-type" value="key_passphrase" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
-                      <span class="text-sm text-slate-800">${t('app.authPublicKeyWithPp')}</span>
-                    </label>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetGroupLabel')}</label>
+                    <select id="edit-target-group" required class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono">
+                      ${editGroupOptions}
+                    </select>
                   </div>
-                </div>
-                <div class="space-y-5 mt-4">
-                  <div id="edit-target-username-wrap">
-                    <label id="edit-target-username-label" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetUsernameOpt')}</label>
-                    <input type="text" id="edit-target-ssh-username" value="${escapeHtml(target.ssh_username || '')}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.placeholderRoot')}" />
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetPort')}</label>
+                      <input type="number" id="edit-target-port" min="1" max="65535" value="${target.port || 22}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
+                    </div>
+                    <div>
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetProto')}</label>
+                      <select id="edit-target-protocol" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                        <option value="ssh" ${(target.protocol || 'ssh') === 'ssh' ? 'selected' : ''}>SSH</option>
+                        <option value="telnet" ${target.protocol === 'telnet' ? 'selected' : ''}>Telnet</option>
+                        <option value="vnc" ${target.protocol === 'vnc' ? 'selected' : ''}>VNC</option>
+                        <option value="rdp" ${target.protocol === 'rdp' ? 'selected' : ''}>RDP</option>
+                        <option value="tftp" ${target.protocol === 'tftp' ? 'selected' : ''}>TFTP</option>
+                        <option value="ftp" ${target.protocol === 'ftp' ? 'selected' : ''}>FTP</option>
+                      </select>
+                    </div>
                   </div>
-                  <div id="edit-target-password-wrap">
-                    <label id="edit-target-password-label" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetPasswordOpt')}</label>
-                    <input type="password" id="edit-target-ssh-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.editTargetPasswordHint')}" />
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldTagsCsv')}</label>
+                    <input type="text" id="edit-target-tags" value="${escapeHtml((target.tags || []).join(', '))}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderTagsCsv')}" />
+                    <div id="edit-target-tags-picker" class="mt-2"></div>
                   </div>
-                  <div id="edit-target-key-wrap" class="hidden">
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetPrivateKeyLabel')}</label>
-                    <textarea id="edit-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono placeholder-slate-400" placeholder="${target.has_ssh_key ? t('app.editTargetKeyPlaceholderConfigured') : t('app.targetPrivateKeyPlaceholder')}" autocomplete="off"></textarea>
-                    ${target.has_ssh_key ? `<label class="mt-1.5 flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" id="edit-target-clear-ssh-key" class="rounded border-slate-300" /> ${t('app.editTargetClearKey')}</label>` : ''}
+                  <div id="edit-target-file-protocols-wrap" class="space-y-3 hidden">
+                    <p class="text-xs font-medium text-slate-700">${t('app.fileProtocolHeading')}</p>
+                    <div class="space-y-2 pl-0">
+                      <label id="edit-target-sftp-label" class="flex items-start gap-2 cursor-pointer hidden">
+                        <input type="checkbox" id="edit-target-enable-sftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                        <span class="text-sm text-slate-800">${t('app.sftpLabel')}</span>
+                      </label>
+                      <label class="flex items-start gap-2 cursor-pointer">
+                        <input type="checkbox" id="edit-target-enable-ftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                        <span class="text-sm text-slate-800">FTP</span>
+                      </label>
+                      <label class="flex items-start gap-2 cursor-pointer">
+                        <input type="checkbox" id="edit-target-enable-tftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                        <span class="text-sm text-slate-800">${t('app.tftpLabel')}</span>
+                      </label>
+                    </div>
                   </div>
-                  <div id="edit-target-passphrase-wrap" class="hidden">
-                    <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetKeyPassphraseLabel')}</label>
-                    <input type="password" id="edit-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.editTargetKeyPassphraseHint')}" />
+                  <div id="edit-target-host-key-wrap" class="rounded border border-slate-200 bg-slate-50 px-4 py-3 hidden">
+                    <div class="flex items-center justify-between mb-2">
+                      <p class="text-xs font-medium text-slate-700">${t('hostKey.sectionTitle')}</p>
+                      <div class="flex gap-2">
+                        <button type="button" id="edit-target-host-key-refetch" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 shadow-sm">${t('hostKey.refetch')}</button>
+                        <button type="button" id="edit-target-host-key-clear" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50 shadow-sm">${t('hostKey.clear')}</button>
+                      </div>
+                    </div>
+                    <p class="text-[11px] text-slate-500 mb-1">${t('hostKey.fingerprintLabel')}</p>
+                    <div id="edit-target-host-key-fp" class="font-mono text-xs break-all bg-white border border-slate-200 rounded px-2 py-1.5 text-slate-700 select-all min-h-[2rem]">${escapeHtml(target.ssh_host_key_fingerprint || '') || t('hostKey.notRegistered')}</div>
+                    <p id="edit-target-host-key-status" class="text-[11px] text-slate-500 mt-1"></p>
+                  </div>
+                  <div id="edit-target-rdp-res-wrap" class="grid grid-cols-2 gap-4 hidden">
+                    <div>
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpWidth')}</label>
+                      <input type="number" id="edit-target-rdp-width" min="640" max="3840" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
+                    </div>
+                    <div>
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpHeight')}</label>
+                      <input type="number" id="edit-target-rdp-height" min="480" max="2160" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.fieldTagsCsv')}</label>
-                <input type="text" id="edit-target-tags" value="${escapeHtml((target.tags || []).join(', '))}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('app.placeholderTagsCsv')}" />
-                <div id="edit-target-tags-picker" class="mt-2"></div>
-              </div>
-              <div id="edit-target-file-protocols-wrap" class="space-y-3 hidden">
-                <p class="text-xs font-medium text-slate-700">${t('app.fileProtocolHeading')}</p>
-                <div class="space-y-2 pl-0">
-                  <label id="edit-target-sftp-label" class="flex items-start gap-2 cursor-pointer hidden">
-                    <input type="checkbox" id="edit-target-enable-sftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-                    <span class="text-sm text-slate-800">${t('app.sftpLabel')}</span>
-                  </label>
-                  <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" id="edit-target-enable-ftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-                    <span class="text-sm text-slate-800">FTP</span>
-                  </label>
-                  <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" id="edit-target-enable-tftp" class="mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-                    <span class="text-sm text-slate-800">${t('app.tftpLabel')}</span>
-                  </label>
-                </div>
-              </div>
-              <div id="edit-target-host-key-wrap" class="rounded border border-slate-200 bg-slate-50 px-4 py-3 hidden">
-                <div class="flex items-center justify-between mb-2">
-                  <p class="text-xs font-medium text-slate-700">${t('hostKey.sectionTitle')}</p>
-                  <div class="flex gap-2">
-                    <button type="button" id="edit-target-host-key-refetch" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 shadow-sm">${t('hostKey.refetch')}</button>
-                    <button type="button" id="edit-target-host-key-clear" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50 shadow-sm">${t('hostKey.clear')}</button>
+                <div class="space-y-5">
+                  <div id="edit-target-cred-fields">
+                    <div class="flex items-start justify-between gap-3 mb-3">
+                      <div class="flex-1 space-y-2">
+                        <label class="block text-xs font-medium text-slate-600">${t('app.targetCredentialMode')}</label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="edit-target-cred-mode" value="identity" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" ${initialCredMode === 'identity' ? 'checked' : ''} />
+                          <span class="text-sm text-slate-800">${t('app.targetCredentialModeIdentity')}</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="edit-target-cred-mode" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" ${initialCredMode === 'key' ? 'checked' : ''} />
+                          <span class="text-sm text-slate-800">${t('app.targetCredentialModeKey')}</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="edit-target-cred-mode" value="manual" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" ${initialCredMode === 'manual' ? 'checked' : ''} />
+                          <span class="text-sm text-slate-800">${t('app.targetCredentialModeManual')}</span>
+                        </label>
+                      </div>
+                      <div class="shrink-0 pt-5">
+                        <button type="button" id="edit-target-manage-credentials" class="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">
+                          ${t('app.manageCredentials')}
+                        </button>
+                      </div>
+                    </div>
+                    <div id="edit-target-identity-wrap" class="mb-4 hidden">
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetCredentialIdentity')}</label>
+                      <select id="edit-target-credential-identity" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                        <option value="">${t('app.credentialsNone')}</option>
+                      </select>
+                    </div>
+                    <div id="edit-target-ssh-key-wrap" class="mb-4 hidden">
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetCredentialKey')}</label>
+                      <select id="edit-target-ssh-key" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                        <option value="">${t('app.credentialsPickKey')}</option>
+                      </select>
+                    </div>
+                    <div id="edit-target-auth-type-wrap" class="space-y-3 hidden">
+                      <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.authMethodLabel')}</label>
+                      <div class="space-y-2">
+                        <label class="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="edit-target-auth-type" value="password" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                          <span class="text-sm text-slate-800">${t('app.authPassword')}</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="edit-target-auth-type" value="key" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                          <span class="text-sm text-slate-800">${t('app.authPublicKey')}</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="edit-target-auth-type" value="key_passphrase" class="rounded-full border-slate-300 text-sky-600 focus:ring-sky-500" />
+                          <span class="text-sm text-slate-800">${t('app.authPublicKeyWithPp')}</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="space-y-5 mt-4">
+                      <div id="edit-target-username-wrap">
+                        <label id="edit-target-username-label" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetUsernameOpt')}</label>
+                        <input type="text" id="edit-target-ssh-username" value="${escapeHtml(target.ssh_username || '')}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.placeholderRoot')}" />
+                      </div>
+                      <div id="edit-target-password-wrap">
+                        <label id="edit-target-password-label" class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetPasswordOpt')}</label>
+                        <input type="password" id="edit-target-ssh-password" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.editTargetPasswordHint')}" />
+                      </div>
+                      <div id="edit-target-key-wrap" class="hidden">
+                        <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetPrivateKeyLabel')}</label>
+                        <textarea id="edit-target-ssh-private-key" rows="4" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono placeholder-slate-400" placeholder="${target.has_ssh_key ? t('app.editTargetKeyPlaceholderConfigured') : t('app.targetPrivateKeyPlaceholder')}" autocomplete="off"></textarea>
+                        ${target.has_ssh_key ? `<label class="mt-1.5 flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" id="edit-target-clear-ssh-key" class="rounded border-slate-300" /> ${t('app.editTargetClearKey')}</label>` : ''}
+                      </div>
+                      <div id="edit-target-passphrase-wrap" class="hidden">
+                        <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.targetKeyPassphraseLabel')}</label>
+                        <input type="password" id="edit-target-ssh-key-passphrase" autocomplete="off" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white placeholder-slate-400" placeholder="${t('app.editTargetKeyPassphraseHint')}" />
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <p class="text-[11px] text-slate-500 mb-1">${t('hostKey.fingerprintLabel')}</p>
-                <div id="edit-target-host-key-fp" class="font-mono text-xs break-all bg-white border border-slate-200 rounded px-2 py-1.5 text-slate-700 select-all min-h-[2rem]">${escapeHtml(target.ssh_host_key_fingerprint || '') || t('hostKey.notRegistered')}</div>
-                <p id="edit-target-host-key-status" class="text-[11px] text-slate-500 mt-1"></p>
               </div>
-              <div id="edit-target-rdp-res-wrap" class="grid grid-cols-2 gap-4 hidden">
-                <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpWidth')}</label>
-                  <input type="number" id="edit-target-rdp-width" min="640" max="3840" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
-                </div>
-                <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('app.addTargetRdpHeight')}</label>
-                  <input type="number" id="edit-target-rdp-height" min="480" max="2160" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white font-mono" />
-                </div>
-              </div>
-              <p id="edit-target-error" class="text-sm text-red-600 hidden"></p>
+              <p id="edit-target-error" class="text-sm text-red-600 hidden mt-5"></p>
             </div>
             <div class="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
               <button type="button" id="edit-target-cancel" class="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">${t('app.cancel')}</button>
@@ -2561,13 +2757,22 @@ export function renderApp(container) {
       radio.addEventListener('change', syncEditCredentialMode)
     })
     const initialAuthType = target.protocol === 'ssh'
-      ? (target.has_ssh_key ? (target.needs_passphrase ? 'key_passphrase' : 'key') : 'password')
+      ? (target.has_ssh_key ? ((target.needs_passphrase || target.has_passphrase) ? 'key_passphrase' : 'key') : 'password')
       : 'password'
     const initialAuthRadio = modal.querySelector(`input[name="edit-target-auth-type"][value="${initialAuthType}"]`)
     if (initialAuthRadio) initialAuthRadio.checked = true
     syncEditProtocol()
 
-    void refreshEditCredentialLists().then(() => syncEditCredentialMode())
+    void refreshEditCredentialLists().then(() => {
+      // 資格情報リスト読み込み後、登録済みの Identity / SSH Key を選択状態にする。
+      if (initialCredMode === 'identity' && target.credential_identity_id && editIdentitySelect) {
+        editIdentitySelect.value = target.credential_identity_id
+      }
+      if (initialCredMode === 'key' && target.ssh_key_id && editSshKeySelect) {
+        editSshKeySelect.value = target.ssh_key_id
+      }
+      syncEditCredentialMode()
+    })
     editIdentitySelect?.addEventListener('change', () => applyEditCredentialIdentity(editIdentitySelect.value.trim()))
     editCredManageBtn?.addEventListener('click', async () => {
       modal.classList.add('hidden')
@@ -2643,6 +2848,7 @@ export function renderApp(container) {
       const host = modal.querySelector('#edit-target-host').value.trim()
       const port = parseInt(modal.querySelector('#edit-target-port').value, 10) || 22
       const protocol = modal.querySelector('#edit-target-protocol').value
+      const group_id = (modal.querySelector('#edit-target-group')?.value || '').trim()
       const credMode = getEditCredMode()
       const ssh_username = modal.querySelector('#edit-target-ssh-username').value.trim()
       const credential_identity_id = editIdentitySelect ? editIdentitySelect.value.trim() : ''
@@ -2673,12 +2879,23 @@ export function renderApp(container) {
           const pwVal = modal.querySelector('#edit-target-ssh-password').value
           ssh_password = pwVal === '' ? undefined : pwVal
         }
-        if (protocol === 'ssh' && (authType === 'key' || authType === 'key_passphrase')) {
-          const keyVal = modal.querySelector('#edit-target-ssh-private-key').value
-          ssh_private_key = clearKeyChecked ? '' : (keyVal === '' ? undefined : keyVal)
-          if (authType === 'key_passphrase') {
-            const keyPassVal = modal.querySelector('#edit-target-ssh-key-passphrase').value
-            ssh_private_key_passphrase = clearKeyChecked ? '' : (keyPassVal === '' ? undefined : keyPassVal)
+        if (protocol === 'ssh') {
+          if (authType === 'key' || authType === 'key_passphrase') {
+            const keyVal = modal.querySelector('#edit-target-ssh-private-key').value
+            ssh_private_key = clearKeyChecked ? '' : (keyVal === '' ? undefined : keyVal)
+            if (authType === 'key_passphrase') {
+              const keyPassVal = modal.querySelector('#edit-target-ssh-key-passphrase').value
+              ssh_private_key_passphrase = clearKeyChecked ? '' : (keyPassVal === '' ? undefined : keyPassVal)
+            } else {
+              // "公開鍵" (パスフレーズなし) 選択時は、以前 key_passphrase で
+              // 保存されていたパスフレーズが残ってしまわないよう明示的に消す。
+              ssh_private_key_passphrase = ''
+            }
+          } else {
+            // パスワード認証を選択した場合、以前登録された秘密鍵/パスフレーズが
+            // 残って接続時にパスフレーズを要求され続けないよう明示的に消す。
+            ssh_private_key = ''
+            ssh_private_key_passphrase = ''
           }
         }
       }
@@ -2695,11 +2912,15 @@ export function renderApp(container) {
         return
       }
       const updatePayload = { name, host, port, protocol, path: target.path || '', ssh_username }
-      if (credMode === 'identity' && credential_identity_id) {
-        updatePayload.credential_identity_id = credential_identity_id
-      } else if (credMode === 'key' && ssh_key_id) {
-        updatePayload.ssh_key_id = ssh_key_id
-      }
+      if (group_id) updatePayload.group_id = group_id
+      // Always send both explicitly (even as '') so the backend's "omit
+      // = leave unchanged" pointer semantics see this as a deliberate
+      // choice -- omitting them here (the old behavior) would leave a
+      // switch to "manual" silently unable to detach a previously
+      // linked Identity/SSH Key, since nothing would tell the backend
+      // credential source is even being touched.
+      updatePayload.credential_identity_id = credMode === 'identity' ? credential_identity_id : ''
+      updatePayload.ssh_key_id = credMode === 'key' ? ssh_key_id : ''
       if (protocol === 'ssh' || protocol === 'telnet') {
         updatePayload.sftp_enabled = protocol === 'ssh' ? enableSftpEdit : false
         updatePayload.ftp_enabled = enableFtpEdit
@@ -2775,6 +2996,7 @@ export function renderApp(container) {
   }
 
   function ensureGroupPathExpanded(groupId, expandedSet) {
+    expandedSet.add(ROOT_TOGGLE_ID)
     if (!groupId) return
     const parts = groupId.split('/').filter(Boolean)
     let acc = ''
@@ -2789,26 +3011,36 @@ export function renderApp(container) {
     const children = node.children || {}
     const keys = Object.keys(children)
     if (keys.length === 0) {
-      return depth === 0 ? '' : ''
+      return ''
     }
-    const padClass = depth > 0 ? 'pl-4 border-l border-black ml-2' : ''
-    let html = `<ul class="space-y-1 ${padClass}">`
     if (depth === 0) {
       const isSelectedRoot = selectedId === ''
       const rowClassRoot = isSelectedRoot ? 'bg-sky-100 text-sky-800 font-medium' : ''
-      html += `
-        <li>
-          <div class="flex items-start py-1.5 pr-2 rounded hover:bg-slate-50 cursor-pointer ${rowClassRoot}" data-group-select="1" data-group-id="">
-            <div class="w-[28px] shrink-0 self-stretch"></div>
-            <div class="w-3 h-3 rounded-sm bg-slate-200 border border-slate-300 shrink-0 mt-0.5"></div>
-            <div class="flex-1 min-w-0 pl-2">
-              <div class="text-xs font-medium text-slate-800">root</div>
-              <div class="text-[10px] text-slate-500 leading-snug">${t('app.treeGroupCount', { n: keys.length })}</div>
+      const isRootExpanded = expandedSet.has(ROOT_TOGGLE_ID)
+      const rootCaret = isRootExpanded ? '▼' : '▶'
+      return `
+        <ul class="space-y-1">
+          <li>
+            <div class="flex items-start py-1.5 pr-2 rounded hover:bg-slate-50 cursor-pointer ${rowClassRoot}" data-group-select="1" data-group-id="">
+              <div class="w-5 flex items-center justify-center text-[10px] text-slate-700 hover:text-slate-900 leading-none cursor-pointer shrink-0 self-stretch" data-group-toggle="1" data-group-id="${ROOT_TOGGLE_ID}">${rootCaret}</div>
+              <div class="w-3 h-3 rounded-sm bg-slate-200 border border-slate-300 shrink-0 mt-0.5"></div>
+              <div class="flex-1 min-w-0 pl-2">
+                <div class="text-xs font-medium text-slate-800">root</div>
+                <div class="text-[10px] text-slate-500 leading-snug">${t('app.treeGroupCount', { n: keys.length })}</div>
+              </div>
             </div>
-          </div>
-        </li>
+            ${isRootExpanded ? renderGroupTree(node, selectedId, 1, expandedSet) : ''}
+          </li>
+        </ul>
       `
     }
+    // Indent per level is halved from the old pl-4+ml-2 (24px) to pl-3
+    // (12px), and stops growing past depth 6 (deeper rows still get the
+    // vertical guide line, just no further leftward push) so a handful of
+    // nesting levels doesn't eat the whole sidebar width before any text
+    // is shown.
+    const padClass = depth <= 6 ? 'pl-3 border-l border-slate-200' : 'border-l border-slate-200'
+    let html = `<ul class="space-y-1 ${padClass}">`
     keys
       .slice()
       .sort((a, b) => a.localeCompare(b))
@@ -2823,8 +3055,8 @@ export function renderApp(container) {
         const isExpanded = expandedSet.has(child.id)
         const caret = hasChildren ? (isExpanded ? '▼' : '▶') : ''
         const caretHtml = hasChildren
-          ? `<div class="w-[40px] flex items-center justify-center text-[10px] text-slate-700 hover:text-slate-900 leading-none cursor-pointer shrink-0 self-stretch" data-group-toggle="1" data-group-id="${escapeHtml(child.id)}">${caret}</div>`
-          : `<div class="w-[40px] shrink-0 self-stretch" data-group-toggle="0"></div>`
+          ? `<div class="w-5 flex items-center justify-center text-[10px] text-slate-700 hover:text-slate-900 leading-none cursor-pointer shrink-0 self-stretch" data-group-toggle="1" data-group-id="${escapeHtml(child.id)}">${caret}</div>`
+          : `<div class="w-5 shrink-0 self-stretch" data-group-toggle="0"></div>`
         const actionHtml = (mainContent?.dataset?.treeMode === 'manage' && gid)
           ? `
               <div class="flex items-center gap-1 shrink-0">
@@ -2840,8 +3072,8 @@ export function renderApp(container) {
               ${caretHtml}
               <div class="w-3 h-3 rounded-sm bg-slate-200 border border-slate-300 shrink-0 mt-0.5"></div>
               <div class="flex-1 min-w-0 pl-2">
-                <div class="text-xs font-medium text-slate-800 break-words">${escapeHtml(child.name)}</div>
-                <div class="text-[10px] text-slate-500 leading-snug break-words">${escapeHtml(child.id)}${count ? ` · ${t('app.treeTargetCount', { n: count })}` : ''}</div>
+                <div class="text-xs font-medium text-slate-800 truncate" title="${escapeHtml(child.name)}">${escapeHtml(child.name)}</div>
+                <div class="text-[10px] text-slate-500 leading-snug truncate" title="${escapeHtml(child.id)}">${escapeHtml(child.id)}${count ? ` · ${t('app.treeTargetCount', { n: count })}` : ''}</div>
               </div>
               ${actionHtml}
             </div>
@@ -2900,6 +3132,8 @@ export function renderApp(container) {
     navUsers,
     navCredentials,
     navAudit,
+    navAccessRequests,
+    navSystem,
     navSettings,
     getMe: () => meData,
     onHome: () => showTreeView('home'),
@@ -2910,7 +3144,15 @@ export function renderApp(container) {
     onUsers: () => showUsersPage(),
     onCredentials: () => showCredentialsPage(),
     onAudit: () => showAuditLogs(),
+    onAccessRequests: () => showAccessRequests(),
+    onSystem: () => showSystemSettings(),
     onSettings: () => showSettings(),
+  })
+
+  // The brand mark in the header is a shortcut to the home view.
+  document.getElementById('nav-brand')?.addEventListener('click', (e) => {
+    e.preventDefault()
+    navTargets.click()
   })
 
   userNameEl.addEventListener('click', (e) => {
@@ -2924,9 +3166,8 @@ export function renderApp(container) {
     try {
       await API.logout()
     } catch {
-      /* サーバーが応答しなくてもクライアント側のCookieは消す */
+      /* サーバー不通時も renderLogin で UI はログイン画面へ戻す（HttpOnly Cookie は JS から削除不可） */
     }
-    document.cookie = 'vantyx_session=; path=/; max-age=0'
     renderLogin(container)
   })
 

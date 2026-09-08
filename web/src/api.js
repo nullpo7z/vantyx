@@ -34,6 +34,252 @@ const API = {
   },
 
   /**
+   * Complete a login whose password was accepted but which requires a
+   * second factor. `code` is a TOTP or an unused recovery code.
+   *
+   * @param {string} mfaToken - Token from the `mfa_required` login response.
+   * @param {string} code
+   * @returns {Promise<{user_id: string, username: string, role: string, require_password_change?: boolean}>}
+   */
+  async loginTotp(mfaToken, code) {
+    const res = await fetch('/api/login/totp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mfa_token: mfaToken, code }),
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Verification failed')
+    }
+    return res.json()
+  },
+
+  /** Which sign-in methods the server offers (public). */
+  async authMethods() {
+    const res = await fetch('/api/auth/methods', { credentials: 'include' })
+    if (!res.ok) return { password: true, oidc: { enabled: false } }
+    return res.json()
+  },
+
+  /** Current user's two-factor status. */
+  async totpStatus() {
+    const res = await fetch('/api/me/totp', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load two-factor status')
+    }
+    return res.json()
+  },
+
+  /** Start two-factor enrolment: returns otpauth_url, secret and a QR PNG data URL. */
+  async totpSetup() {
+    const res = await fetch('/api/me/totp/setup', { method: 'POST', credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to start two-factor setup')
+    }
+    return res.json()
+  },
+
+  /** Confirm enrolment with the first code; returns the one-time recovery codes. */
+  async totpConfirm(code) {
+    const res = await fetch('/api/me/totp/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ code }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to confirm two-factor setup')
+    }
+    return res.json()
+  },
+
+  /** Disable two-factor authentication (re-authenticates with the password). */
+  async totpDisable(password) {
+    const res = await fetch('/api/me/totp', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ password }),
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to disable two-factor authentication')
+    }
+  },
+
+  /** Current user's SSH public keys for the CLI gateway. */
+  async mySSHKeys() {
+    const res = await fetch('/api/me/ssh-keys', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load SSH keys')
+    }
+    return res.json()
+  },
+
+  async addMySSHKey(authorizedKey) {
+    const res = await fetch('/api/me/ssh-keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ authorized_key: authorizedKey }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to add SSH key')
+    }
+    return res.json()
+  },
+
+  async deleteMySSHKey(keyId) {
+    const res = await fetch(`/api/me/ssh-keys/${encodeURIComponent(keyId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete SSH key')
+    }
+  },
+
+  /** Passkeys (WebAuthn) registered as a second factor. */
+  async passkeys() {
+    const res = await fetch('/api/me/webauthn', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load passkeys')
+    }
+    return res.json()
+  },
+
+  async passkeyRegisterBegin() {
+    const res = await fetch('/api/me/webauthn/register/begin', { method: 'POST', credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to start passkey registration')
+    }
+    return res.json()
+  },
+
+  async passkeyRegisterFinish(name, credential) {
+    const res = await fetch('/api/me/webauthn/register/finish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ name, credential }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Passkey registration failed')
+    }
+    return res.json()
+  },
+
+  async passkeyDelete(id) {
+    const res = await fetch(`/api/me/webauthn/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'include' })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete the passkey')
+    }
+  },
+
+  async loginWebAuthnBegin(mfaToken) {
+    const res = await fetch('/api/login/webauthn/begin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ mfa_token: mfaToken }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to start passkey verification')
+    }
+    return res.json()
+  },
+
+  async loginWebAuthnFinish(mfaToken, credential) {
+    const res = await fetch('/api/login/webauthn/finish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ mfa_token: mfaToken, credential }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Passkey verification failed')
+    }
+    return res.json()
+  },
+
+  /** Current user's API tokens (plain values are never returned). */
+  async myTokens() {
+    const res = await fetch('/api/me/tokens', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load API tokens')
+    }
+    return res.json()
+  },
+
+  /** Create an API token; the response carries the plain token exactly once. */
+  async createToken({ name, scope, expires_in_days }) {
+    const res = await fetch('/api/me/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ name, scope, expires_in_days: Number(expires_in_days) || 0 }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to create the token')
+    }
+    return res.json()
+  },
+
+  async revokeToken(id) {
+    const res = await fetch(`/api/me/tokens/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'include' })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to revoke the token')
+    }
+  },
+
+  /** Admin: update a user's role / username / disabled flag (omit fields to leave them). */
+  async updateUser(userId, { role, username, disabled }) {
+    const body = {}
+    if (role !== undefined) body.role = role
+    if (username !== undefined) body.username = username
+    if (disabled !== undefined) body.disabled = disabled
+    const res = await fetch(`/api/users/${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to update user')
+    }
+    return res.json()
+  },
+
+  /** Admin: clear a user's second factor (lockout recovery). */
+  async adminResetTotp(userId) {
+    const res = await fetch(`/api/users/${encodeURIComponent(userId)}/totp`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to reset two-factor authentication')
+    }
+  },
+
+  /**
    * Rotate the current user's password.
    *
    * @param {string} currentPassword
@@ -74,6 +320,14 @@ const API = {
     return res.json()
   },
 
+  /**
+   * Persist the current user's preferred IANA timezone. Pass an empty
+   * string to clear the preference (the SPA then falls back to the
+   * browser's local zone).
+   *
+   * @param {string} timezone - IANA zone name (e.g. `'Asia/Tokyo'`), or `''`.
+   * @returns {Promise<{timezone: string}>}
+   */
   /**
    * Invalidate the current session server-side and clear the cookie.
    *
@@ -259,6 +513,26 @@ const API = {
     }
   },
 
+  /** 新しい SSH 鍵ペアを生成して保存する。private_key/public_key はこの応答でのみ返る。 */
+  async generateSSHKey({ id, label, key_type, passphrase }) {
+    const res = await fetch('/api/ssh-keys/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        id: id || '',
+        label: label || '',
+        key_type: key_type || '',
+        passphrase: passphrase || '',
+      }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to generate SSH key')
+    }
+    return res.json()
+  },
+
   // --- Credential identities (admin only) ---
 
   async credentialIdentities() {
@@ -352,7 +626,7 @@ const API = {
     return res.json()
   },
 
-  async updateTarget(targetId, { name, host, port, protocol, path, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, credential_identity_id, ssh_key_id, sftp_enabled, ftp_enabled, tftp_enabled }) {
+  async updateTarget(targetId, { name, host, port, protocol, path, group_id, ssh_username, ssh_password, ssh_private_key, ssh_private_key_passphrase, credential_identity_id, ssh_key_id, sftp_enabled, ftp_enabled, tftp_enabled }) {
     const body = {
       name,
       host,
@@ -361,8 +635,18 @@ const API = {
       path: path || '',
       ssh_username: ssh_username || '',
     }
-    if (credential_identity_id) body.credential_identity_id = credential_identity_id
-    if (ssh_key_id) body.ssh_key_id = ssh_key_id
+    if (group_id) body.group_id = group_id
+    // Forward whenever explicitly provided (including '' to detach),
+    // not just when truthy -- the backend treats an omitted key as
+    // "leave the tracked credential source unchanged" and an explicit
+    // '' as "detach it", so dropping '' here would silently prevent
+    // ever clearing a previously linked Identity/SSH Key.
+    if (credential_identity_id !== undefined && credential_identity_id !== null) {
+      body.credential_identity_id = credential_identity_id
+    }
+    if (ssh_key_id !== undefined && ssh_key_id !== null) {
+      body.ssh_key_id = ssh_key_id
+    }
     if (typeof sftp_enabled === 'boolean') {
       body.sftp_enabled = sftp_enabled
     }
@@ -544,6 +828,39 @@ const API = {
     }
   },
 
+  /**
+   * 組み込み TFTP サーバーの書き込みウィンドウ状態変化を SSE で購読する。
+   * 接続直後に現在の状態が1件届き、以降は他タブ/他オペレーターによる
+   * open/close も含めて変化のたびに届く。
+   * @param {string} targetId
+   * @param {function(object): void} onStatus - { open, target_id, client_ip?, expires_at? }
+   * @param {function(): void} [onError] - 切断時
+   */
+  subscribeTFTPWriteWindowEvents(targetId, onStatus, onError) {
+    const url = new URL(
+      `/api/tftp/targets/${encodeURIComponent(targetId)}/write-window/events`,
+      window.location.origin,
+    ).toString()
+    const es = new window.EventSource(url)
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data || '{}')
+        if (data && typeof onStatus === 'function') onStatus(data)
+      } catch {
+        /* ignore */
+      }
+    }
+    es.onerror = () => {
+      es.close()
+      if (typeof onError === 'function') onError()
+    }
+    return {
+      close() {
+        es.close()
+      },
+    }
+  },
+
   /** 監査ログ（管理者のみ） */
   async auditLogs({ limit = 200, event = '', user_id = '', from = '', to = '', exclude_event = '', after_id = '' } = {}) {
     const q = new URLSearchParams()
@@ -665,12 +982,72 @@ const API = {
     }
   },
 
+  /**
+   * 組み込み TFTP サーバー — 書き込みウィンドウの現在の状態を取得。
+   * 常に { open, target_id, client_ip?, expires_at? } を返す
+   * （サーバー未起動でも 200 + open:false）。
+   */
+  async tftpServerGetWriteWindow(targetId) {
+    const res = await fetch(`/api/tftp/targets/${encodeURIComponent(targetId)}/write-window`, {
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to get TFTP write window status')
+    }
+    return res.json()
+  },
+
+  /**
+   * 組み込み TFTP サーバー — 実 TFTP プロトコル経由の書き込み（WRQ）を許可する
+   * 時限ウィンドウを開く。許可される送信元 IP はターゲットに設定された Host
+   * 固定（サーバー側で決定・偽装不可）であり、呼び出し側は指定できない。
+   * ttlSeconds 省略時はサーバー側デフォルト（5分、最大30分）。
+   */
+  async tftpServerOpenWriteWindow(targetId, ttlSeconds) {
+    const body = {}
+    if (ttlSeconds) body.ttl_seconds = ttlSeconds
+    const res = await fetch(`/api/tftp/targets/${encodeURIComponent(targetId)}/write-window`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to open TFTP write window')
+    }
+    return res.json()
+  },
+
+  /** 組み込み TFTP サーバー — 開いている書き込みウィンドウを閉じる */
+  async tftpServerCloseWriteWindow(targetId) {
+    const res = await fetch(`/api/tftp/targets/${encodeURIComponent(targetId)}/write-window`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to close TFTP write window')
+    }
+  },
+
   /** アクティブな RDP（ブラウザ）セッション一覧（再接続用） */
   async rdpSessions() {
     const res = await fetch('/api/rdp/sessions', { credentials: 'include' })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
       throw new Error(err.message || 'Failed to load RDP sessions')
+    }
+    return res.json()
+  },
+
+  /** 稼働中の直接 VNC セッション一覧（共有 UI の session_id 解決用）。 */
+  async vncSessions() {
+    const res = await fetch('/api/vnc/sessions', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load VNC sessions')
     }
     return res.json()
   },
@@ -691,6 +1068,30 @@ const API = {
   },
 
   /** ターミナルセッションを終了する（閉じる用）。keepalive でタブ閉鎖時も送信完了させる。 */
+  /**
+   * セッションを「意図的に放置中」としてマーク（または解除）する。
+   * kind は 'terminal' | 'vnc' | 'rdp'。マークされたセッションはアイドル警告の対象外になる。
+   */
+  async setSessionKeep(sessionId, keep, { kind = 'terminal' } = {}) {
+    const base =
+      kind === 'rdp'
+        ? '/api/rdp/sessions'
+        : kind === 'vnc'
+          ? '/api/vnc/sessions'
+          : '/api/terminal/sessions'
+    const res = await fetch(`${base}/${encodeURIComponent(sessionId)}/keep`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keep: !!keep }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to update session')
+    }
+    return res.json()
+  },
+
   async terminalSessionDelete(sessionId) {
     const res = await fetch(`/api/terminal/sessions/${encodeURIComponent(sessionId)}`, {
       method: 'DELETE',
@@ -733,6 +1134,18 @@ const API = {
     return res.json()
   },
 
+  /** ユーザー削除（管理者のみ。自分自身と最後の管理者は削除不可） */
+  async deleteUser(userId) {
+    const res = await fetch(`/api/users/${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete user')
+    }
+  },
+
   /** グループメンバー一覧（管理者のみ） */
   async groupMembers(groupId) {
     const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/members`, { credentials: 'include' })
@@ -768,13 +1181,253 @@ const API = {
     return res.json()
   },
 
+  /** Admin: import targets from a CSV/JSON File (dry_run validates only). */
+  async targetsImport(file, { dryRun = false } = {}) {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('dry_run', dryRun ? '1' : '0')
+    const res = await fetch('/api/targets/import', { method: 'POST', credentials: 'include', body: fd })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Import failed')
+    }
+    return res.json()
+  },
+
+  /** Admin: TCP reachability of targets (empty ids = all). */
+  async targetsCheck(ids = []) {
+    const res = await fetch('/api/targets/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ ids }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Reachability check failed')
+    }
+    return res.json()
+  },
+
+  /** Admin: backup policy + stored backups. */
+  async backupsGet() {
+    const res = await fetch('/api/settings/backups', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load backups')
+    }
+    return res.json()
+  },
+
+  async backupCreate() {
+    const res = await fetch('/api/settings/backups', { method: 'POST', credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Backup failed')
+    }
+    return res.json()
+  },
+
+  async backupDelete(name) {
+    const res = await fetch(`/api/settings/backups/${encodeURIComponent(name)}`, { method: 'DELETE', credentials: 'include' })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete the backup')
+    }
+  },
+
+  /** Admin: stage a restore from a stored backup (name) or an uploaded File. */
+  async backupRestore({ name, file }) {
+    let res
+    if (file) {
+      const fd = new FormData()
+      fd.append('file', file)
+      res = await fetch('/api/settings/backups/restore', { method: 'POST', credentials: 'include', body: fd })
+    } else {
+      res = await fetch('/api/settings/backups/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name }),
+      })
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to stage the restore')
+    }
+    return res.json()
+  },
+
+  async backupRestoreCancel() {
+    const res = await fetch('/api/settings/backups/restore', { method: 'DELETE', credentials: 'include' })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to cancel the restore')
+    }
+  },
+
+  /** Admin: webhook endpoints with delivery stats. */
+  async webhooksGet() {
+    const res = await fetch('/api/settings/webhooks', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load webhooks')
+    }
+    return res.json()
+  },
+
+  /** Admin: replace the webhook endpoint list. */
+  async webhooksPut(endpoints) {
+    const res = await fetch('/api/settings/webhooks', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ endpoints }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to save webhooks')
+    }
+    return res.json()
+  },
+
+  /** Admin: send a test event to one endpoint. */
+  async webhookTest(id) {
+    const res = await fetch(`/api/settings/webhooks/${encodeURIComponent(id)}/test`, { method: 'POST', credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to test the webhook')
+    }
+    return res.json()
+  },
+
+  /** Admin: retention policy and last purge report. */
+  async retentionGet() {
+    const res = await fetch('/api/settings/retention', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load retention policy')
+    }
+    return res.json()
+  },
+
+  /** Admin: run the retention purge now. */
+  async retentionRun() {
+    const res = await fetch('/api/settings/retention/run', { method: 'POST', credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to run retention')
+    }
+    return res.json()
+  },
+
+  /** Admin: every live session (terminal / VNC / RDP). */
+  async adminSessions() {
+    const res = await fetch('/api/admin/sessions', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load sessions')
+    }
+    return res.json()
+  },
+
+  /** Admin: join a session as a read-only viewer; returns { url }. */
+  async adminWatchSession(kind, sessionId) {
+    const res = await fetch(`/api/admin/sessions/${encodeURIComponent(kind)}/${encodeURIComponent(sessionId)}/watch`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to watch the session')
+    }
+    return res.json()
+  },
+
+  /** Admin: terminate a session (owner and viewers are disconnected). */
+  async adminTerminateSession(kind, sessionId, reason = '') {
+    const res = await fetch(`/api/admin/sessions/${encodeURIComponent(kind)}/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ reason }),
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to terminate the session')
+    }
+  },
+
+  /** Access requests: groups the caller may ask for. */
+  async accessRequestGroups() {
+    const res = await fetch('/api/access-requests/groups', { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load groups')
+    }
+    return res.json()
+  },
+
+  /** Access requests: list (mine for users; all or by status for admins). */
+  async accessRequests({ status = '', mine = false } = {}) {
+    const q = new URLSearchParams()
+    if (status) q.set('status', status)
+    if (mine) q.set('mine', '1')
+    const res = await fetch('/api/access-requests' + (q.toString() ? `?${q}` : ''), { credentials: 'include' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to load access requests')
+    }
+    return res.json()
+  },
+
+  async createAccessRequest({ group_id, reason, duration_seconds }) {
+    const res = await fetch('/api/access-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ group_id, reason: reason || '', duration_seconds: Number(duration_seconds) || 0 }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to create the request')
+    }
+    return res.json()
+  },
+
+  async decideAccessRequest(id, decision, { duration_seconds, note } = {}) {
+    const body = { note: note || '' }
+    if (duration_seconds !== undefined && duration_seconds !== null && duration_seconds !== '') {
+      body.duration_seconds = Number(duration_seconds)
+    }
+    const res = await fetch(`/api/access-requests/${encodeURIComponent(id)}/${decision}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to decide the request')
+    }
+    return res.json()
+  },
+
+  async cancelAccessRequest(id) {
+    const res = await fetch(`/api/access-requests/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'include' })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to cancel the request')
+    }
+  },
+
   /** グループにメンバーを追加（管理者のみ） */
-  async addGroupMember(groupId, userId) {
+  async addGroupMember(groupId, userId, expiresAt = '') {
     const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/members`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ user_id: userId }),
+      body: JSON.stringify({ user_id: userId, expires_at: expiresAt || '' }),
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
@@ -818,6 +1471,18 @@ const API = {
     if (!res.ok && res.status !== 204) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
       throw new Error(err.message || 'Failed to cancel recording export')
+    }
+  },
+
+  /** Delete a recording (row + media file + derived exports). Admin only. */
+  async deleteRecording(recordingId) {
+    const res = await fetch(`/api/recordings/${encodeURIComponent(recordingId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(err.message || 'Failed to delete recording')
     }
   },
 
@@ -1034,10 +1699,17 @@ const API = {
    * @param {string} sessionId
    * @param {{mode?: string, invitee_user_id?: string, ttl_seconds?: number}} options
    */
+  /** @param {'terminal'|'vnc'|'rdp'} kind */
+  sessionApiBase(kind = 'terminal') {
+    const k = (kind || 'terminal').toLowerCase()
+    if (k === 'vnc' || k === 'rdp') return `/api/${k}/sessions`
+    return '/api/terminal/sessions'
+  },
+
   /** 招待先のユーザー・グループ候補（セッションオーナー向け） */
-  async sessionInvitationOptions(sessionId) {
+  async sessionInvitationOptions(sessionId, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitation-options`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/invitation-options`,
       { credentials: 'include' },
     )
     if (!res.ok) {
@@ -1047,9 +1719,9 @@ const API = {
     return res.json()
   },
 
-  async createSessionInvitation(sessionId, options = {}) {
+  async createSessionInvitation(sessionId, options = {}, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitations`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/invitations`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1075,9 +1747,9 @@ const API = {
   },
 
   /** 共有セッションの招待一覧 */
-  async listSessionInvitations(sessionId) {
+  async listSessionInvitations(sessionId, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitations`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/invitations`,
       { credentials: 'include', cache: 'no-store' },
     )
     if (!res.ok) {
@@ -1088,9 +1760,9 @@ const API = {
   },
 
   /** 招待を取消する */
-  async revokeSessionInvitation(sessionId, invitationId) {
+  async revokeSessionInvitation(sessionId, invitationId, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitations/${encodeURIComponent(invitationId)}`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/invitations/${encodeURIComponent(invitationId)}`,
       { method: 'DELETE', credentials: 'include' },
     )
     if (!res.ok) {
@@ -1103,9 +1775,9 @@ const API = {
    * 有効な招待の参加 URL を再発行する（以前のリンクは無効）。
    * @returns {Promise<{ join_url: string, token?: string }>}
    */
-  async regenerateSessionInvitationJoinUrl(sessionId, invitationId) {
+  async regenerateSessionInvitationJoinUrl(sessionId, invitationId, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/invitations/${encodeURIComponent(invitationId)}/join-url`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/invitations/${encodeURIComponent(invitationId)}/join-url`,
       { method: 'POST', credentials: 'include' },
     )
     if (!res.ok) {
@@ -1115,20 +1787,29 @@ const API = {
     return res.json()
   },
 
-  /** 招待トークンまたは招待 ID で参加する */
+  /** 招待トークンまたは招待 ID で参加する（SSH/Telnet） */
   async joinSession(sessionId, { invitationToken, invitationId } = {}) {
+    return API._joinSession(`/api/terminal/sessions/${encodeURIComponent(sessionId)}/join`, { invitationToken, invitationId })
+  },
+
+  async joinVNCSession(sessionId, { invitationToken, invitationId } = {}) {
+    return API._joinSession(`/api/vnc/sessions/${encodeURIComponent(sessionId)}/join`, { invitationToken, invitationId })
+  },
+
+  async joinRDPSession(sessionId, { invitationToken, invitationId } = {}) {
+    return API._joinSession(`/api/rdp/sessions/${encodeURIComponent(sessionId)}/join`, { invitationToken, invitationId })
+  },
+
+  async _joinSession(url, { invitationToken, invitationId } = {}) {
     const body = {}
     if (invitationToken) body.invitation_token = invitationToken
     if (invitationId) body.invitation_id = invitationId
-    const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/join`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(body),
-      },
-    )
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: res.statusText }))
       throw new Error(err.message || 'Failed to join session')
@@ -1137,9 +1818,9 @@ const API = {
   },
 
   /** 参加者一覧と書込権限リクエスト一覧 */
-  async listSessionParticipants(sessionId) {
+  async listSessionParticipants(sessionId, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/participants`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/participants`,
       { credentials: 'include' },
     )
     if (!res.ok) {
@@ -1150,9 +1831,9 @@ const API = {
   },
 
   /** 参加者をキックする（オーナー専用） */
-  async kickSessionParticipant(sessionId, userId) {
+  async kickSessionParticipant(sessionId, userId, { kind = 'terminal' } = {}) {
     const res = await fetch(
-      `/api/terminal/sessions/${encodeURIComponent(sessionId)}/participants/${encodeURIComponent(userId)}`,
+      `${API.sessionApiBase(kind)}/${encodeURIComponent(sessionId)}/participants/${encodeURIComponent(userId)}`,
       { method: 'DELETE', credentials: 'include' },
     )
     if (!res.ok) {

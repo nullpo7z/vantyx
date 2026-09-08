@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="web/public/logo-dark.svg">
+    <img src="web/public/logo.svg" alt="Vantyx — secure access gateway" width="480">
+  </picture>
+</p>
+
 # Vantyx
 
 [日本語](README.ja.md)
@@ -27,12 +34,19 @@ exposes a unified REST + WebSocket API for the bundled single-page UI.
 - **Credential library** (admin): separate **Keys** (private PEM only) and
   **Identities** (username + auth). Apply to targets via Identity, Key + manual
   username, or inline entry. See [docs/credentials.md](docs/credentials.md).
-- **Tag-based access control** on groups, targets, and users.
-- **CLI gateway**: `ssh user@vantyx` and proxy to allowed targets.
+- **Hierarchical access groups** (`net/tokyo` inherits access from `net`) plus
+  **tag-based access control** on groups, targets, and users. See
+  [docs/access-control.md](docs/access-control.md).
+- **OIDC single sign-on** (Keycloak, Entra ID, Okta, Cloudflare Access, … via
+  discovery + PKCE) and **TOTP two-factor** for built-in users on the web UI.
+  See [docs/configuration.md](docs/configuration.md#two-factor-authentication-totp).
+- **CLI gateway**: `ssh user@vantyx` (public-key auth only) and proxy to
+  allowed targets.
 - **Session recording**: terminal/CLI sessions as asciinema `.cast`; RDP/VNC
   screen capture as H.264 `.mp4`. Playback in the UI; GIF/MP4 export via a
   background conversion queue.
-- **Audit pipeline** with optional syslog / SIEM forwarding.
+- **Audit pipeline** with optional syslog / SIEM forwarding, and a
+  Prometheus `/metrics` endpoint.
 - Follows the spirit of **OWASP ASVS Level 2** (best-effort, not a formal audit)
   for sensitive-data storage and transport.
 
@@ -66,7 +80,7 @@ docker compose -f docker-compose.dev.yml up --build -d
 |----------|------------------------------------------------------------------------------------------------|
 | `80`     | Always 301-redirects to HTTPS (cannot be disabled).                                            |
 | `443`    | The application (REST API + SPA). Inside the container the listeners bind to `8080` / `8443`. |
-| `2222`   | CLI SSH gateway (`ssh -p 2222 admin@<host>`)                                                   |
+| `2222`   | CLI SSH gateway (`ssh -p 2222 admin@<host>`; public-key auth only, register keys under Users → Public keys) |
 | `69/udp` | Forwarded to the embedded TFTP server (`6969/udp` inside the container).                       |
 
 - **TLS**: a self-signed certificate is created on first start under

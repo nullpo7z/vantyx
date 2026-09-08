@@ -1,5 +1,6 @@
 import API from './api.js'
 import { t } from './i18n.js'
+import { formatDateTime } from './datetime.js'
 import { validateOptionalUserId } from './validation.js'
 import { uiAlert, uiConfirm } from './ui_dialog.js'
 
@@ -26,10 +27,10 @@ export async function renderUsersPage({
       .map((u) => {
         const userTags = Array.isArray(u.tags) ? u.tags : []
         return `
-        <tr class="border-b border-slate-200 hover:bg-slate-50">
+        <tr class="border-b border-slate-200 hover:bg-slate-50${u.disabled ? ' opacity-60' : ''}">
           <td class="px-4 py-2 text-sm font-medium text-slate-900">${escapeHtml(u.id)}</td>
-          <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(u.username)}</td>
-          <td class="px-4 py-2 text-sm text-slate-600">${escapeHtml(u.role || 'user')}</td>
+          <td class="px-4 py-2 text-sm text-slate-700">${escapeHtml(u.username)}${u.disabled ? ` <span class="ml-1 inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">${t('users.disabledBadge')}</span>` : ''}</td>
+          <td class="px-4 py-2 text-sm text-slate-600">${u.role === 'admin' ? t('users.roleAdmin') : t('users.roleUser')}</td>
           <td class="px-4 py-2">
             <button type="button"
               class="user-ssh-keys-btn rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 shrink-0"
@@ -45,9 +46,26 @@ export async function renderUsersPage({
                 data-user-id="${escapeHtml(u.id)}"
                 data-username="${escapeHtml(u.username)}"
                 data-user-role="${escapeHtml(u.role || 'user')}"
+                data-user-disabled="${u.disabled ? '1' : '0'}"
                 data-user-tags="${escapeHtml((userTags || []).join(','))}">
                 ${t('users.edit')}
               </button>
+              <button type="button"
+                class="delete-user-btn shrink-0 rounded border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+                data-user-id="${escapeHtml(u.id)}"
+                data-username="${escapeHtml(u.username)}">
+                ${t('users.delete')}
+              </button>
+              ${
+                u.totp_enabled || u.passkeys > 0
+                  ? `<button type="button"
+                class="reset-totp-btn shrink-0 rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-50"
+                data-user-id="${escapeHtml(u.id)}"
+                data-username="${escapeHtml(u.username)}">
+                ${t('users.resetTotp')}
+              </button>`
+                  : ''
+              }
               <div class="flex flex-wrap items-center gap-2 min-w-0">
                 ${
                   userTags.length
@@ -100,6 +118,7 @@ export async function renderUsersPage({
           id: btn.dataset.userId || '',
           username: btn.dataset.username || '',
           role: btn.dataset.userRole || 'user',
+          disabled: btn.dataset.userDisabled === '1',
           tags: (btn.dataset.userTags || '')
             .split(',')
             .map((s) => s.trim())
@@ -107,6 +126,42 @@ export async function renderUsersPage({
         }
         if (user.id) {
           showEditUserModal({ user, escapeHtml, fillExistingTagsPicker, reload })
+        }
+      })
+    })
+
+    mainContent.querySelectorAll('.delete-user-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const userId = btn.dataset.userId || ''
+        const username = btn.dataset.username || userId
+        if (!userId) return
+        const ok = await uiConfirm(t('users.confirmDelete', { name: username }))
+        if (!ok) return
+        btn.disabled = true
+        try {
+          await API.deleteUser(userId)
+          reload()
+        } catch (err) {
+          btn.disabled = false
+          await uiAlert(t('users.deleteFailed', { error: err.message || String(err) }))
+        }
+      })
+    })
+
+    mainContent.querySelectorAll('.reset-totp-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const userId = btn.dataset.userId || ''
+        const username = btn.dataset.username || userId
+        if (!userId) return
+        const ok = await uiConfirm(t('users.confirmResetTotp', { name: username }), { danger: true })
+        if (!ok) return
+        btn.disabled = true
+        try {
+          await API.adminResetTotp(userId)
+          reload()
+        } catch (err) {
+          btn.disabled = false
+          await uiAlert(t('users.resetTotpFailed', { error: err.message || String(err) }))
         }
       })
     })
@@ -227,12 +282,16 @@ function showEditUserModal({ user, escapeHtml, fillExistingTagsPicker, reload })
                 <p class="text-sm text-slate-800">${escapeHtml(user.id)}</p>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldUsername')}</label>
-                <p class="text-sm text-slate-800">${escapeHtml(user.username)}</p>
+                <label for="edit-user-username" class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldUsername')}</label>
+                <input type="text" id="edit-user-username" required maxlength="64" value="${escapeHtml(user.username)}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" />
+                <p class="mt-1 text-xs text-slate-500">${t('users.usernameHint')}</p>
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldRole')}</label>
-                <p class="text-sm text-slate-800">${escapeHtml(user.role || 'user')}</p>
+                <label for="edit-user-role" class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldRole')}</label>
+                <select id="edit-user-role" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white">
+                  <option value="user"${(user.role || 'user') === 'user' ? ' selected' : ''}>${t('users.roleUser')}</option>
+                  <option value="admin"${user.role === 'admin' ? ' selected' : ''}>${t('users.roleAdmin')}</option>
+                </select>
               </div>
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1.5">${t('users.fieldTagsLabel')}</label>
@@ -240,6 +299,10 @@ function showEditUserModal({ user, escapeHtml, fillExistingTagsPicker, reload })
                   tagsStr,
                 )}" class="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 bg-white" placeholder="${t('users.fieldTagsPlaceholder')}" />
                 <div id="edit-user-tags-input-picker" class="mt-2"></div>
+              </div>
+              <div class="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                <label class="flex items-center gap-2 text-sm text-slate-800"><input type="checkbox" id="edit-user-disabled" class="h-4 w-4"${user.disabled ? ' checked' : ''} /> ${t('users.fieldDisabled')}</label>
+                <p class="mt-1 text-xs text-slate-500">${t('users.disabledHint')}</p>
               </div>
               <p id="edit-user-error" class="text-sm text-red-600 hidden"></p>
             </div>
@@ -264,9 +327,27 @@ function showEditUserModal({ user, escapeHtml, fillExistingTagsPicker, reload })
     const submitBtn = modal.querySelector('#edit-user-submit')
     const raw = modal.querySelector('#edit-user-tags-input').value.trim()
     const tags = raw ? raw.split(',').map((t) => t.trim()).filter(Boolean) : []
+    const role = modal.querySelector('#edit-user-role').value
+    const username = modal.querySelector('#edit-user-username').value.trim()
+    const disabled = modal.querySelector('#edit-user-disabled').checked
     errorEl.classList.add('hidden')
+    if (!username) {
+      errorEl.textContent = t('users.usernamePasswordRequired')
+      errorEl.classList.remove('hidden')
+      return
+    }
+    if (disabled && !user.disabled && !(await uiConfirm(t('users.confirmDisable', { name: user.username }), { danger: true }))) {
+      return
+    }
     submitBtn.disabled = true
     try {
+      const patch = {}
+      if (role !== (user.role || 'user')) patch.role = role
+      if (username !== user.username) patch.username = username
+      if (disabled !== !!user.disabled) patch.disabled = disabled
+      if (Object.keys(patch).length) {
+        await API.updateUser(user.id, patch)
+      }
       await API.setUserTags(user.id, tags)
       close()
       await reload()
@@ -323,7 +404,7 @@ async function showUserSSHKeysModal({ userId, username, escapeHtml }) {
             <span class="font-mono text-slate-700 truncate flex-1" title="${escapeHtml(
               k.key_line || '',
             )}">${escapeHtml(keyDisplay)}</span>
-            <span class="text-xs text-slate-400 shrink-0">${escapeHtml(k.created_at || '')}</span>
+            <span class="text-xs text-slate-400 shrink-0">${escapeHtml(formatDateTime(k.created_at))}</span>
             <button type="button" class="user-ssh-key-del-btn rounded border border-red-200 px-2 py-0.5 text-xs text-red-700 hover:bg-red-50 shrink-0" data-key-id="${escapeHtml(
               String(k.id),
             )}">${t('users.keyDelete')}</button>

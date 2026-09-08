@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+
+	"github.com/nullpo7z/vantyx/internal/session"
 )
 
 // Bridge holds the three child processes that form a single RDP-to-VNC session.
@@ -122,6 +124,9 @@ func Start(ctx context.Context, host string, port int, username, password string
 		cancel()
 		return nil, fmt.Errorf("start Xvfb: %w", err)
 	}
+	// Reap Xvfb once it exits (however it's terminated below) so it doesn't
+	// linger as a zombie process; Wait() is otherwise never called on it.
+	go func() { _ = b.xvfb.Wait() }()
 
 	if err := waitForDisplay(bridgeCtx, displayStr, 5*time.Second); err != nil {
 		cancel()
@@ -135,7 +140,9 @@ func Start(ctx context.Context, host string, port int, username, password string
 		slog.Info("rdpvnc: X display ready", "display", display, "requested_w", width, "requested_h", height, "x_w", w, "x_h", h)
 	}
 
-	rdpAddr := fmt.Sprintf("/v:%s:%d", host, port)
+	// net.JoinHostPort brackets IPv6 literals (e.g. "[fe80::1]:3389") so the
+	// address isn't ambiguously split on ':' by FreeRDP or downstream tooling.
+	rdpAddr := "/v:" + net.JoinHostPort(host, strconv.Itoa(port))
 	args := []string{
 		fmt.Sprintf("/size:%dx%d", width, height),
 		// Dynamic resolution support (mstsc-like behavior). When the remote desktop
@@ -154,7 +161,9 @@ func Start(ctx context.Context, host string, port int, username, password string
 			return nil, credErr
 		}
 		defer os.Remove(credFile) // #nosec G304 -- temp credentials file removed after start.
-		args = append([]string{"/from-file:" + credFile}, args...)
+		// FreeRDP 3.x: pass the .rdp file as a positional argument ([file] [options]).
+		// The old /from-file: prefix is no longer supported and is treated as a path.
+		args = append([]string{credFile}, args...)
 	} else {
 		args = append([]string{rdpAddr}, args...)
 	}
@@ -198,13 +207,17 @@ func Start(ctx context.Context, host string, port int, username, password string
 		// (Disabling XDamage/XFixes tends to increase bandwidth/CPU and feels sluggish.)
 	)
 	if err := b.x11vnc.Start(); err != nil {
+		_ = ptmx.Close()
 		cancel()
 		_ = b.freerdp.Process.Kill()
 		_ = b.xvfb.Process.Kill()
 		return nil, fmt.Errorf("start x11vnc: %w", err)
 	}
+	// Reap x11vnc once it exits, mirroring the Xvfb reaper above.
+	go func() { _ = b.x11vnc.Wait() }()
 
 	if err := waitForPort(bridgeCtx, vncPort, 5*time.Second); err != nil {
+		_ = ptmx.Close()
 		cancel()
 		_ = b.x11vnc.Process.Kill()
 		_ = b.freerdp.Process.Kill()
@@ -362,7 +375,30 @@ type Session struct {
 	Height     int
 	CreatedAt  time.Time
 	lastSeen   time.Time
+	// lastSeenMu guards lastSeen, like proxyOnce below it must be a
+	// pointer: Session is copied by value in places like
+	// ActiveSessionsForUser, and an embedded sync.RWMutex value would
+	// make those copies a go-vet copylocks violation. A pointer lets
+	// copies share the same lock instead of each getting independent
+	// (and useless) lock state, so Touch() (which always mutates the
+	// canonical *Session held in the manager's map) and LastSeen()
+	// (which may run against either the canonical pointer or a
+	// snapshot copy) stay correctly synchronized either way.
+	lastSeenMu *sync.RWMutex
 	Bridge     *Bridge
+	AttachCh   chan session.AttachReq
+	// proxyOnce is a pointer (not a value) because Session is copied by
+	// value in places like ActiveSessionsForUser; a value sync.Once would
+	// make those copies illegal (sync.Once/noCopy) and, worse, silently
+	// give each copy its own independent "once" state.
+	proxyOnce *sync.Once
+}
+
+// StartBridgeProxyOnce runs fn exactly once for the lifetime of this Session,
+// guarding against duplicate bridge-proxy goroutines when multiple clients
+// (owner reconnects, viewer attaches) race to attach to the same session.
+func (s *Session) StartBridgeProxyOnce(fn func()) {
+	s.proxyOnce.Do(fn)
 }
 
 // Manager tracks active RDP-to-VNC bridges for cleanup and session management.
@@ -372,7 +408,8 @@ type Manager struct {
 	sessionsByID   map[string]*Session // sessionID -> session
 	sessionIDByKey map[string]string   // key -> sessionID
 	now            func() time.Time
-	idleWarnAfter  time.Duration // 0 = idle warnings disabled
+	idleWarnAfter  time.Duration   // 0 = idle warnings disabled
+	keep           map[string]bool // sessionID -> intentionally left running
 }
 
 // NewManager creates a new bridge manager.
@@ -381,6 +418,7 @@ func NewManager() *Manager {
 		bridges:        make(map[string]*Bridge),
 		sessionsByID:   make(map[string]*Session),
 		sessionIDByKey: make(map[string]string),
+		keep:           make(map[string]bool),
 		now:            time.Now,
 	}
 }
@@ -388,11 +426,17 @@ func NewManager() *Manager {
 // Register adds a bridge under the given key.
 func (m *Manager) Register(key string, b *Bridge) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if old, ok := m.bridges[key]; ok {
+	old, hadOld := m.bridges[key]
+	m.bridges[key] = b
+	m.mu.Unlock()
+
+	// Stop() blocks for up to 5s waiting on the old bridge's process to
+	// exit; run it outside m.mu so it doesn't stall every other session's
+	// lookups/registrations in the meantime.
+	if hadOld {
 		old.Stop()
 	}
-	m.bridges[key] = b
+
 	go func() {
 		<-b.Done()
 		m.mu.Lock()
@@ -402,6 +446,7 @@ func (m *Manager) Register(key string, b *Bridge) {
 		if sid, ok := m.sessionIDByKey[key]; ok {
 			if s, ok := m.sessionsByID[sid]; ok && s.Bridge == b {
 				delete(m.sessionsByID, sid)
+				delete(m.keep, sid)
 			}
 			delete(m.sessionIDByKey, key)
 		}
@@ -413,14 +458,12 @@ func (m *Manager) Register(key string, b *Bridge) {
 // If an existing session exists for the key, it is stopped and replaced.
 func (m *Manager) RegisterSession(key string, sessionID string, userID, targetID, targetName string, width, height int, b *Bridge) *Session {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	// Replace any existing bridge/session for the key.
-	if old, ok := m.bridges[key]; ok {
-		old.Stop()
-	}
+	old, hadOld := m.bridges[key]
 	if oldID, ok := m.sessionIDByKey[key]; ok {
 		delete(m.sessionsByID, oldID)
+		delete(m.keep, oldID)
 	}
 
 	now := m.now()
@@ -433,13 +476,24 @@ func (m *Manager) RegisterSession(key string, sessionID string, userID, targetID
 		Height:     height,
 		CreatedAt:  now,
 		lastSeen:   now,
+		lastSeenMu: &sync.RWMutex{},
 		Bridge:     b,
+		AttachCh:   make(chan session.AttachReq, 16),
+		proxyOnce:  &sync.Once{},
 	}
 	m.bridges[key] = b
 	m.sessionsByID[sessionID] = s
 	m.sessionIDByKey[key] = sessionID
 
 	m.startActivityMonitor(sessionID, b)
+	m.mu.Unlock()
+
+	// Stop() blocks for up to 5s waiting on the old bridge's process to
+	// exit; run it outside m.mu so it doesn't stall every other session's
+	// lookups/registrations in the meantime.
+	if hadOld {
+		old.Stop()
+	}
 
 	go func() {
 		<-b.Done()
@@ -449,6 +503,7 @@ func (m *Manager) RegisterSession(key string, sessionID string, userID, targetID
 		}
 		if cur, ok := m.sessionsByID[sessionID]; ok && cur.Bridge == b {
 			delete(m.sessionsByID, sessionID)
+			delete(m.keep, sessionID)
 		}
 		if m.sessionIDByKey[key] == sessionID {
 			delete(m.sessionIDByKey, key)
@@ -491,6 +546,18 @@ func (m *Manager) ActiveSessionsForUser(userID string) []Session {
 	return out
 }
 
+// AllSessions returns a snapshot of every managed browser-RDP session
+// (admin monitoring).
+func (m *Manager) AllSessions() []Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Session, 0, len(m.sessionsByID))
+	for _, s := range m.sessionsByID {
+		out = append(out, *s)
+	}
+	return out
+}
+
 // RemoveSession stops and removes the managed session by session ID.
 func (m *Manager) RemoveSession(sessionID string) {
 	var (
@@ -504,6 +571,7 @@ func (m *Manager) RemoveSession(sessionID string) {
 		ok = true
 		key = s.UserID + ":" + s.TargetID
 		delete(m.sessionsByID, sessionID)
+		delete(m.keep, sessionID)
 		if m.sessionIDByKey[key] == sessionID {
 			delete(m.sessionIDByKey, key)
 		}
@@ -527,6 +595,7 @@ func (m *Manager) Remove(key string) {
 	if sid, ok2 := m.sessionIDByKey[key]; ok2 {
 		delete(m.sessionIDByKey, key)
 		delete(m.sessionsByID, sid)
+		delete(m.keep, sid)
 	}
 	m.mu.Unlock()
 	if ok {
@@ -591,7 +660,7 @@ func writeFreerdpCredentialsFile(host string, port int, username, password strin
 		_ = os.Remove(path)
 		return "", err
 	}
-	if _, err := fmt.Fprintf(f, "full address:s:%s:%d\n", host, port); err != nil {
+	if _, err := fmt.Fprintf(f, "full address:s:%s\n", net.JoinHostPort(host, strconv.Itoa(port))); err != nil {
 		_ = f.Close()
 		_ = os.Remove(path)
 		return "", err

@@ -1,83 +1,91 @@
 name: CI
 
+# Pull-request / push gate for dev and main. Every job runs in parallel
+# and `ci-ok` at the bottom aggregates them: that single job is the
+# required status check on `main`, so job names can change without
+# touching the branch-protection settings.
+
 on:
   push:
     branches: ["dev", "main"]
   pull_request:
     branches: ["main", "dev"]
 
+permissions:
+  contents: read
+
+# A newer push to the same branch / PR supersedes the running one.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GOLANGCI_LINT_VERSION: v2.12.2
 
 jobs:
   lint-go:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.26.3"
+          go-version-file: go.mod
           cache: true
-      - name: Go fmt check
+      - name: gofmt
         run: |
           if [ -n "$(gofmt -l .)" ]; then
-            echo "Go files are not formatted. Run gofmt."
+            echo "Go files are not formatted. Run gofmt -w ."
+            gofmt -l .
             exit 1
           fi
+      - name: go vet
+        run: go vet ./...
       - name: Install golangci-lint
         env:
           GOPROXY: https://proxy.golang.org,direct
         run: |
           set -euo pipefail
-          GOBIN="$(go env GOPATH)/bin"
-          mkdir -p "$GOBIN"
-          export PATH="$GOBIN:$PATH"
-          if ! command -v golangci-lint >/dev/null 2>&1; then
-            for attempt in 1 2 3; do
-              if go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2; then
-                break
-              fi
-              echo "golangci-lint install attempt ${attempt} failed, retrying..."
-              sleep 15
-            done
-          fi
-          golangci-lint version
+          GOBIN="$(go env GOPATH)/bin"; mkdir -p "$GOBIN"
+          for attempt in 1 2 3; do
+            if go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"; then break; fi
+            echo "install attempt ${attempt} failed, retrying..."; sleep 15
+          done
           echo "$GOBIN" >> "$GITHUB_PATH"
-      - name: Run golangci-lint
+      - name: golangci-lint
         run: golangci-lint run --config=./configs/golangci.yml --issues-exit-code=1
 
-  lint-fe:
+  frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22.13.1"
+          # Same major as the Dockerfile's `node:26-alpine` frontend stage.
+          node-version: "26"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Install dependencies
-        if: hashFiles('web/package-lock.json') != ''
-        run: |
-          cd web
-          npm ci
-      - name: Lint frontend
-        if: hashFiles('web/package.json') != ''
-        run: |
-          cd web
-          npm run lint -- --max-warnings=0
-      - name: Prettier check
+      - run: npm ci
+      - name: eslint
+        run: npm run lint -- --max-warnings=0
+      - name: prettier
         if: hashFiles('web/.prettierrc*') != ''
-        run: |
-          cd web
-          npx --yes prettier --check 'src/**/*.{js,ts,jsx,tsx,css,html}'
-      - name: Typecheck frontend
+        run: npx --yes prettier --check 'src/**/*.{js,ts,jsx,tsx,css,html}'
+      - name: typecheck
         if: hashFiles('web/tsconfig.json') != ''
-        run: |
-          cd web
-          npx tsc --noEmit
+        run: npx tsc --noEmit
+      # The production bundle must actually build, not just lint.
+      - name: vite build
+        run: npm run build
 
   test-go:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -86,11 +94,11 @@ jobs:
             pkgs: >-
               ./cmd/... ./docs/...
               ./internal/db/... ./internal/i18n/... ./internal/logging/...
-              ./internal/mock/... ./internal/netutil/... ./internal/protocols/...
-              ./internal/proxyerrors/... ./internal/rdpvnc/... ./internal/recording/...
-              ./internal/secret/... ./internal/session/... ./internal/sftp/...
-              ./internal/sharing/... ./internal/telnetproxy/... ./internal/tftp/...
-              ./internal/vncproxy/...
+              ./internal/metrics/... ./internal/mock/... ./internal/netutil/...
+              ./internal/protocols/... ./internal/proxyerrors/... ./internal/rdpvnc/...
+              ./internal/recording/... ./internal/secret/... ./internal/session/...
+              ./internal/sftp/... ./internal/sharing/... ./internal/telnetproxy/...
+              ./internal/tftp/... ./internal/vncproxy/...
           - id: access-auth-filetransfer
             pkgs: ./internal/access/... ./internal/auth/... ./internal/filetransfer/...
           - id: ssh
@@ -99,16 +107,85 @@ jobs:
             pkgs: ./internal/httpapi/...
     name: test-go (${{ matrix.id }})
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.26.3"
+          go-version-file: go.mod
           cache: true
-      - name: Run tests
-        run: go test ${{ matrix.pkgs }} -timeout 10m
-      - name: Compute coverage (informational)
-        if: matrix.id == 'httpapi'
+      - name: go test
         run: |
-          go test ./internal/access ./internal/auth ./internal/httpapi ./internal/netutil ./internal/session ./internal/sshproxy -covermode=atomic -coverprofile=coverage.out
-          echo "Coverage summary (informational, not a CI gate):"
-          go tool cover -func=coverage.out | tail -1
+          set -o pipefail
+          go test ${{ matrix.pkgs }} -timeout 10m 2>&1 | tee "$RUNNER_TEMP/go-test.log"
+      # Surface failing tests as annotations / job summary so they can be
+      # read without opening the raw log (also via the public API).
+      - name: Report failing tests
+        if: failure()
+        run: |
+          pat='^(--- FAIL|FAIL|panic:)|_test\.go:[0-9]+:'
+          grep -E "$pat" "$RUNNER_TEMP/go-test.log" | head -40 > "$RUNNER_TEMP/failures.txt" || true
+          while IFS= read -r line; do echo "::error::${line}"; done < "$RUNNER_TEMP/failures.txt"
+          { echo '### Failing tests'; echo '```'; cat "$RUNNER_TEMP/failures.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  # Race detector on the packages that juggle goroutines (bridges,
+  # session managers, sharing rooms). Kept separate so the plain test
+  # matrix stays fast.
+  test-race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go test -race
+        run: >-
+          go test -race -count=1 -timeout 10m
+          ./internal/session/... ./internal/sharing/... ./internal/rdpvnc/...
+          ./internal/sshproxy/... ./internal/telnetproxy/... ./internal/vncproxy/...
+
+  # Go-native vulnerability check with call-graph reachability; fast and
+  # far less noisy than a generic scanner. NOTE: it cannot version the
+  # directory-replaced golang.org/x/crypto -- see patched_deps/crypto/VANTYX_PATCH.md.
+  vulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # The image must build on every change; publishing happens only in the
+  # Release workflow (tags). Layer cache is shared through the Actions cache.
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: false
+          tags: vantyx:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Single required status check for branch protection.
+  ci-ok:
+    if: always()
+    needs: [lint-go, frontend, test-go, test-race, vulncheck, docker-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check job results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq .
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null \
+            || { echo "::error::One or more CI jobs did not succeed"; exit 1; }

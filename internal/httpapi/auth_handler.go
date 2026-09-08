@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 )
 
@@ -19,11 +20,27 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	UserID                string `json:"user_id"`
-	Username              string `json:"username"`
-	Role                  string `json:"role"`
-	Locale                string `json:"locale,omitempty"`
-	RequirePasswordChange bool   `json:"require_password_change,omitempty"`
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	Locale   string `json:"locale,omitempty"`
+	Timezone string `json:"timezone"` // site-wide display timezone (admin setting); "" = browser local
+
+	RequirePasswordChange bool `json:"require_password_change,omitempty"`
+	TOTPEnabled           bool `json:"totp_enabled,omitempty"`
+}
+
+// meResponse extends the login payload with what the account page shows.
+type meResponse struct {
+	loginResponse
+	Tags     []string  `json:"tags"`
+	Groups   []meGroup `json:"groups"`
+	Passkeys int       `json:"passkeys"`
+}
+
+type meGroup struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type changePasswordRequest struct {
@@ -101,6 +118,11 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := a.UserStore.Authenticate(req.Username, req.Password)
+	if errors.Is(err, auth.ErrUserDisabled) {
+		audit("login_failed", auditFields{"username_hash": auditUsernameHash(req.Username), "reason": "account_disabled"})
+		writeJSONErrorKey(w, r, "auth.accountDisabled", http.StatusForbidden)
+		return
+	}
 	if err != nil {
 		if a.LoginRateLimiter != nil {
 			if ip != "" {
@@ -119,53 +141,39 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		a.LoginRateLimiter.recordSuccess(ip, req.Username)
 	}
 
-	sess, err := a.SessionStore.Create(u.ID)
-	if err != nil {
-		audit("login_failed", auditFields{
-			"username_hash": auditUsernameHash(req.Username),
-			"reason":        "session_create_failed",
-			"error":         err.Error(),
+	// Second factor: when the account has TOTP enabled the password alone
+	// does not issue a session. Hand back a short-lived challenge token
+	// that POST /api/login/totp completes (see auth_totp.go).
+	totpOn := a.TOTPStore != nil && a.TOTPStore.Enabled(r.Context(), u.ID)
+	passkeysOn := a.hasPasskeys(r, u.ID)
+	if a.mfaPending != nil && (totpOn || passkeysOn) {
+		tok, err := a.mfaPending.issue(u.ID, u.Username, ip)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		methods := []string{}
+		if totpOn {
+			methods = append(methods, "totp")
+		}
+		if passkeysOn {
+			methods = append(methods, "webauthn")
+		}
+		audit("login_mfa_required", auditFields{"user_id": u.ID, "methods": methods})
+		writeJSON(w, map[string]interface{}{
+			"mfa_required": true,
+			"mfa_token":    tok,
+			"methods":      methods,
 		})
-		writeJSONErrorKey(w, r, "auth.sessionCreateFailed", http.StatusInternalServerError)
 		return
 	}
+
 	audit("login_success", auditFields{
 		"user_id":  u.ID,
 		"username": u.Username,
 	})
-
-	// #nosec G124 -- HttpOnly, SameSite=Strict and Secure are all set;
-	// Secure is configured at runtime via cookieSecure(r) which honors
-	// X-Forwarded-Proto for TLS-terminating reverse proxies, so gosec's
-	// static check can not see the assignment.
-	cookie := &http.Cookie{
-		Name:     "vantyx_session",
-		Value:    sess.ID,
-		Path:     "/",
-		MaxAge:   24 * 3600, // 24h, matches SessionStore TTL (ASVS V2.2).
-		HttpOnly: true,
-		// SameSite=Strict tightens the previous Lax setting (L-1):
-		// the cookie is now never sent on any cross-site navigation
-		// or sub-resource request, which closes the small remaining
-		// window for top-level CSRF (the API was already protected
-		// by Origin checks, but defense in depth is cheap).
-		SameSite: http.SameSiteStrictMode,
-		Secure:   cookieSecure(r),
-	}
-	http.SetCookie(w, cookie)
-
-	if u.Role == "" {
-		u.Role = auth.RoleUser
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(loginResponse{
-		UserID:                u.ID,
-		Username:              u.Username,
-		Role:                  u.Role,
-		Locale:                u.Locale,
-		RequirePasswordChange: u.ForcePasswordChange,
-	})
+	// Session + cookie + response are shared with the TOTP / OIDC paths.
+	a.finishLogin(w, r, u, "")
 }
 
 // handleLogout invalidates the current session server-side and clears
@@ -210,14 +218,40 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 		u.Role = auth.RoleUser
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(loginResponse{
-		UserID:   u.ID,
-		Username: u.Username,
-		Role:     u.Role,
-		Locale:   u.Locale,
-	})
+	totpEnabled := a.TOTPStore != nil && a.TOTPStore.Enabled(r.Context(), u.ID)
+	resp := meResponse{
+		loginResponse: loginResponse{
+			UserID:      u.ID,
+			Username:    u.Username,
+			Role:        u.Role,
+			Locale:      u.Locale,
+			Timezone:    a.displayTimezone(),
+			TOTPEnabled: totpEnabled,
+		},
+		Tags:   []string{},
+		Groups: []meGroup{},
+	}
+	if a.WebAuthn != nil {
+		resp.Passkeys, _ = a.WebAuthn.Count(r.Context(), u.ID)
+	}
+	if tags, err := a.UserStore.TagsForUser(u.ID); err == nil && tags != nil {
+		resp.Tags = tags
+	}
+	if a.AccessGroupStore != nil {
+		// Groups the user can reach (memberships, tags, and everything
+		// below those groups) -- what the account page shows as
+		// "accessible groups".
+		if gids, err := a.AccessGroupStore.GroupIDsForUser(r.Context(), access.UserID(u.ID), &access.ListOpts{Limit: 500}); err == nil {
+			for _, gid := range gids {
+				name := string(gid)
+				if g, gerr := a.AccessGroupStore.Get(r.Context(), gid); gerr == nil && g != nil && g.Name != "" {
+					name = g.Name
+				}
+				resp.Groups = append(resp.Groups, meGroup{ID: string(gid), Name: name})
+			}
+		}
+	}
+	writeJSON(w, resp)
 }
 
 // handleUpdateLocale persists the current user's UI locale preference.

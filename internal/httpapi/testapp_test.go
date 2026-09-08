@@ -1,10 +1,17 @@
 package httpapi
 
 import (
+	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/nullpo7z/vantyx/internal/access"
+	"github.com/nullpo7z/vantyx/internal/session"
 )
 
 // newTestAppWithDB boots an App backed by a copy of the pre-migrated template DB
@@ -47,4 +54,82 @@ func newTestAppForTerminal(t *testing.T) *App {
 
 func newTestAppForVNC(t *testing.T) *App {
 	return newTestAppWithDB(t, "vnc.db")
+}
+
+// seedAdminDemoSSHTarget grants admin access to a demo SSH target via group g1.
+// closedTestPort returns a loopback TCP port that nothing listens on (it
+// is reserved and released again). Tests that expect an SSH dial to fail
+// must not point at 127.0.0.1:22: GitHub-hosted runners run sshd there,
+// which turns the expected "connection refused" into a completed
+// handshake and a host-key (TOFU) prompt frame instead of an error frame.
+func closedTestPort(t *testing.T) uint16 {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve closed port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return uint16(port)
+}
+
+func seedAdminDemoSSHTarget(t *testing.T, app *App) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1"); err != nil {
+		t.Fatalf("Create group: %v", err)
+	}
+	if err := app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1")); err != nil {
+		t.Fatalf("AddUserToGroup: %v", err)
+	}
+	if _, err := app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false); err != nil {
+		t.Fatalf("CreateWithPath: %v", err)
+	}
+	if err := app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo")); err != nil {
+		t.Fatalf("AddTargetToGroup: %v", err)
+	}
+	ids, err := app.AccessGroupStore.TargetIDsForUser(ctx, access.UserID("admin"), nil)
+	if err != nil {
+		t.Fatalf("TargetIDsForUser: %v", err)
+	}
+	for _, id := range ids {
+		if id == access.TargetID("demo") {
+			return
+		}
+	}
+	t.Fatalf("admin cannot access demo target; ids=%v", ids)
+}
+
+// startTestWSServer binds an httptest server to 127.0.0.1 so Origin checks stay
+// stable across IPv4/IPv6 CI runners.
+func startTestWSServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	})
+	return srv
+}
+
+func wsDialHeaders(t *testing.T, srv *httptest.Server, sessionID string) http.Header {
+	t.Helper()
+	header := http.Header{}
+	header.Set("Origin", "http://"+srv.Listener.Addr().String())
+	if sessionID != "" {
+		header.Add("Cookie", (&http.Cookie{Name: "vantyx_session", Value: sessionID, Path: "/"}).String())
+	}
+	return header
+}
+
+func withTerminalSessionIDGen(t *testing.T, gen func() session.ID) {
+	t.Helper()
+	terminalSessionIDGen = gen
+	t.Cleanup(func() { terminalSessionIDGen = nil })
 }

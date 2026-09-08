@@ -35,7 +35,13 @@ type Config struct {
 // journal_mode=WAL improves concurrency (readers do not block writers). busy_timeout makes
 // SQLite wait up to 5s on lock instead of returning SQLITE_BUSY immediately.
 func dsn(path string) string {
-	const pragmas = "_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)"
+	// _txlock=immediate makes every explicit transaction take the WAL
+	// write lock at BEGIN. Without it a transaction that reads first and
+	// writes later (SELECT ... then INSERT, the common store pattern)
+	// fails with SQLITE_BUSY_SNAPSHOT (517, "database is locked") the
+	// moment another connection commits in between -- busy_timeout does
+	// not apply to that upgrade. With it the writer simply waits its turn.
+	const pragmas = "_txlock=immediate&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)"
 	if path == "" || path == ":memory:" {
 		return "file::memory:?" + pragmas
 	}

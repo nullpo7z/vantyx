@@ -114,7 +114,10 @@ func (s *SQLiteCredentialIdentityStore) Create(ctx context.Context, id Credentia
 	_, err := s.db.ExecContext(ctx, `INSERT INTO credential_identities (id, label, ssh_username, ssh_password, ssh_key_id) VALUES (?, ?, ?, ?, NULLIF(?, ''))`,
 		string(id), strings.TrimSpace(label), sshUsername, storedPw, keyIDVal)
 	if err != nil {
-		return nil, ErrCredentialIdentityExists
+		if isUniqueConstraintErr(err) {
+			return nil, ErrCredentialIdentityExists
+		}
+		return nil, err
 	}
 	items, err := s.List(ctx)
 	if err != nil {
@@ -224,12 +227,25 @@ func (s *SQLiteCredentialIdentityStore) Delete(ctx context.Context, id Credentia
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
+	// A target can link directly to an Identity (credMode "identity",
+	// tracked via targets.credential_identity_id) without any other
+	// table referencing it, so -- unlike ssh_keys, which at least
+	// checked credential_identities -- this had no in-use check at
+	// all. Deleting an Identity a target still tracks would silently
+	// orphan that link.
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM targets WHERE credential_identity_id = ?`, string(id)).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrCredentialIdentityInUse
+	}
 	res, err := s.db.ExecContext(ctx, `DELETE FROM credential_identities WHERE id = ?`, string(id))
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
+	aff, _ := res.RowsAffected()
+	if aff == 0 {
 		return ErrCredentialIdentityNotFound
 	}
 	return nil

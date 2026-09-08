@@ -24,7 +24,7 @@ info:
     - SSH ホスト鍵 TOFU: POST /api/targets/probe-host-key、PUT /api/targets/{id}/ssh-host-key。接続時は WebSocket フレーム host_key_unknown / host_key_mismatch。
     - VNC WebSocket (GET /ws/vnc)。認証後、protocol=vnc のターゲットへ noVNC 用に RFB をブリッジ。クエリ target_id 必須。
     - ファイル転送: GET /api/targets/{target_id}/files（一覧・クエリ path）、GET /api/targets/{target_id}/files/download（ダウンロード・クエリ path）、POST /api/targets/{target_id}/files/upload（multipart: path, file）、DELETE /api/targets/{target_id}/files（削除・クエリ path）。SSH ターゲットは SFTP（保存済み認証必須）、リモート TFTP ターゲットは TFTP クライアント（認証不要・一覧・削除未対応）。
-    - 組み込み TFTP サーバー（Vantyx 内蔵）: GET /api/tftp/targets/{target_id}/files/*。protocol=tftp のターゲット向け。ローカルディスク（VANTYX_TFTP_ROOT）上のファイルを操作。
+    - 組み込み TFTP サーバー（Vantyx 内蔵）: GET /api/tftp/targets/{target_id}/files/*。protocol=tftp のターゲット向け。ローカルディスク（VANTYX_TFTP_ROOT）上のファイルを操作。実際の TFTP プロトコル経由の書き込み（WRQ）は POST/DELETE /api/tftp/targets/{target_id}/write-window で開閉する時限ウィンドウが無いと拒否される（送信元 IP は偽装可能なため、IP 一致だけでは許可しない）。
     - バックグラウンドファイル転送: GET /api/file-transfers（自分のジョブ一覧）、GET /api/file-transfers/{transfer_id}（状態）、DELETE /api/file-transfers/{transfer_id}（キャンセル）、GET /api/file-transfers/{transfer_id}/content（完了したダウンロードの取得）、POST /api/file-transfers/download（JSON: backend, target_id, path → 202）、POST /api/file-transfers/upload（multipart: backend, target_id, path, file → 202）。backend は remote（SFTP/FTP/リモート TFTP）または tftp_server（組み込み TFTP）。ジョブは SQLite（file_transfer_jobs）に永続化。単一ファイル上限 64MB。アップロードは receiving（ブラウザ→Vantyx 受信）中に離脱すると失敗しうる。
     - 録画: GET /api/recordings（メタデータ一覧。クエリ target_id でフィルタ可）。GET /api/recordings/{recording_id}/file でファイル取得。クエリ format=cast|gif|mp4（省略時 cast）。cast=Asciinema 形式またはネイティブ MP4。gif/mp4 変換は 202 Accepted でバックグラウンドキュー（GET /api/recordings/exports で進捗確認）。RDP/VNC 画面録画は MP4（H.264）で保存。ブラウザターミナルおよび CLI（ssh）接続の両方が録画対象。
     - CLI SSH ゲートウェイ: VANTYX_SSH_LISTEN で有効化。ssh user@vantyx でログイン後、メニューからターゲット選択してプロキシ接続。VANTYX_RECORDINGS_DIR 設定時は CLI 接続も録画対象。
@@ -46,6 +46,10 @@ components:
       type: apiKey
       in: cookie
       name: vantyx_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: 自動化用 API トークン（`vtx_...`、Account settings → API tokens で作成）。cookieAuth を要求するすべての /api エンドポイントで代替可能（ログイン・パスワード・二要素認証・トークン管理を除く）。`read` スコープは GET/HEAD のみ。
   schemas:
     ErrorResponse:
       type: object
@@ -213,9 +217,124 @@ components:
         require_password_change:
           type: boolean
           description: 初期 admin パスワード等で要強制変更の場合 true。
+        totp_enabled:
+          type: boolean
+          description: GET /api/me で返る。二要素認証（TOTP）が有効なら true。
+        timezone:
+          type: string
+          description: サーバー全体のタイムゾーン（`VANTYX_TIMEZONE`、IANA 名、既定 UTC）。ログ・監査ログ・UI・CLI はすべてこのゾーンで時刻を表示する。ユーザー側で変更はできない。
+        tags:
+          type: array
+          items:
+            type: string
+          description: GET /api/me で返る。ユーザーに付与されたタグ。
+        groups:
+          type: array
+          description: GET /api/me で返る。アクセスできるグループ（所属・タグ一致とその下位グループ）。
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
       required:
         - user_id
         - username
+    AccessRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        username:
+          type: string
+        group_id:
+          type: string
+        group_name:
+          type: string
+        reason:
+          type: string
+        duration_seconds:
+          type: integer
+        status:
+          type: string
+          enum: [pending, approved, denied, cancelled]
+        created_at:
+          type: string
+          format: date-time
+        decided_at:
+          type: string
+          format: date-time
+        decided_by:
+          type: string
+        decision_note:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+          description: 承認時に付与したメンバーシップの期限（無期限なら省略）
+    APIToken:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        prefix:
+          type: string
+          description: トークン先頭 12 文字（識別用）
+        scope:
+          type: string
+          enum: [read, write]
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+        active:
+          type: boolean
+    MFARequiredResponse:
+      type: object
+      description: |
+        POST /api/login でパスワードは正しいが二要素認証（TOTP）が有効なユーザーの応答。
+        Cookie は発行されず、`mfa_token` を POST /api/login/totp に渡して完了する。
+        `mfa_token` の有効期限は 5 分、誤コード 5 回で破棄される。
+      properties:
+        mfa_required:
+          type: boolean
+          enum: [true]
+        mfa_token:
+          type: string
+        methods:
+          type: array
+          items:
+            type: string
+            enum: [totp, webauthn]
+          description: 利用可能な第二要素
+      required: [mfa_required, mfa_token]
+    TOTPStatus:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        pending:
+          type: boolean
+          description: setup 済みだが confirm 前
+        recovery_codes_left:
+          type: integer
+        confirmed_at:
+          type: string
+          format: date-time
+      required: [enabled, pending, recovery_codes_left]
     SSHKeyItem:
       type: object
       description: Vantyx ログイン用に登録した SSH 公開鍵 1 件。管理者のみ登録・一覧・削除可能。
@@ -351,6 +470,15 @@ components:
           items:
             type: string
           description: 一覧で返る。ユーザーに付与されたタグ。
+        totp_enabled:
+          type: boolean
+          description: 一覧で返る。二要素認証（TOTP）が有効なら true。
+        passkeys:
+          type: integer
+          description: 登録済みパスキー数
+        disabled:
+          type: boolean
+          description: 無効化されたアカウントなら true
       required:
         - id
         - username
@@ -627,6 +755,41 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RDPSessionItem'
+    VNCSessionItem:
+      type: object
+      description: 直接 VNC 接続の共有セッション（GET /api/vnc/sessions）。
+      properties:
+        session_id:
+          type: string
+        target_id:
+          type: string
+        target_name:
+          type: string
+        target_path:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+        idle:
+          type: boolean
+        idle_seconds:
+          type: integer
+      required:
+        - session_id
+        - target_id
+        - target_name
+        - created_at
+        - last_seen
+    VNCSessionListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/VNCSessionItem'
     TerminalSessionListResponse:
       type: object
       properties:
@@ -725,7 +888,10 @@ paths:
   /api/login:
     post:
       summary: ログイン
-      description: ユーザー名とパスワードでログインし、`vantyx_session` Cookie を発行します。
+      description: |
+        ユーザー名とパスワードでログインし、`vantyx_session` Cookie を発行します。
+        二要素認証（TOTP）が有効なユーザーには Cookie を発行せず `MFARequiredResponse` を返すので、
+        `POST /api/login/totp` で完了してください。
       requestBody:
         required: true
         content:
@@ -734,16 +900,18 @@ paths:
               $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
-          description: 認証成功
+          description: 認証成功（または二要素認証が必要）
           headers:
             Set-Cookie:
-              description: vantyx_session を含む Set-Cookie ヘッダ
+              description: vantyx_session を含む Set-Cookie ヘッダ（MFA 要求時は無し）
               schema:
                 type: string
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LoginResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/LoginResponse'
+                  - $ref: '#/components/schemas/MFARequiredResponse'
         '400':
           description: リクエストボディ不正
           content:
@@ -763,10 +931,118 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/login/totp:
+    post:
+      summary: 二要素認証コードでログインを完了
+      description: |
+        `POST /api/login` が `mfa_required` を返した後、認証アプリの 6 桁コードまたは未使用のリカバリーコードで
+        ログインを完了し、`vantyx_session` Cookie を発行します。同一オリジンからの呼び出しのみ受け付けます。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mfa_token, code]
+              properties:
+                mfa_token:
+                  type: string
+                code:
+                  type: string
+                  description: TOTP 6 桁、または `xxxxx-xxxxx` 形式のリカバリーコード
+      responses:
+        '200':
+          description: 認証成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: mfa_token が無効・期限切れ、またはコード不一致
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: 試行回数超過
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/methods:
+    get:
+      summary: 利用可能なログイン方式（公開）
+      description: ログイン画面が SSO ボタンを表示するかどうかを判断するために使います。
+      security: []
+      responses:
+        '200':
+          description: ログイン方式
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  password:
+                    type: boolean
+                  oidc:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                      display_name:
+                        type: string
+
+  /api/auth/oidc/login:
+    get:
+      summary: OIDC ログイン開始
+      description: |
+        OpenID Connect の Authorization Code（PKCE S256 + nonce）フローを開始し、IdP の認可エンドポイントへ 302 リダイレクトします。
+        `VANTYX_OIDC_ISSUER` / `VANTYX_OIDC_CLIENT_ID` が未設定なら 404。
+      security: []
+      parameters:
+        - in: query
+          name: next
+          schema:
+            type: string
+          description: ログイン後に戻る同一オリジンのパス（`/terminal?...` など）。外部 URL は無視。
+      responses:
+        '302':
+          description: IdP へリダイレクト（`vantyx_oidc_state` Cookie を発行）
+        '404':
+          description: OIDC 未設定
+
+  /api/auth/oidc/callback:
+    get:
+      summary: OIDC コールバック
+      description: |
+        IdP からの戻り。state Cookie・PKCE・ID トークン署名・nonce・aud を検証し、
+        ローカルユーザーへ対応付けて `vantyx_session` Cookie を発行し `next` へ 302 します。
+        失敗時は `/?oidc_error=<denied|state|provider_unavailable|exchange|token|not_provisioned|resolve|session>` へ 302 します。
+      security: []
+      parameters:
+        - in: query
+          name: code
+          schema:
+            type: string
+        - in: query
+          name: state
+          schema:
+            type: string
+        - in: query
+          name: error
+          schema:
+            type: string
+      responses:
+        '302':
+          description: ログイン完了またはエラー付きでログイン画面へ
+
   /api/me:
     get:
       summary: 自分自身のユーザー情報取得
-      description: 現在のセッションに紐づくユーザー情報（user_id, username, role）を返します。
+      description: |
+        現在のセッションに紐づくユーザー情報（user_id, username, role, locale, timezone, totp_enabled）に加えて、
+        `tags`（ユーザーのタグ）と `groups`（アクセスできるグループ。所属・タグ一致とその下位グループ）を返します。
       security:
         - cookieAuth: []
       responses:
@@ -817,6 +1093,105 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/me/totp:
+    get:
+      summary: 自分の二要素認証（TOTP）状態
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: 状態
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TOTPStatus'
+        '401':
+          description: 未認証
+    delete:
+      summary: 二要素認証を無効化
+      description: 現在のパスワードで再認証したうえで TOTP 秘密鍵とリカバリーコードを削除します。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password:
+                  type: string
+      responses:
+        '204':
+          description: 無効化完了
+        '403':
+          description: パスワード不一致
+        '404':
+          description: TOTP が有効ではない
+
+  /api/me/totp/setup:
+    post:
+      summary: 二要素認証の登録開始
+      description: |
+        新しい TOTP 秘密鍵を生成して未確認状態で保存し、認証アプリ用の otpauth URL・手入力用シークレット・QR コード（PNG data URL）を返します。
+        `POST /api/me/totp/confirm` で確認するまでログインには要求されません。既に有効な場合は 409。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: 登録情報
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  otpauth_url:
+                    type: string
+                  secret:
+                    type: string
+                    description: Base32 シークレット
+                  qr_png:
+                    type: string
+                    description: '`data:image/png;base64,...`'
+        '409':
+          description: 既に有効（先に無効化が必要）
+
+  /api/me/totp/confirm:
+    post:
+      summary: 二要素認証の登録確認
+      description: 認証アプリの最初のコードで登録を確定し、1 回限り表示されるリカバリーコード（8 個）を返します。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+      responses:
+        '200':
+          description: 有効化完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  recovery_codes:
+                    type: array
+                    items:
+                      type: string
+        '400':
+          description: コード不一致、または setup 未実施
+        '409':
+          description: 既に有効
+
   /api/me/locale:
     put:
       summary: UI ロケール設定の更新
@@ -860,6 +1235,187 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/me/webauthn:
+    get:
+      summary: 自分のパスキー一覧
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: パスキー一覧（id, name, created_at, last_used_at, transports, backed_up）
+
+  /api/me/webauthn/register/begin:
+    post:
+      summary: パスキー登録開始
+      description: WebAuthn の PublicKeyCredentialCreationOptions（challenge は base64url）を返します。5 分以内に finish してください。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: 作成オプション
+
+  /api/me/webauthn/register/finish:
+    post:
+      summary: パスキー登録完了
+      description: '`{"name": "...", "credential": <navigator.credentials.create() の結果を base64url で JSON 化したもの>}`。監査イベント `passkey_registered`。'
+      security:
+        - cookieAuth: []
+      responses:
+        '201':
+          description: 登録したパスキー
+        '400':
+          description: 検証失敗、または登録が開始されていない
+
+  /api/me/webauthn/{id}:
+    delete:
+      summary: パスキーを削除
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 削除完了
+        '404':
+          description: 存在しない
+
+  /api/login/webauthn/begin:
+    post:
+      summary: パスキーによる二要素確認の開始
+      description: '`POST /api/login` が `methods` に `webauthn` を含む `mfa_required` を返したあと、`{"mfa_token": "..."}` で PublicKeyCredentialRequestOptions を取得します。'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mfa_token]
+              properties:
+                mfa_token:
+                  type: string
+      responses:
+        '200':
+          description: 要求オプション
+        '401':
+          description: mfa_token が無効
+
+  /api/login/webauthn/finish:
+    post:
+      summary: パスキーによる二要素確認の完了
+      description: '`{"mfa_token": "...", "credential": <navigator.credentials.get() の結果>}`。成功時に `vantyx_session` Cookie を発行します。監査イベント `login_webauthn_ok` / `login_webauthn_failed`。'
+      responses:
+        '200':
+          description: 認証成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: 検証失敗
+
+  /api/me/tokens:
+    get:
+      summary: 自分の API トークン一覧
+      description: 平文トークンは返しません（作成時の 1 回のみ）。ブラウザセッションでのみ利用可能（API トークンでは 403）。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: トークン一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/APIToken'
+    post:
+      summary: API トークンを作成
+      description: |
+        自動化用のベアラートークンを作成します。応答の `token`（`vtx_...`）はこの 1 回だけ返され、サーバーには SHA-256 のみ保存されます。
+        `scope` は `read`（GET/HEAD のみ）または `write`。`expires_in_days` は 0（無期限）〜3650。監査イベント `api_token_created`。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                scope:
+                  type: string
+                  enum: [read, write]
+                expires_in_days:
+                  type: integer
+      responses:
+        '201':
+          description: 作成したトークン（`token` を含む）
+        '400':
+          description: 不正な入力
+        '409':
+          description: 有効トークン数の上限（50）
+
+  /api/me/tokens/{id}:
+    delete:
+      summary: 自分の API トークンを失効
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 失効完了
+        '404':
+          description: 存在しない、または既に失効
+
+  /api/users/{user_id}/tokens:
+    get:
+      summary: ユーザーの API トークン一覧（管理者のみ）
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: トークン一覧
+
+  /api/users/{user_id}/tokens/{id}:
+    delete:
+      summary: ユーザーの API トークンを失効（管理者のみ）
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 失効完了
+        '404':
+          description: 存在しない
 
   /api/me/ssh-keys:
     get:
@@ -1363,7 +1919,10 @@ paths:
   /api/targets/{target_id}:
     put:
       summary: ターゲット（ホスト）の更新
-      description: 認証済みユーザーが、アクセス権のあるターゲットの名前・ホスト・ポート・プロトコル・パス・SSH認証情報を更新します。target_id は変更されません。
+      description: |
+        認証済みユーザーが、アクセス権のあるターゲットの名前・ホスト・ポート・プロトコル・パス・SSH認証情報を更新します。target_id は変更されません。
+        group_id を指定すると、ターゲットの所属アクセスグループも変更します（省略時は変更なし）。移動先グループは
+        実在し、かつ操作者自身がそのグループへのアクセス権を持っている必要があります（作成時と同じ制約）。
       security:
         - cookieAuth: []
       parameters:
@@ -1395,6 +1954,9 @@ paths:
                   default: ssh
                 path:
                   type: string
+                group_id:
+                  type: string
+                  description: 省略で変更なし。指定する場合は空文字不可（実在するグループで、かつ操作者自身がアクセス権を持つこと）。
                 credential_identity_id:
                   type: string
                 ssh_key_id:
@@ -1916,6 +2478,143 @@ paths:
         '401':
         '403':
 
+  /api/tftp/targets/{target_id}/write-window:
+    get:
+      summary: 組み込み TFTP サーバー — 書き込みウィンドウの状態を取得
+      description: |
+        対象ターゲットの書き込みウィンドウが現在開いているかを返します。組み込み TFTP
+        サーバーが起動していない場合も含め、常に 200 で open:false/true を返します
+        （状態照会が「起動していないので不明」を返すことはありません）。単発の状態確認用。
+        フロントエンドは通常、下記の SSE エンドポイント（GET .../write-window/events）を
+        購読して初期状態とその後の変化を受け取ります。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 現在の状態
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  open:
+                    type: boolean
+                  target_id:
+                    type: string
+                  client_ip:
+                    type: string
+                    description: open=true の場合のみ含まれる。
+                  expires_at:
+                    type: string
+                    format: date-time
+                    description: open=true の場合のみ含まれる。
+        '400':
+        '401':
+        '403':
+    post:
+      summary: 組み込み TFTP サーバー — 書き込みウィンドウを開く
+      description: |
+        組み込み TFTP サーバーは UDP の送信元 IP が容易に偽装できるため（CWE-290）、
+        実際の TFTP プロトコル経由の書き込み（WRQ）はデフォルトで全て拒否されます。
+        このエンドポイントは、対象ターゲットに設定された Host（送信元 IP として一致が
+        必須。他の IP からの WRQ はこのウィンドウの有無にかかわらず常に拒否される）
+        からの書き込みのみを一定時間（デフォルト 5 分、最大 30 分）許可する時限ウィンドウを
+        開きます。許可対象の IP はターゲット設定から自動的に決まり、リクエストボディでは
+        指定できません。同一ターゲットへの既存ウィンドウは置き換えられます。読み取り（RRQ）
+        はこのウィンドウの対象外です（`VANTYX_TFTP_ALLOW_READ_WITHOUT_WINDOW` を参照）。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ttl_seconds:
+                  type: integer
+                  description: ウィンドウの有効時間（秒）。省略時は 300 秒、最大 1800 秒。
+      responses:
+        '200':
+          description: ウィンドウを開いた
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  target_id:
+                    type: string
+                  client_ip:
+                    type: string
+                  expires_at:
+                    type: string
+                    format: date-time
+        '400':
+        '401':
+        '403':
+        '503':
+          description: 組み込み TFTP サーバーが起動していない（有効な TFTP ターゲットが存在しない）
+    delete:
+      summary: 組み込み TFTP サーバー — 書き込みウィンドウを閉じる
+      description: 対象ターゲットの開いている書き込みウィンドウを即座に無効化します。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: ウィンドウを閉じた（元々開いていなくても成功）
+        '401':
+        '403':
+        '503':
+          description: 組み込み TFTP サーバーが起動していない（有効な TFTP ターゲットが存在しない）
+
+  /api/tftp/targets/{target_id}/write-window/events:
+    get:
+      summary: 組み込み TFTP サーバー — 書き込みウィンドウの状態変化を購読（SSE）
+      description: |
+        接続直後に現在の状態を1件送信し、以降は open/close（同一ターゲットへの
+        再オープンによる TTL リセットを含む）が起きるたびに、その操作を行った
+        タブ/オペレーターに関わらず配信します。複数のタブや複数の操作者が同じ
+        ターゲットの TFTP コンソールページを開いている場合、全員に即座に反映されます
+        （ポーリング不要）。`Content-Type: text/event-stream`。25 秒ごとにコメント行
+        (`: keep-alive`) を送信して、アイドル時にリバースプロキシのタイムアウトで
+        切断されるのを防ぎます。
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: target_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: |
+            `text/event-stream`。各メッセージの `data:` は GET .../write-window と
+            同じ JSON 形式（open/target_id/client_ip?/expires_at?）。
+        '400':
+        '401':
+        '403':
+        '503':
+          description: SSE ブローカーが利用できない（通常発生しない）
+
   /api/groups:
     get:
       summary: アクセスグループ一覧（所属 + ターゲット含む）
@@ -2028,7 +2727,7 @@ paths:
             type: string
       responses:
         '200':
-          description: メンバー一覧（id, username）
+          description: メンバー一覧（id, username, role, expires_at, expired）。期限切れの行も expired=true で含まれる。
           content:
             application/json:
               schema:
@@ -2061,7 +2760,10 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
       summary: グループにメンバーを追加（管理者のみ）
-      description: 指定したアクセスグループにユーザーを追加します。管理者（admin）のみ利用可能。
+      description: |
+        指定したアクセスグループにユーザーを追加します。管理者（admin）のみ利用可能。
+        `expires_at`（RFC3339、任意）を指定すると、その時刻以降は自動的にアクセスを失います（下位グループへの継承も同時に切れる）。
+        既存メンバーに再度 POST すると期限を更新（空なら無期限化）します。監査イベント `group_member_added`。
       security:
         - cookieAuth: []
       parameters:
@@ -2080,6 +2782,10 @@ paths:
               properties:
                 user_id:
                   type: string
+                expires_at:
+                  type: string
+                  format: date-time
+                  description: アクセス期限（任意、RFC3339）。省略または空で無期限。
       responses:
         '204':
           description: 追加完了
@@ -2347,6 +3053,75 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/users/{user_id}:
+    patch:
+      summary: ユーザーの更新（ロール・ユーザー名・無効化。管理者のみ）
+      description: |
+        省略したフィールドは変更しません。`role` は `admin` / `user`（自分自身の降格・最後の管理者の降格は不可、監査 `user_role_update`）。
+        `username` は 1〜64 文字で一意（重複は 409、監査 `user_renamed`）。`disabled: true` はアカウントを無効化し、全セッション・実行中セッションを終了、
+        以後 Web / API トークン / SSH 鍵 / SSO のいずれでもログインできません（自分自身・最後の管理者は不可、監査 `user_disabled` / `user_enabled`）。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  type: string
+                  enum: [admin, user]
+                username:
+                  type: string
+                disabled:
+                  type: boolean
+      responses:
+        '200':
+          description: 更新後のユーザー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: 不正なロール、または自分自身の降格
+        '401':
+          description: 未認証
+        '403':
+          description: 管理者以外
+        '404':
+          description: ユーザーが存在しない
+        '409':
+          description: 最後の管理者は降格できない
+
+  /api/users/{user_id}/totp:
+    delete:
+      summary: ユーザーの二要素認証をリセット（管理者）
+      description: 端末紛失などでロックアウトされたユーザーの TOTP を管理者が解除します。監査イベント `totp_reset_by_admin` を記録します。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: リセット完了
+        '401':
+          description: 未認証
+        '403':
+          description: 管理者以外
+        '404':
+          description: 対象ユーザーに TOTP が設定されていない
+
   /api/users/{user_id}/tags:
     get:
       summary: ユーザーのタグ一覧（管理者のみ）
@@ -2560,6 +3335,404 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/targets/export:
+    get:
+      summary: ターゲット一覧のエクスポート（管理者のみ）
+      description: 全ターゲットを CSV（既定）または JSON（`format=json`）でダウンロードします。パスワード・秘密鍵は含まれません。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [csv, json]
+      responses:
+        '200':
+          description: 添付ファイル
+
+  /api/targets/import:
+    post:
+      summary: ターゲットの一括インポート（管理者のみ）
+      description: |
+        multipart（`file`: CSV または JSON、`dry_run`: 1/0）か JSON（`{"targets":[...],"dry_run":bool}`）で最大 2000 件を作成します。
+        CSV 列: name, host, port, protocol, group_id, tags（空白/;区切り）, ssh_username, ssh_password, sftp_enabled, ftp_enabled, tftp_enabled, ssh_host_key_fingerprint, credential_identity_id, ssh_key_id。
+        同一グループに同じ host:port:protocol があれば skipped。監査イベント `targets_imported`。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: 行ごとの結果（created / skipped / error / valid）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dry_run:
+                    type: boolean
+                  rows:
+                    type: integer
+                  created:
+                    type: integer
+                  skipped:
+                    type: integer
+                  failed:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        row:
+                          type: integer
+                        name:
+                          type: string
+                        status:
+                          type: string
+                        id:
+                          type: string
+                        error:
+                          type: string
+
+  /api/targets/check:
+    post:
+      summary: ターゲットの到達性確認（管理者のみ）
+      description: 指定した（省略時は全）ターゲットに TCP 接続を試み、到達可否とレイテンシを返します（UDP の TFTP は対象外）。
+      security:
+        - cookieAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: 結果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checked_at:
+                    type: string
+                    format: date-time
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        host:
+                          type: string
+                        port:
+                          type: integer
+                        reachable:
+                          type: boolean
+                        latency_ms:
+                          type: integer
+                        error:
+                          type: string
+
+  /api/admin/sessions:
+    get:
+      summary: 全ライブセッション一覧（管理者のみ）
+      description: ターミナル（SSH/Telnet）・VNC・ブラウザ RDP の全セッションを所有者・接続先・開始/最終活動・参加者付きで返します。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: セッション一覧
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum: [terminal, vnc, rdp]
+                        session_id:
+                          type: string
+                        owner_user_id:
+                          type: string
+                        owner_username:
+                          type: string
+                        target_id:
+                          type: string
+                        target_name:
+                          type: string
+                        target_path:
+                          type: string
+                        protocol:
+                          type: string
+                        created_at:
+                          type: string
+                          format: date-time
+                        last_seen:
+                          type: string
+                          format: date-time
+                        idle:
+                          type: boolean
+                        participants:
+                          type: array
+                          items:
+                            type: string
+                        watching:
+                          type: boolean
+        '403':
+          description: 管理者以外
+
+  /api/admin/sessions/{kind}/{session_id}/watch:
+    post:
+      summary: セッションを監視（管理者のみ）
+      description: 招待なしで管理者を閲覧者として共有ルームに追加し、開くべきページ URL（`/terminal`, `/vnc`, `/rdp` の viewer モード）を返します。所有者には participant_joined イベントが届き、参加者一覧に表示されます。監査イベント `session_watched_by_admin`。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: kind
+          required: true
+          schema:
+            type: string
+            enum: [terminal, vnc, rdp]
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 参加情報
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id:
+                    type: string
+                  kind:
+                    type: string
+                  role:
+                    type: string
+                  url:
+                    type: string
+        '404':
+          description: セッションが存在しない
+
+  /api/admin/sessions/{kind}/{session_id}:
+    delete:
+      summary: セッションを強制終了（管理者のみ）
+      description: 所有者と全参加者に `session_terminated_by_admin` イベント（reason 付き）を送ってからセッションを停止します。監査イベント `session_terminated_by_admin`。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: kind
+          required: true
+          schema:
+            type: string
+            enum: [terminal, vnc, rdp]
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '204':
+          description: 終了完了
+        '404':
+          description: セッションが存在しない
+
+  /api/access-requests/groups:
+    get:
+      summary: 申請可能なグループ一覧
+      description: すべてのグループ（id, name）と、呼び出しユーザーが既にアクセスできるか（has_access）を返します。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: グループ一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    has_access:
+                      type: boolean
+
+  /api/access-requests:
+    get:
+      summary: アクセス申請一覧
+      description: 一般ユーザーは自分の申請のみ。管理者は全件（`mine=1` で自分のみ、`status=pending|approved|denied|cancelled` で絞り込み）。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, approved, denied, cancelled]
+        - in: query
+          name: mine
+          schema:
+            type: string
+            enum: ['1']
+      responses:
+        '200':
+          description: 申請一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccessRequest'
+    post:
+      summary: アクセス申請を作成
+      description: |
+        グループへの（期間付き）メンバーシップを申請します。既にアクセスできるグループ、承認待ちの申請があるグループには 409。
+        `duration_seconds` は 0（無期限）〜 31536000（365 日）。監査イベント `access_request_created`。
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [group_id]
+              properties:
+                group_id:
+                  type: string
+                reason:
+                  type: string
+                  maxLength: 500
+                duration_seconds:
+                  type: integer
+      responses:
+        '201':
+          description: 作成した申請
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessRequest'
+        '400':
+          description: 不正な入力
+        '404':
+          description: グループが存在しない
+        '409':
+          description: 既にアクセス可能、または承認待ちの申請あり
+
+  /api/access-requests/{id}/approve:
+    post:
+      summary: アクセス申請を承認（管理者のみ）
+      description: 申請者をグループに追加します（`duration_seconds` で期間を上書き可、0 = 無期限）。監査イベント `access_request_approved`。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                duration_seconds:
+                  type: integer
+                note:
+                  type: string
+      responses:
+        '200':
+          description: 更新後の申請
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessRequest'
+        '403':
+          description: 管理者以外
+        '404':
+          description: 申請が存在しない
+        '409':
+          description: 申請が承認待ちではない
+
+  /api/access-requests/{id}/deny:
+    post:
+      summary: アクセス申請を却下（管理者のみ）
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note:
+                  type: string
+      responses:
+        '200':
+          description: 更新後の申請
+        '403':
+          description: 管理者以外
+        '404':
+          description: 申請が存在しない
+        '409':
+          description: 申請が承認待ちではない
+
+  /api/access-requests/{id}:
+    delete:
+      summary: アクセス申請を取り下げ
+      description: 申請者本人（または管理者）が承認待ちの申請を取り下げます。
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 取り下げ完了
+        '403':
+          description: 他人の申請
+        '404':
+          description: 申請が存在しない
+        '409':
+          description: 申請が承認待ちではない
 
   /api/settings/audit-forwarder:
     get:
@@ -3175,6 +4348,14 @@ paths:
                   enum: [viewer, writer_eligible]
                   default: viewer
                 invitee_user_id: { type: string }
+                invite_tag:
+                  type: string
+                  description: タグに紐づく全ユーザーへ指名招待を一括発行（オーナー以外）。
+                invite_group_id:
+                  type: string
+                  description: オーナーが所属するアクセスグループの全メンバーへ指名招待を一括発行。
+                link_unlimited: { type: boolean }
+                link_max_uses: { type: integer }
                 ttl_seconds:
                   type: integer
                   description: 0 または未指定でデフォルト TTL。`VANTYX_INVITATION_MAX_TTL_SECONDS` が上限。
@@ -3295,6 +4476,173 @@ paths:
         '401': { description: 未認証 }
         '403': { description: オーナーでない }
         '404': { description: セッションまたは参加者が存在しない }
+
+  /api/vnc/sessions:
+    get:
+      summary: アクティブな直接 VNC セッション一覧
+      description: |
+        ログイン中のユーザーがオーナーの稼働中 VNC セッション一覧。
+        `target_id` のみで接続したあと共有 UI が `session_id` を解決するために使用します。
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: セッション一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VNCSessionListResponse'
+        '401':
+          description: 未認証
+
+  /api/vnc/sessions/{session_id}/invitation-options:
+    get:
+      summary: VNC 招待候補（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: ユーザー・タグ・グループ候補 }
+
+  /api/vnc/sessions/{session_id}/invitations:
+    get:
+      summary: VNC 招待一覧（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 招待一覧 }
+    post:
+      summary: VNC 招待を発行（オーナー専用）
+      description: terminal と同様（指名・タグ・グループ・リンク）。`mode` は viewer のみ。
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 発行された招待 }
+
+  /api/vnc/sessions/{session_id}/join:
+    post:
+      summary: VNC 共有セッションに参加
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 参加完了 }
+
+  /api/vnc/sessions/{session_id}/participants:
+    get:
+      summary: VNC 参加者一覧
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 参加者一覧 }
+
+  /api/vnc/sessions/{session_id}/participants/{user_id}:
+    delete:
+      summary: VNC 参加者をキック（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: キック完了 }
+
+  /api/rdp/sessions/{session_id}/invitation-options:
+    get:
+      summary: ブラウザ RDP 招待候補（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: ユーザー・タグ・グループ候補 }
+
+  /api/rdp/sessions/{session_id}/invitations:
+    get:
+      summary: ブラウザ RDP 招待一覧（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 招待一覧 }
+    post:
+      summary: ブラウザ RDP 招待を発行（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 発行された招待 }
+
+  /api/rdp/sessions/{session_id}/join:
+    post:
+      summary: ブラウザ RDP 共有セッションに参加
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 参加完了 }
+
+  /api/rdp/sessions/{session_id}/participants:
+    get:
+      summary: ブラウザ RDP 参加者一覧
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 参加者一覧 }
+
+  /api/rdp/sessions/{session_id}/participants/{user_id}:
+    delete:
+      summary: ブラウザ RDP 参加者をキック（オーナー専用）
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: キック完了 }
 
   /api/terminal/sessions/{session_id}/write-requests:
     post:

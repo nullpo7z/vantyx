@@ -120,7 +120,7 @@ func writeCLISessionBar(w io.Writer, bar cliSessionBarState) error {
 	return buildCLISessionBarLayout(bar).writeTo(w)
 }
 
-func buildCLIScreenLayout(st cliScreenState, extraLines []string) cliScreenLayout {
+func buildCLIScreenLayout(st cliScreenState, sessionLines []string, extraLines []string) cliScreenLayout {
 	termCols := cliTermWidth(st.Cols)
 	numCols := cliNumColumns(termCols)
 	view := buildCLINavView(st.AllGroups, st.Location)
@@ -157,6 +157,10 @@ func buildCLIScreenLayout(st cliScreenState, extraLines []string) cliScreenLayou
 		lines = append(lines, formatCLIColumns(hostEntries, numCols)...)
 	}
 
+	if len(sessionLines) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, sessionLines...)
+	}
 	lines = append(lines, "", cliSeparatorLine(st.Cols))
 	lines = append(lines, extraLines...)
 	return cliScreenLayout{lines: lines}
@@ -175,9 +179,9 @@ func (l cliScreenLayout) writeTo(w io.Writer) error {
 	return nil
 }
 
-// writeCLIScreen renders PWD, Groups, Hosts, separator, optional extra lines (menu mode).
-func writeCLIScreen(w io.Writer, st cliScreenState, extraLines []string) error {
-	return buildCLIScreenLayout(st, extraLines).writeTo(w)
+// writeCLIScreen renders PWD, Groups, Hosts, active sessions, separator, then optional extra lines (menu mode / status).
+func writeCLIScreen(w io.Writer, st cliScreenState, sessionLines []string, extraLines []string) error {
+	return buildCLIScreenLayout(st, sessionLines, extraLines).writeTo(w)
 }
 
 // formatCLIActiveSessionLines formats active session rows below the header.

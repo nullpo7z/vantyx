@@ -30,6 +30,7 @@ func audit(event string, fields auditFields) {
 	if fields == nil {
 		fields = auditFields{}
 	}
+	observeAuditMetrics(event)
 
 	// Append to the in-memory ring used by the audit UI.
 	if auditBuffer != nil {
@@ -39,7 +40,7 @@ func audit(event string, fields auditFields) {
 		}
 		copied["event"] = event
 		auditBuffer.add(AuditEntry{
-			Time:   time.Now().UTC(),
+			Time:   time.Now(), // server zone (VANTYX_TIMEZONE)
 			Event:  event,
 			Fields: copied,
 		})

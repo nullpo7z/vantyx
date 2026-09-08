@@ -111,6 +111,12 @@ func writeJSONErrorKey(w http.ResponseWriter, r *http.Request, key string, code 
 	writeJSONError(w, i18n.TR(r, key, vars...), code)
 }
 
+// localizedMessage resolves an i18n key for non-JSON responses (for
+// example WebSocket text frames).
+func localizedMessage(r *http.Request, key string, vars ...any) string {
+	return i18n.TR(r, key, vars...)
+}
+
 // writeJSONErrorKeyAudited returns a localized message for key without
 // embedding err.Error() in the API response. err is recorded in audit
 // logs for operators.
@@ -215,6 +221,8 @@ func writeAccessValidationError(w http.ResponseWriter, r *http.Request, err erro
 		writeJSONErrorKey(w, r, "validation.hostTooLong", http.StatusBadRequest)
 	case errors.Is(err, access.ErrHostInvalid):
 		writeJSONErrorKey(w, r, "validation.hostInvalid", http.StatusBadRequest)
+	case errors.Is(err, access.ErrHostRestricted):
+		writeJSONErrorKey(w, r, "validation.hostRestricted", http.StatusBadRequest)
 	case errors.Is(err, access.ErrProtocolInvalid):
 		writeJSONErrorKey(w, r, "targets.protocolInvalid", http.StatusBadRequest)
 	case errors.Is(err, access.ErrTagLength):
@@ -225,12 +233,26 @@ func writeAccessValidationError(w http.ResponseWriter, r *http.Request, err erro
 		writeJSONErrorKey(w, r, "targets.hostKeyFingerprintInvalid", http.StatusBadRequest)
 	case errors.Is(err, access.ErrSSHKeyLabelReq), errors.Is(err, access.ErrCredentialIdentityLabelReq):
 		writeJSONErrorKey(w, r, "validation.nameEmpty", http.StatusBadRequest)
+	case errors.Is(err, access.ErrSSHKeyIDEmpty):
+		writeJSONErrorKey(w, r, "sshKeys.idRequired", http.StatusBadRequest)
+	case errors.Is(err, access.ErrSSHKeyIDTooLong):
+		writeJSONErrorKey(w, r, "validation.sshKeyIDTooLong", http.StatusBadRequest)
+	case errors.Is(err, access.ErrSSHKeyIDInvalid):
+		writeJSONErrorKey(w, r, "validation.sshKeyIDInvalid", http.StatusBadRequest)
+	case errors.Is(err, access.ErrCredentialIdentityIDEmpty):
+		writeJSONErrorKey(w, r, "credentialIdentities.idRequired", http.StatusBadRequest)
+	case errors.Is(err, access.ErrCredentialIdentityIDTooLong):
+		writeJSONErrorKey(w, r, "validation.credentialIdentityIDTooLong", http.StatusBadRequest)
+	case errors.Is(err, access.ErrCredentialIdentityIDInvalid):
+		writeJSONErrorKey(w, r, "validation.credentialIdentityIDInvalid", http.StatusBadRequest)
 	case errors.Is(err, access.ErrSSHKeyPrivateReq):
 		writeJSONErrorKey(w, r, "sshKeys.privateKeyRequired", http.StatusBadRequest)
 	case errors.Is(err, access.ErrCredentialIdentityUserReq):
 		writeJSONErrorKey(w, r, "credentialIdentities.usernameRequired", http.StatusBadRequest)
 	case errors.Is(err, access.ErrCredentialIdentityAuthReq):
 		writeJSONErrorKey(w, r, "credentialIdentities.authRequired", http.StatusBadRequest)
+	case errors.Is(err, access.ErrGroupNotEmpty):
+		writeJSONErrorKey(w, r, "groups.notEmpty", http.StatusConflict)
 	default:
 		return false
 	}
@@ -261,20 +283,32 @@ func isLoopbackHost(host string) bool {
 	return hostname == "127.0.0.1" || hostname == "localhost" || hostname == "::1"
 }
 
-// auditUsernameHashKey is generated once at startup so log forging
-// attempts that leak a username into the audit table cannot be
-// reversed by external attackers (CWE-532). Operators that need to
-// correlate failed-login events can run the same HMAC offline.
+// auditUsernameHashKey is loaded once at startup so log forging
+// attempts that leak a username into the audit table cannot be reversed
+// by external attackers (CWE-532). When VANTYX_AUDIT_HMAC_KEY or
+// VANTYX_SSH_PASSWORD_ENCRYPTION_KEY is set the key is stable across
+// restarts so operators can correlate failed-login events offline.
 var (
 	auditUsernameHashOnce sync.Once
 	auditUsernameHashKey  []byte
 )
 
+func initAuditUsernameHashKey() {
+	if k := strings.TrimSpace(os.Getenv("VANTYX_AUDIT_HMAC_KEY")); k != "" {
+		auditUsernameHashKey = []byte(k)
+		return
+	}
+	if k := strings.TrimSpace(os.Getenv("VANTYX_SSH_PASSWORD_ENCRYPTION_KEY")); k != "" {
+		sum := sha256.Sum256([]byte("vantyx-audit-username:" + k))
+		auditUsernameHashKey = sum[:]
+		return
+	}
+	auditUsernameHashKey = make([]byte, 32)
+	_, _ = randReadFull(auditUsernameHashKey)
+}
+
 func auditUsernameHash(username string) string {
-	auditUsernameHashOnce.Do(func() {
-		auditUsernameHashKey = make([]byte, 32)
-		_, _ = randReadFull(auditUsernameHashKey)
-	})
+	auditUsernameHashOnce.Do(initAuditUsernameHashKey)
 	mac := hmac.New(sha256.New, auditUsernameHashKey)
 	mac.Write([]byte(strings.ToLower(strings.TrimSpace(username))))
 	return hex.EncodeToString(mac.Sum(nil))[:16]
@@ -312,6 +346,11 @@ func effectiveScheme(r *http.Request) string {
 // effective scheme + host. Used by /api/login which is exempted from
 // the global CSRF middleware.
 func sameOriginRequest(r *http.Request) bool {
+	// Bearer-token requests carry no cookie, so cross-site request forgery
+	// does not apply; the token itself is the proof of intent.
+	if _, viaToken := apiTokenFromContext(r); viaToken {
+		return true
+	}
 	want := effectiveScheme(r) + "://" + r.Host
 	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
 		return origin == want

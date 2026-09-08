@@ -1,5 +1,6 @@
 import API from './api.js'
 import { t } from './i18n.js'
+import { formatDateTime } from './datetime.js'
 
 function escapeHtml(s) {
   const div = document.createElement('div')
@@ -7,12 +8,8 @@ function escapeHtml(s) {
   return div.innerHTML
 }
 
-function fmtTime(t) {
-  try {
-    return new Date(t).toLocaleString()
-  } catch {
-    return String(t || '')
-  }
+function fmtTime(raw) {
+  return formatDateTime(raw, undefined, String(raw || ''))
 }
 
 function fieldsToText(fields) {
@@ -357,7 +354,7 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
         </div>
       </div>
 
-      <p class="text-xs text-slate-500 mt-3">${t('audit.cmdNote')}</p>
+      <p id="audit-cmd-note" class="text-xs text-slate-500 mt-3 hidden">${t('audit.cmdNote')}</p>
     </div>
   `
 
@@ -382,6 +379,8 @@ export async function renderAuditPage({ mainContent, meData, setActiveNav }) {
       tb.btn.setAttribute('aria-selected', active ? 'true' : 'false')
       tb.btn.className = `px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${active ? TAB_BTN_ACTIVE : TAB_BTN_INACTIVE}`
     }
+    // The PTY/Tab-completion note only describes the command log (E-3/E-5).
+    mainContent.querySelector('#audit-cmd-note')?.classList.toggle('hidden', tab !== 'cmd')
     if (tab === 'ft' && !ftLoadedOnce) {
       ftLoadedOnce = true
       loadFt(false)

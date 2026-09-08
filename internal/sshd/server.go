@@ -2,8 +2,6 @@ package sshd
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"fmt"
 	"log/slog"
 	"net"
@@ -14,7 +12,9 @@ import (
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
+	"github.com/nullpo7z/vantyx/internal/ratelimit"
 	"github.com/nullpo7z/vantyx/internal/session"
+	"github.com/nullpo7z/vantyx/internal/sharing"
 	"github.com/nullpo7z/vantyx/internal/sshproxy"
 )
 
@@ -39,7 +39,7 @@ type SessionLister interface {
 // SessionStopper is the optional interface implemented by
 // [*session.Manager] that lets the CLI end background bridges.
 type SessionStopper interface {
-	Stop(id session.ID)
+	Stop(id session.ID) bool
 }
 
 // RecordingStore persists recording metadata when CLI sessions are
@@ -52,16 +52,57 @@ type RecordingStore interface {
 // Server is the CLI SSH gateway: users log in with Vantyx credentials,
 // then choose a target to proxy to via the text menu in [Server.runMenu].
 type Server struct {
-	userStore      auth.UserStore
-	targetStore    access.TargetStore
-	groupStore     access.AccessGroupStore
-	sessionManager SessionStarter
-	config         *ssh.ServerConfig
-	listener       net.Listener
-	mu             sync.Mutex
-	shutdown       bool
-	recordingDir   string
-	recordingStore RecordingStore
+	userStore       auth.UserStore
+	targetStore     access.TargetStore
+	groupStore      access.AccessGroupStore
+	sessionManager  SessionStarter
+	config          *ssh.ServerConfig
+	listener        net.Listener
+	mu              sync.Mutex
+	shutdown        bool
+	recordingDir    string
+	recordingStore  RecordingStore
+	loginLimiter    *ratelimit.LoginLimiter
+	sharingRegistry *sharing.Registry
+	sharingStore    sharing.Store
+	sharingBridges  sharingBridgeRegistry
+	// conns tracks live authenticated connections by user so an admin
+	// disabling or deleting an account can cut its CLI sessions too.
+	connsMu sync.Mutex
+	conns   map[*ssh.ServerConn]string
+}
+
+// CloseConnectionsForUser drops every live CLI connection of the user
+// (closing the transport ends the menu / proxied session) and returns how
+// many were closed.
+func (s *Server) CloseConnectionsForUser(userID string) int {
+	s.connsMu.Lock()
+	var victims []*ssh.ServerConn
+	for c, uid := range s.conns {
+		if uid == userID {
+			victims = append(victims, c)
+		}
+	}
+	s.connsMu.Unlock()
+	for _, c := range victims {
+		_ = c.Close()
+	}
+	return len(victims)
+}
+
+func (s *Server) trackConn(c *ssh.ServerConn, userID string) {
+	s.connsMu.Lock()
+	if s.conns == nil {
+		s.conns = map[*ssh.ServerConn]string{}
+	}
+	s.conns[c] = userID
+	s.connsMu.Unlock()
+}
+
+func (s *Server) untrackConn(c *ssh.ServerConn) {
+	s.connsMu.Lock()
+	delete(s.conns, c)
+	s.connsMu.Unlock()
 }
 
 // Config holds the dependencies needed to build a [Server].
@@ -70,14 +111,22 @@ type Config struct {
 	TargetStore    access.TargetStore
 	GroupStore     access.AccessGroupStore
 	SessionManager SessionStarter
-	// HostKey is the SSH host private key. If nil, a fresh 2048-bit RSA
-	// key is generated (not persisted across restarts).
-	HostKey ssh.Signer
+	// HostKey is the SSH host private key. When nil, [loadOrGenerateHostKey]
+	// reads HostKeyPath or VANTYX_SSH_HOST_KEY_PATH and persists a new key
+	// there; when neither is set a fresh ephemeral 2048-bit RSA key is used.
+	HostKey     ssh.Signer
+	HostKeyPath string
+	// LoginLimiter throttles failed CLI SSH logins. When nil,
+	// [ratelimit.NewLoginLimiter] is used.
+	LoginLimiter *ratelimit.LoginLimiter
 	// RecordingsDir enables asciinema recording for CLI connect sessions
 	// when set (typically from VANTYX_RECORDINGS_DIR). RecordingStore
 	// must also be set to persist metadata.
-	RecordingsDir  string
-	RecordingStore RecordingStore
+	RecordingsDir   string
+	RecordingStore  RecordingStore
+	SharingRegistry *sharing.Registry
+	SharingStore    sharing.Store
+	SharingBridges  sharingBridgeRegistry
 }
 
 // NewServer builds an SSH server that authenticates with cfg.UserStore
@@ -88,30 +137,35 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	hostKey := cfg.HostKey
 	if hostKey == nil {
-		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		var err error
+		hostKey, err = loadOrGenerateHostKey(cfg.HostKeyPath)
 		if err != nil {
-			return nil, fmt.Errorf("sshd: generate host key: %w", err)
-		}
-		hostKey, err = ssh.NewSignerFromKey(key)
-		if err != nil {
-			return nil, fmt.Errorf("sshd: signer from key: %w", err)
+			return nil, err
 		}
 	}
+	limiter := cfg.LoginLimiter
+	if limiter == nil {
+		limiter = ratelimit.NewLoginLimiter()
+	}
+	// Public-key authentication only. Password (and keyboard-interactive)
+	// auth is deliberately not offered on the CLI gateway: a leaked
+	// password must not open a second, weaker entry point next to the web
+	// UI's password + TOTP login, and keys are what automation needs anyway.
+	// Admins register keys under Users -> Public keys.
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			user, err := cfg.UserStore.AuthenticateByPublicKey(c.User(), key)
+			ip := ratelimit.ClientIPFromAddr(c.RemoteAddr())
+			username := c.User()
+			if !limiter.AllowIP(ip) || !limiter.AllowUser(username) {
+				return nil, fmt.Errorf("too many failed attempts")
+			}
+			user, err := cfg.UserStore.AuthenticateByPublicKey(username, key)
 			if err != nil {
+				limiter.RecordFailureIP(ip)
+				limiter.RecordFailureUser(username)
 				return nil, err
 			}
-			return &ssh.Permissions{
-				Extensions: map[string]string{"user_id": user.ID},
-			}, nil
-		},
-		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			user, err := cfg.UserStore.Authenticate(c.User(), string(pass))
-			if err != nil {
-				return nil, err
-			}
+			limiter.RecordSuccess(ip, username)
 			return &ssh.Permissions{
 				Extensions: map[string]string{"user_id": user.ID},
 			}, nil
@@ -119,13 +173,17 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	config.AddHostKey(hostKey)
 	return &Server{
-		userStore:      cfg.UserStore,
-		targetStore:    cfg.TargetStore,
-		groupStore:     cfg.GroupStore,
-		sessionManager: cfg.SessionManager,
-		config:         config,
-		recordingDir:   cfg.RecordingsDir,
-		recordingStore: cfg.RecordingStore,
+		userStore:       cfg.UserStore,
+		targetStore:     cfg.TargetStore,
+		groupStore:      cfg.GroupStore,
+		sessionManager:  cfg.SessionManager,
+		config:          config,
+		recordingDir:    cfg.RecordingsDir,
+		recordingStore:  cfg.RecordingStore,
+		loginLimiter:    limiter,
+		sharingRegistry: cfg.SharingRegistry,
+		sharingStore:    cfg.SharingStore,
+		sharingBridges:  cfg.SharingBridges,
 	}, nil
 }
 
@@ -206,6 +264,8 @@ func (s *Server) handleConn(nconn net.Conn) {
 	if userID == "" {
 		return
 	}
+	s.trackConn(sshConn, userID)
+	defer s.untrackConn(sshConn)
 	var sessionDone sync.WaitGroup
 	for ch := range chans {
 		if ch.ChannelType() != "session" {

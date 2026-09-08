@@ -280,6 +280,32 @@ body.terminal-standalone #app {
   white-space: nowrap;
   flex-shrink: 0;
 }
+#app header .vantyx-brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: inherit;
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+#app header .vantyx-brand-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+/* Brand logo (wordmark + mark) on the login / password screens: the
+   light-surface file carries a navy wordmark, the dark one a light
+   wordmark; the theme class picks the right file. */
+.vantyx-logo {
+  display: block;
+  width: min(100%, 17rem);
+  height: auto;
+  margin: 0 auto 1.5rem;
+}
+.vantyx-logo-dark { display: none; }
+.dark .vantyx-logo-light { display: none; }
+.dark .vantyx-logo-dark { display: block; }
 #app header nav.vantyx-nav {
   display: flex;
   align-items: baseline;
@@ -367,6 +393,13 @@ body.terminal-standalone #app {
 #app header .vantyx-page-btn:hover {
   background-color: rgba(255, 255, 255, 0.2);
 }
+/* `#app header .vantyx-page-btn` (id + element + class) outranks
+   Tailwind's `.hidden`, so role-gated header buttons that are toggled
+   with the `hidden` class (Participants / Invitations / End session /
+   Leave) stayed visible. Give `.hidden` the final say. */
+#app header .vantyx-page-btn.hidden {
+  display: none !important;
+}
 #app header .vantyx-page-btn-danger {
   border-color: rgba(248, 113, 113, 0.6);
   background-color: rgba(248, 113, 113, 0.85);
@@ -377,4 +410,172 @@ body.terminal-standalone #app {
 /* ファイル/TFTP のパンくず・サブツールバー用の二段目スペーシング。 */
 #app header .vantyx-page-subrow {
   padding: 0 1.5rem 0.5rem;
+}
+
+/* --- Mobile terminal accessory bar (Termius-style) ------------------ */
+/* Created only on touch devices by mobile_console.js. It rides directly
+   above the OS keyboard; the terminal is kept visible above it via the
+   visualViewport API, so nothing hides behind the keyboard. */
+.term-mobile-bar {
+  flex: 0 0 auto;
+  background: #0b1220;
+  border-top: 1px solid #1e293b;
+  padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.term-mobile-row {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.term-mobile-row::-webkit-scrollbar {
+  display: none;
+}
+.term-mobile-row + .term-mobile-row {
+  margin-top: 4px;
+}
+.term-mobile-key {
+  flex: 0 0 auto;
+  min-width: 40px;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.term-mobile-key:active {
+  background: #334155;
+}
+.term-mobile-key.is-active {
+  background: #0ea5e9;
+  border-color: #38bdf8;
+  color: #04283a;
+  font-weight: 700;
+}
+.term-mobile-key-wide {
+  min-width: 56px;
+}
+
+/* --- Narrow screens: compact standalone-page header (terminal / RDP /
+   VNC / files). The page-context label is dropped and the action
+   buttons tighten so they never overlap on a phone. --------------- */
+@media (max-width: 640px) {
+  #app header .vantyx-header-inner {
+    gap: 0.5rem;
+    padding: 0.5rem 0.625rem;
+    flex-wrap: wrap;
+  }
+  #app header .vantyx-header-start {
+    column-gap: 0.5rem;
+  }
+  #app header .vantyx-page-context {
+    display: none;
+  }
+  #app header .vantyx-header-end {
+    column-gap: 0.375rem;
+    row-gap: 0.375rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  #app header .vantyx-page-btn {
+    padding: 0.25rem 0.5rem;
+  }
+  #app header .vantyx-brand {
+    font-size: 0.875rem;
+  }
+}
+
+/* --- Collapsible SPA header menu (hamburger) -----------------------
+   The main-menu button appears only on narrow screens; the nav and the
+   account controls collapse into a dropdown under the bar. Scoped to
+   .vantyx-app-header so the standalone terminal / RDP / file headers
+   (which carry action buttons, not a nav) are never hidden. */
+#app header .vantyx-nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 0.375rem;
+  padding: 0.25rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+#app header .vantyx-nav-toggle .vantyx-nav-toggle-close { display: none; }
+#app header .vantyx-header-inner.menu-open .vantyx-nav-toggle .vantyx-nav-toggle-open { display: none; }
+#app header .vantyx-header-inner.menu-open .vantyx-nav-toggle .vantyx-nav-toggle-close { display: block; }
+
+@media (max-width: 768px) {
+  #app header.vantyx-app-header .vantyx-header-inner {
+    flex-wrap: wrap;
+    row-gap: 0;
+    padding: 0.5rem 0.75rem;
+    gap: 0;
+    position: relative;
+  }
+  #app header.vantyx-app-header .vantyx-nav-toggle {
+    display: inline-flex;
+  }
+  #app header.vantyx-app-header .vantyx-header-start {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    column-gap: 0.5rem;
+  }
+  /* Collapsed by default; the hamburger reveals them as a stacked
+     dropdown that pushes the page down (no fragile absolute overlap). */
+  #app header.vantyx-app-header .vantyx-nav,
+  #app header.vantyx-app-header .vantyx-header-end {
+    display: none;
+    flex-basis: 100%;
+    width: 100%;
+  }
+  #app header.vantyx-app-header .vantyx-header-inner.menu-open .vantyx-nav {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    overflow: visible;
+    column-gap: 0;
+    margin-top: 0.5rem;
+  }
+  #app header.vantyx-app-header .vantyx-nav-link {
+    padding: 0.625rem 0.25rem;
+    box-shadow: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  #app header.vantyx-app-header .vantyx-nav-link[aria-current='page'] {
+    box-shadow: inset 3px 0 0 0 var(--vantyx-accent-nav);
+    padding-left: 0.625rem;
+  }
+  #app header.vantyx-app-header .vantyx-header-inner.menu-open .vantyx-header-end {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    column-gap: 0.75rem;
+    row-gap: 0.5rem;
+    margin-top: 0.5rem;
+    padding-top: 0.625rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+  }
+  /* The thin vertical dividers between account controls read as noise
+     once the row can wrap; drop them on mobile. */
+  #app header.vantyx-app-header .vantyx-header-end > .w-px {
+    display: none;
+  }
 }

@@ -40,7 +40,7 @@ function renderHomeConnectButton(t, escapeHtml) {
       t.has_stored_credentials ? '1' : ''
     }" data-needs-password="${t.needs_password ? '1' : ''}" data-needs-passphrase="${
       t.protocol === 'ssh' && t.needs_passphrase ? '1' : ''
-    }"
+    }" data-has-ssh-key="${t.protocol === 'ssh' && t.has_ssh_key ? '1' : ''}"
               class="connect-btn-in-group terminal-open-btn rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 shadow-sm transition-colors disabled:opacity-50 w-[96px] text-center whitespace-nowrap">
               ${tr('targets.connectBtn')}
             </button>`
@@ -66,7 +66,7 @@ function renderHomeConnectButton(t, escapeHtml) {
   return `<button type="button" disabled class="${disabledBtnClass}">${tr('targets.connectBtn')}</button>`
 }
 
-export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, renderTagPills) {
+export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, renderTagPills, currentGroupId = '') {
   const isManageMode = mode === 'manage'
   if (!targets || targets.length === 0) {
     return `<p class="text-sm text-slate-500">${tr('targets.emptyInGroup')}</p>`
@@ -137,7 +137,7 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
             isManageMode
               ? `<td class="px-4 py-2"><div class="flex flex-wrap items-center gap-2">${
                   tags.length ? renderTagPills(tags) : '<span class="text-xs text-slate-400">—</span>'
-                }</div></td>`
+                }</div></td><td class="px-2 py-2 text-xs whitespace-nowrap"><span class="reach-status text-slate-400" data-reach-id="${escapeHtml(t.id)}">—</span></td>`
               : ''
           }
           <td class="px-4 py-2 text-right">
@@ -153,13 +153,15 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
                     t.ssh_username || '',
                   )}" data-target-tags="${escapeHtml(
                     (tags || []).join(','),
-                  )}" data-target-has-ssh-key="${t.has_ssh_key ? '1' : '0'}" data-target-needs-passphrase="${
+                  )}" data-target-has-ssh-key="${t.has_ssh_key ? '1' : '0'}" data-target-has-passphrase="${
+                    t.has_passphrase ? '1' : '0'
+                  }" data-target-needs-passphrase="${
                     t.needs_passphrase ? '1' : '0'
-                  }" data-target-has-tftp-for-host="${activeTftp ? '1' : '0'}" data-target-tftp-id="${
+                  }" data-target-credential-identity-id="${escapeHtml(t.credential_identity_id || '')}" data-target-ssh-key-id="${escapeHtml(t.ssh_key_id || '')}" data-target-has-tftp-for-host="${activeTftp ? '1' : '0'}" data-target-tftp-id="${
                     activeTftp ? escapeHtml(activeTftp.id) : ''
                   }" data-target-sftp-enabled="${hasSftpEnabled ? '1' : '0'}" data-target-ftp-enabled="${
                     t.ftp_enabled ? '1' : '0'
-                  }" data-target-tftp-enabled="${t.tftp_enabled ? '1' : '0'}" data-target-ssh-host-key-fp="${escapeHtml(t.ssh_host_key_fingerprint || '')}"
+                  }" data-target-tftp-enabled="${t.tftp_enabled ? '1' : '0'}" data-target-ssh-host-key-fp="${escapeHtml(t.ssh_host_key_fingerprint || '')}" data-target-group-id="${escapeHtml(currentGroupId)}"
                 class="edit-btn-in-group rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 border border-slate-300 shadow-sm transition-colors w-[96px] text-center whitespace-nowrap">
               ${tr('targets.editBtn')}
             </button>
@@ -198,7 +200,9 @@ export function renderGroupTargetsTable(targets, mode = 'manage', escapeHtml, re
       `
     })
     .join('')
-  const theadTags = isManageMode ? `<th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[22%]">${tr('common.tags')}</th>` : ''
+  const theadTags = isManageMode
+    ? `<th class="px-4 py-2 text-xs font-semibold text-slate-700 w-[22%]">${tr('common.tags')}</th><th class="px-2 py-2 text-xs font-semibold text-slate-700 whitespace-nowrap">${tr('targets.reachHeader')}</th>`
+    : ''
   return `
       <div class="overflow-x-auto">
         <table class="min-w-full text-left text-sm table-fixed">

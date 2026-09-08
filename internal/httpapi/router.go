@@ -7,14 +7,18 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
@@ -22,6 +26,7 @@ import (
 	"github.com/nullpo7z/vantyx/internal/filetransfer"
 	"github.com/nullpo7z/vantyx/internal/i18n"
 	"github.com/nullpo7z/vantyx/internal/logging"
+	"github.com/nullpo7z/vantyx/internal/metrics"
 	"github.com/nullpo7z/vantyx/internal/rdpvnc"
 	"github.com/nullpo7z/vantyx/internal/recording"
 	"github.com/nullpo7z/vantyx/internal/secret"
@@ -46,16 +51,34 @@ const initialAdminPasswordEnv = "VANTYX_INITIAL_ADMIN_PASSWORD"
 // without touching the real database; production callers go through
 // [NewApp] which wires SQLite-backed implementations.
 type App struct {
-	UserStore               auth.UserStore
-	SessionStore            auth.SessionStore
-	TargetStore             access.TargetStore
-	AccessGroupStore        access.AccessGroupStore
+	UserStore        auth.UserStore
+	SessionStore     auth.SessionStore
+	TargetStore      access.TargetStore
+	AccessGroupStore access.AccessGroupStore
+	AccessRequests   access.AccessRequestStore
+	// CLISessionCloser is set by main when the SSH gateway runs, so that
+	// account disable / delete also terminates live CLI sessions.
+	CLISessionCloser CLISessionCloser
+	APITokens        auth.APITokenStore
+	WebAuthn         auth.WebAuthnStore
+	webauthnRegs     webauthnRegistrations
+	webauthnMu       sync.Mutex
+	webauthnRPs      map[string]*webauthn.WebAuthn
+	// retention holds the age-based purge policy and its last report.
+	retention *retentionState
+	// backups holds the backup policy, last snapshot and staged restore.
+	backups *backupState
+	// metricsReg holds this App's scrape-time gauges (counters are global).
+	metricsReg              *metrics.Registry
 	SSHKeyStore             access.SSHKeyStore
 	CredentialIdentityStore access.CredentialIdentityStore
 
 	TerminalSessionManager terminalSessionStarter
 	LoginRateLimiter       *loginRateLimiter
 	DB                     *sql.DB
+	// Location is the server-wide timezone (VANTYX_TIMEZONE, default UTC)
+	// reported to clients; main() also installs it as time.Local.
+	Location *time.Location
 
 	// SFTPClientFactory is optional. When set (typically in tests) the
 	// file transfer handlers use it instead of dialling a real SSH
@@ -73,6 +96,10 @@ type App struct {
 	// FileTransferEventBroker streams per-user file transfer updates
 	// for SSE (GET /api/events/file-transfers).
 	FileTransferEventBroker *FileTransferEventBroker
+
+	// TFTPWriteWindowEvents streams write-window open/close status for
+	// SSE, per target (GET /api/tftp/targets/{target_id}/write-window/events).
+	TFTPWriteWindowEvents *TFTPWriteWindowEventBroker
 
 	// CommandLogStore persists terminal stdin lines for search.
 	CommandLogStore *commandLogStore
@@ -94,11 +121,23 @@ type App struct {
 	// participant at runtime.
 	SharingBridges *bridgeRegistry
 
+	// VNCSessionManager holds detachable VNC sessions for sharing.
+	VNCSessionManager *session.Manager
+
 	// videoRecordings tracks active RDP/VNC ffmpeg screen captures.
 	videoRecordings *videoRecordingRegistry
 
 	// RecordingExports tracks background GIF/MP4 export jobs.
 	RecordingExports *recordingExportRegistry
+
+	// TOTPStore persists per-user second factors (nil disables TOTP).
+	TOTPStore auth.TOTPStore
+	// OIDCLinks maps OIDC identities to local users.
+	OIDCLinks auth.OIDCLinkStore
+	// mfaPending holds password-verified logins awaiting their TOTP.
+	mfaPending *mfaPendingStore
+	// oidc is the relying-party state; nil when OIDC is not configured.
+	oidc *oidcService
 }
 
 // newAppDBOpen, newAppMigrate, and newAppUserStore are test seams used
@@ -182,6 +221,19 @@ func NewApp() *App {
 	if path == "" {
 		path = dbsqlite.DefaultPath
 	}
+	loc, tzErr := LoadTimezoneFromEnv()
+	if tzErr != nil {
+		slog.Warn("invalid "+TimezoneEnv+", using UTC", "error", tzErr)
+		loc = time.UTC
+	}
+	// A restore staged from the admin UI is applied here, before any
+	// connection is open; the previous database is kept alongside.
+	if movedTo, applied, rerr := ApplyPendingRestore(path); rerr != nil {
+		slog.Error("staged database restore was not applied", "error", rerr)
+	} else if applied {
+		slog.Warn("database restored from staged backup", "previous", movedTo)
+		defer audit("restore_applied", auditFields{"previous_db": movedTo})
+	}
 	cfg := dbsqlite.Config{Path: path}
 	open := dbsqlite.Open
 	if newAppDBOpen != nil {
@@ -216,6 +268,7 @@ func NewApp() *App {
 	sshKeyStore := access.NewSQLiteSSHKeyStore(db, storeCfg, encKey)
 	credIdentityStore := access.NewSQLiteCredentialIdentityStore(db, sshKeyStore, storeCfg, encKey)
 	terminalSessions := session.NewManager()
+	vncSessions := session.NewManager()
 	applyTerminalSessionIdleWarn(terminalSessions)
 	rdpSessions := rdpvnc.NewManager()
 	applyRDPSessionIdleWarn(rdpSessions)
@@ -252,26 +305,45 @@ func NewApp() *App {
 	cleanupOrphanExportTemps(exportDir)
 	cleanupLegacyRecordingDirExportTemps(recordingsDir)
 	_ = recording.DefaultGovernor()
-	return &App{
+	app := &App{
 		UserStore:               userStore,
 		SessionStore:            sessionStore,
 		TargetStore:             targetStore,
 		AccessGroupStore:        groupStore,
+		AccessRequests:          access.NewSQLiteAccessRequestStore(db),
+		APITokens:               auth.NewSQLiteAPITokenStore(db),
+		WebAuthn:                auth.NewSQLiteWebAuthnStore(db),
 		SSHKeyStore:             sshKeyStore,
 		CredentialIdentityStore: credIdentityStore,
 		TerminalSessionManager:  terminalSessions,
+		VNCSessionManager:       vncSessions,
 		LoginRateLimiter:        newLoginRateLimiter(),
 		DB:                      db,
 		RDPVNCManager:           rdpSessions,
 		SessionEventBroker:      NewSessionEventBroker(),
 		FileTransferEventBroker: ftBroker,
+		TFTPWriteWindowEvents:   NewTFTPWriteWindowEventBroker(),
 		CommandLogStore:         newCommandLogStore(db),
 		FileTransferManager:     ftManager,
 		SharingRegistry:         sharing.NewRegistry(),
 		SharingStore:            sharing.NewSQLiteStore(db),
 		SharingBridges:          newBridgeRegistry(),
 		RecordingExports:        newRecordingExportRegistry(exportDir),
+		TOTPStore:               auth.NewSQLiteTOTPStore(db, encKey),
+		Location:                loc,
+		OIDCLinks:               auth.NewSQLiteOIDCLinkStore(db),
+		mfaPending:              newMFAPendingStore(),
+		oidc:                    newOIDCServiceFromEnv(),
 	}
+	// Convert pre-existing fragmented RDP/VNC recordings to faststart MP4
+	// in the background (B-1); new recordings are converted on stop.
+	app.startRecordingRemuxBackfill()
+	// Age-based purge of recordings / audit / command logs (opt-in via env).
+	app.startRetentionLoop()
+	app.registerMetricsGauges()
+	app.initWebhooks()
+	app.initBackups(path)
+	return app
 }
 
 // sessionMiddleware resolves the session cookie and, for both
@@ -316,9 +388,11 @@ func (a *App) NewRouter() http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(a.requestLog)
+	r.Use(SecurityHeadersMiddleware)
 	r.Use(maxBodyBytesMiddleware(2 << 20))
 	r.Use(csrfOriginMiddleware)
 	r.Use(a.sessionMiddleware)
+	r.Use(a.apiTokenMiddleware)
 	r.Use(a.forcePasswordChangeMiddleware)
 
 	// Health check.
@@ -326,13 +400,32 @@ func (a *App) NewRouter() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	// Prometheus exposition (admin session or VANTYX_METRICS_TOKEN).
+	r.Get("/metrics", a.handleMetrics)
 
 	// Authentication.
 	r.Post("/api/login", a.handleLogin)
+	r.Post("/api/login/totp", a.handleLoginTOTP)
+	r.Post("/api/login/webauthn/begin", a.handleLoginWebAuthnBegin)
+	r.Post("/api/login/webauthn/finish", a.handleLoginWebAuthnFinish)
+	r.Get("/api/auth/methods", a.handleAuthMethods)
+	r.Get("/api/auth/oidc/login", a.handleOIDCLogin)
+	r.Get("/api/auth/oidc/callback", a.handleOIDCCallback)
 	r.Post("/api/logout", a.handleLogout)
 	r.Get("/api/me", a.handleMe)
 	r.Post("/api/me/password", a.handleChangePassword)
 	r.Put("/api/me/locale", a.handleUpdateLocale)
+	r.Get("/api/me/totp", a.handleTOTPStatus)
+	r.Post("/api/me/totp/setup", a.handleTOTPSetup)
+	r.Post("/api/me/totp/confirm", a.handleTOTPConfirm)
+	r.Delete("/api/me/totp", a.handleTOTPDisable)
+	r.Get("/api/me/webauthn", a.handleListPasskeys)
+	r.Post("/api/me/webauthn/register/begin", a.handlePasskeyRegisterBegin)
+	r.Post("/api/me/webauthn/register/finish", a.handlePasskeyRegisterFinish)
+	r.Delete("/api/me/webauthn/{id}", a.handlePasskeyDelete)
+	r.Get("/api/me/tokens", a.handleListMyTokens)
+	r.Post("/api/me/tokens", a.handleCreateMyToken)
+	r.Delete("/api/me/tokens/{id}", a.handleRevokeMyToken)
 	r.Get("/api/me/ssh-keys", a.handleListSSHKeys)
 	r.Post("/api/me/ssh-keys", a.handleAddSSHKey)
 	r.Delete("/api/me/ssh-keys/{key_id}", a.handleDeleteSSHKey)
@@ -345,12 +438,42 @@ func (a *App) NewRouter() http.Handler {
 	r.Get("/api/groups/{group_id}/members", a.handleGroupMembers)
 	r.Post("/api/groups/{group_id}/members", a.handleAddGroupMember)
 	r.Delete("/api/groups/{group_id}/members/{user_id}", a.handleRemoveGroupMember)
+	// Database backup / restore (admin).
+	r.Get("/api/settings/backups", a.handleListBackups)
+	r.Post("/api/settings/backups", a.handleCreateBackup)
+	r.Post("/api/settings/backups/restore", a.handleStageRestore)
+	r.Delete("/api/settings/backups/restore", a.handleCancelRestore)
+	r.Get("/api/settings/backups/{name}", a.handleDownloadBackup)
+	r.Delete("/api/settings/backups/{name}", a.handleDeleteBackup)
+	// Webhook notifications (admin).
+	r.Get("/api/settings/webhooks", a.handleGetWebhooks)
+	r.Put("/api/settings/webhooks", a.handlePutWebhooks)
+	r.Post("/api/settings/webhooks/{id}/test", a.handleTestWebhook)
+	// Retention policy (admin): inspect and run the purge job.
+	r.Get("/api/settings/retention", a.handleGetRetention)
+	r.Post("/api/settings/retention/run", a.handleRunRetention)
+	// Admin session oversight: list / watch / terminate any live session.
+	r.Get("/api/admin/sessions", a.handleAdminListSessions)
+	r.Post("/api/admin/sessions/{kind}/{session_id}/watch", a.handleAdminWatchSession)
+	r.Delete("/api/admin/sessions/{kind}/{session_id}", a.handleAdminTerminateSession)
+	// Access requests: any user asks, admins decide.
+	r.Get("/api/access-requests/groups", a.handleAccessRequestGroups)
+	r.Get("/api/access-requests", a.handleListAccessRequests)
+	r.Post("/api/access-requests", a.handleCreateAccessRequest)
+	r.Post("/api/access-requests/{id}/approve", a.handleApproveAccessRequest)
+	r.Post("/api/access-requests/{id}/deny", a.handleDenyAccessRequest)
+	r.Delete("/api/access-requests/{id}", a.handleCancelAccessRequest)
 	r.Get("/api/groups/{group_id}/tags", a.handleGroupTags)
 	r.Put("/api/groups/{group_id}/tags", a.handleSetGroupTags)
 
 	// Users (admin only).
 	r.Get("/api/users", a.handleListUsers)
 	r.Post("/api/users", a.handleCreateUser)
+	r.Patch("/api/users/{user_id}", a.handleUpdateUser)
+	r.Delete("/api/users/{user_id}", a.handleDeleteUser)
+	r.Delete("/api/users/{user_id}/totp", a.handleAdminResetTOTP)
+	r.Get("/api/users/{user_id}/tokens", a.handleListUserTokens)
+	r.Delete("/api/users/{user_id}/tokens/{id}", a.handleAdminRevokeToken)
 	r.Get("/api/users/{user_id}/tags", a.handleUserTags)
 	r.Put("/api/users/{user_id}/tags", a.handleSetUserTags)
 	r.Get("/api/users/{user_id}/ssh-keys", a.handleListUserSSHKeys)
@@ -371,6 +494,10 @@ func (a *App) NewRouter() http.Handler {
 	// Targets.
 	r.Get("/api/targets", a.handleTargets)
 	r.Post("/api/targets", a.handleCreateTarget)
+	// Bulk inventory management (admin).
+	r.Get("/api/targets/export", a.handleExportTargets)
+	r.Post("/api/targets/import", a.handleImportTargets)
+	r.Post("/api/targets/check", a.handleCheckTargets)
 	r.Put("/api/targets/{target_id}", a.handleUpdateTarget)
 	r.Delete("/api/targets/{target_id}", a.handleDeleteTarget)
 	r.Get("/api/targets/{target_id}/tags", a.handleTargetTags)
@@ -378,6 +505,7 @@ func (a *App) NewRouter() http.Handler {
 	// SSH keys and identities (admin-only credential library).
 	r.Get("/api/ssh-keys", a.handleSSHKeysList)
 	r.Post("/api/ssh-keys", a.handleSSHKeysCreate)
+	r.Post("/api/ssh-keys/generate", a.handleSSHKeysGenerate)
 	r.Put("/api/ssh-keys/{key_id}", a.handleSSHKeysUpdate)
 	r.Delete("/api/ssh-keys/{key_id}", a.handleSSHKeysDelete)
 	r.Get("/api/credential-identities", a.handleCredentialIdentitiesList)
@@ -398,6 +526,7 @@ func (a *App) NewRouter() http.Handler {
 	r.Route("/api/terminal/sessions", func(r chi.Router) {
 		r.Get("/", a.handleTerminalSessions)
 		r.Delete("/{session_id}", a.handleTerminalSessionDelete)
+		r.Put("/{session_id}/keep", a.handleSetSessionKeep)
 		// Collaborative session sharing (Phase A).
 		r.Get("/{session_id}/invitation-options", a.handleInvitationOptions)
 		r.Post("/{session_id}/invitations", a.handleCreateInvitation)
@@ -414,9 +543,30 @@ func (a *App) NewRouter() http.Handler {
 	})
 	r.Get("/ws/ssh", a.handleSSHWebSocket)
 	r.Get("/ws/vnc", a.handleVNCWebSocket)
+	r.Route("/api/vnc/sessions", func(r chi.Router) {
+		r.Get("/", a.handleVNCSessions)
+		r.Put("/{session_id}/keep", a.handleSetSessionKeep)
+		r.Get("/{session_id}/invitation-options", a.handleVNCInvitationOptions)
+		r.Post("/{session_id}/invitations", a.handleVNCCreateInvitation)
+		r.Get("/{session_id}/invitations", a.handleVNCListInvitations)
+		r.Delete("/{session_id}/invitations/{invitation_id}", a.handleVNCRevokeInvitation)
+		r.Post("/{session_id}/invitations/{invitation_id}/join-url", a.handleVNCRegenerateInvitationJoinURL)
+		r.Post("/{session_id}/join", a.handleVNCJoinSession)
+		r.Get("/{session_id}/participants", a.handleVNCListParticipants)
+		r.Delete("/{session_id}/participants/{user_id}", a.handleVNCKickParticipant)
+	})
 	r.Route("/api/rdp/sessions", func(r chi.Router) {
 		r.Get("/", a.handleRDPSessions)
 		r.Delete("/{session_id}", a.handleRDPSessionDelete)
+		r.Put("/{session_id}/keep", a.handleSetSessionKeep)
+		r.Get("/{session_id}/invitation-options", a.handleRDPInvitationOptions)
+		r.Post("/{session_id}/invitations", a.handleRDPCreateInvitation)
+		r.Get("/{session_id}/invitations", a.handleRDPListInvitations)
+		r.Delete("/{session_id}/invitations/{invitation_id}", a.handleRDPRevokeInvitation)
+		r.Post("/{session_id}/invitations/{invitation_id}/join-url", a.handleRDPRegenerateInvitationJoinURL)
+		r.Post("/{session_id}/join", a.handleRDPJoinSession)
+		r.Get("/{session_id}/participants", a.handleRDPListParticipants)
+		r.Delete("/{session_id}/participants/{user_id}", a.handleRDPKickParticipant)
 	})
 	r.Get("/ws/rdp", a.handleRDPWebSocket)
 	r.Get("/ws/rdp/browser", a.handleRDPBrowserWebSocket)
@@ -429,6 +579,7 @@ func (a *App) NewRouter() http.Handler {
 	r.Delete("/api/recordings/exports/{export_id}", a.handleDeleteRecordingExport)
 	r.Post("/api/recordings/{recording_id}/export", a.handlePostRecordingExport)
 	r.Get("/api/recordings/{recording_id}/file", a.handleGetRecordingFile)
+	r.Delete("/api/recordings/{recording_id}", a.handleDeleteRecording)
 
 	// Background file transfers.
 	r.Get("/api/file-transfers", a.handleFileTransfersList)
@@ -449,6 +600,10 @@ func (a *App) NewRouter() http.Handler {
 	r.Delete("/api/tftp/targets/{target_id}/files", a.handleTFTPServerDeleteFile)
 	r.Get("/api/tftp/targets/{target_id}/files/download", a.handleTFTPServerDownloadFile)
 	r.Post("/api/tftp/targets/{target_id}/files/upload", a.handleTFTPServerUploadFile)
+	r.Get("/api/tftp/targets/{target_id}/write-window", a.handleTFTPGetWriteWindow)
+	r.Get("/api/tftp/targets/{target_id}/write-window/events", a.handleTFTPWriteWindowEvents)
+	r.Post("/api/tftp/targets/{target_id}/write-window", a.handleTFTPOpenWriteWindow)
+	r.Delete("/api/tftp/targets/{target_id}/write-window", a.handleTFTPCloseWriteWindow)
 
 	// Admin-only: API spec and Swagger UI.
 	r.Get("/api/spec", a.handleAPISpec)
@@ -456,6 +611,7 @@ func (a *App) NewRouter() http.Handler {
 
 	// SPA: serve web/dist when present (after `npm run build`).
 	if dir := staticDir(); dir != "" {
+		_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
 		r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
 			raw := strings.TrimPrefix(r.URL.Path, "/")
 			if raw == "" {

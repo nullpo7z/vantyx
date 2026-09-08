@@ -40,6 +40,7 @@ func setupServerWithTCPTelnetOnly(t *testing.T) (*Server, string, ssh.Signer) {
 	}
 	userStore := auth.NewSQLiteUserStore(db)
 	_, _ = userStore.CreateUser("admin", "admin", testAdminPassword, auth.RoleAdmin)
+	registerTestClientKey(t, userStore)
 	groupStore := access.NewSQLiteAccessGroupStore(db, nil)
 	targetStore := access.NewSQLiteTargetStore(db, nil, nil)
 	ctx := context.Background()
@@ -79,6 +80,7 @@ func setupServerWithTCP(t *testing.T) (*Server, string, ssh.Signer) {
 	if err != nil && !errors.Is(err, auth.ErrUserExists) {
 		t.Fatalf("create admin: %v", err)
 	}
+	registerTestClientKey(t, userStore)
 	groupStore := access.NewSQLiteAccessGroupStore(db, nil)
 	encKey := make([]byte, 32)
 	for i := range encKey {
@@ -125,7 +127,7 @@ func TestServer_Serve_RealTCP(t *testing.T) {
 
 	config := &ssh.ClientConfig{
 		User:            "admin",
-		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(testClientSigner())},
 		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
 		Timeout:         5 * time.Second,
 	}
@@ -167,7 +169,7 @@ func runSessionSlow(t *testing.T, addr string, signer ssh.Signer, commands ...st
 	t.Helper()
 	config := &ssh.ClientConfig{
 		User:            "admin",
-		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(testClientSigner())},
 		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
 		Timeout:         5 * time.Second,
 	}
@@ -202,7 +204,7 @@ func runSessionSlow(t *testing.T, addr string, signer ssh.Signer, commands ...st
 func runSession(t *testing.T, addr string, signer ssh.Signer, commands ...string) {
 	config := &ssh.ClientConfig{
 		User:            "admin",
-		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(testClientSigner())},
 		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
 		Timeout:         5 * time.Second,
 	}
@@ -308,7 +310,7 @@ func TestServer_Serve_ClientCloseWithoutExit(t *testing.T) {
 	_, addr, signer := setupServerWithTCP(t)
 	config := &ssh.ClientConfig{
 		User:            "admin",
-		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(testClientSigner())},
 		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
 		Timeout:         5 * time.Second,
 	}
@@ -343,7 +345,7 @@ func TestServer_Serve_ReadLinePartialThenEOF(t *testing.T) {
 	_, addr, signer := setupServerWithTCP(t)
 	config := &ssh.ClientConfig{
 		User:            "admin",
-		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(testClientSigner())},
 		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
 		Timeout:         5 * time.Second,
 	}
@@ -409,6 +411,7 @@ func setupServerWithTCPTelnetEcho(t *testing.T, port uint16) (*Server, string, s
 	}
 	userStore := auth.NewSQLiteUserStore(db)
 	_, _ = userStore.CreateUser("admin", "admin", testAdminPassword, auth.RoleAdmin)
+	registerTestClientKey(t, userStore)
 	groupStore := access.NewSQLiteAccessGroupStore(db, nil)
 	targetStore := access.NewSQLiteTargetStore(db, nil, nil)
 	ctx := context.Background()
@@ -463,6 +466,7 @@ func setupServerWithTCPNoCreds(t *testing.T) (*Server, string, ssh.Signer) {
 	_ = dbsqlite.Migrate(db)
 	userStore := auth.NewSQLiteUserStore(db)
 	_, _ = userStore.CreateUser("admin", "admin", testAdminPassword, auth.RoleAdmin)
+	registerTestClientKey(t, userStore)
 	groupStore := access.NewSQLiteAccessGroupStore(db, nil)
 	targetStore := access.NewSQLiteTargetStore(db, nil, nil)
 	ctx := context.Background()
@@ -501,6 +505,7 @@ func TestServer_ListenAndServe_Success(t *testing.T) {
 	_ = dbsqlite.Migrate(db)
 	userStore := auth.NewSQLiteUserStore(db)
 	_, _ = userStore.CreateUser("admin", "admin", testAdminPassword, auth.RoleAdmin)
+	registerTestClientKey(t, userStore)
 	groupStore := access.NewSQLiteAccessGroupStore(db, nil)
 	targetStore := access.NewSQLiteTargetStore(db, nil, nil)
 	ctx := context.Background()
@@ -564,7 +569,7 @@ func TestServer_Shutdown(t *testing.T) {
 	// Listener is closed; new SSH connection should fail (connection refused or reset)
 	config := &ssh.ClientConfig{
 		User:            "admin",
-		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(testClientSigner())},
 		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
 		Timeout:         500 * time.Millisecond,
 	}
@@ -617,6 +622,7 @@ func TestServer_Serve_AcceptError(t *testing.T) {
 	_ = dbsqlite.Migrate(db)
 	userStore := auth.NewSQLiteUserStore(db)
 	_, _ = userStore.CreateUser("admin", "admin", testAdminPassword, auth.RoleAdmin)
+	registerTestClientKey(t, userStore)
 	encKey := make([]byte, 32)
 	targetStore := access.NewSQLiteTargetStore(db, nil, encKey)
 	groupStore := access.NewSQLiteAccessGroupStore(db, nil)
@@ -665,7 +671,7 @@ func TestServer_Serve_WindowChange(t *testing.T) {
 	_, addr, signer := setupServerWithTCP(t)
 	config := &ssh.ClientConfig{
 		User:            "admin",
-		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(testClientSigner())},
 		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
 		Timeout:         5 * time.Second,
 	}
@@ -699,7 +705,7 @@ func TestServer_HandleConn_RejectNonSessionChannel(t *testing.T) {
 	_, addr, signer := setupServerWithTCP(t)
 	config := &ssh.ClientConfig{
 		User:            "admin",
-		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(testClientSigner())},
 		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
 		Timeout:         5 * time.Second,
 	}
@@ -720,7 +726,7 @@ func runSessionRaw(t *testing.T, addr string, signer ssh.Signer, chunks ...[]byt
 	t.Helper()
 	config := &ssh.ClientConfig{
 		User:            "admin",
-		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(testClientSigner())},
 		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
 		Timeout:         5 * time.Second,
 	}
@@ -828,7 +834,7 @@ func TestServer_BackgroundSession_RemainsActive(t *testing.T) {
 		TargetName: "telnet-echo",
 	}
 	_, err := mgr.Start(id, opts, func(ctx context.Context, sess *session.Session) {
-		_ = telnetproxy.RunBridgeDetachable(ctx, "session_ended: Telnet session closed", "127.0.0.1", port, "", "", sess.Output, sess.AttachCh, nil, nil, nil, nil, 80, 24, nil, nil)
+		_ = telnetproxy.RunBridgeDetachable(ctx, "session_ended: Telnet session closed", "127.0.0.1", port, "", "", sess.Output, sess.AttachCh, nil, nil, nil, nil, 80, 24, nil, nil, nil)
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -866,7 +872,7 @@ func TestServer_Resume_CtrlBracket_Detaches(t *testing.T) {
 		TargetName: "telnet-echo",
 	}
 	_, err := mgr.Start(id, opts, func(ctx context.Context, sess *session.Session) {
-		_ = telnetproxy.RunBridgeDetachable(ctx, "session_ended: Telnet session closed", "127.0.0.1", port, "", "", sess.Output, sess.AttachCh, nil, nil, nil, nil, 80, 24, nil, nil)
+		_ = telnetproxy.RunBridgeDetachable(ctx, "session_ended: Telnet session closed", "127.0.0.1", port, "", "", sess.Output, sess.AttachCh, nil, nil, nil, nil, 80, 24, nil, nil, nil)
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -908,6 +914,7 @@ func setupServerWithTCPTelnetRecording(t *testing.T, port uint16, recDir string)
 	}
 	userStore := auth.NewSQLiteUserStore(db)
 	_, _ = userStore.CreateUser("admin", "admin", testAdminPassword, auth.RoleAdmin)
+	registerTestClientKey(t, userStore)
 	groupStore := access.NewSQLiteAccessGroupStore(db, nil)
 	targetStore := access.NewSQLiteTargetStore(db, nil, nil)
 	ctx := context.Background()
@@ -951,7 +958,7 @@ func TestServer_Connect_WindowChangeBeforeConnect_AppliesNewSize(t *testing.T) {
 
 	config := &ssh.ClientConfig{
 		User:            "admin",
-		Auth:            []ssh.AuthMethod{ssh.Password(testAdminPassword)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(testClientSigner())},
 		HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()),
 		Timeout:         5 * time.Second,
 	}

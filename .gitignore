@@ -35,6 +35,18 @@ Thumbs.db
 /data/
 cmd/vantyx-server/data/
 
+# OWASP ZAP scan output (re-run locally; keep SUMMARY if needed)
+zap-reports/*.html
+zap-reports/*.json
+zap-reports/*.md
+zap-reports/*.log
+zap-reports/*.yaml
+zap-reports/*.yml
+zap-reports/*.conf
+zap-reports/*.py
+zap-reports/__pycache__/
+!zap-reports/SUMMARY.ja.md
+
 # Local env and secrets
 .env
 .env.local
@@ -64,3 +76,7 @@ coverage-*.html
 # Recording exports
 *.webm
 
+
+# Claude Code conversation export (may contain secrets)
+handoff.md
+handoff-*.md

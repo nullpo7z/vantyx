@@ -33,6 +33,13 @@ var (
 	ErrCannotKickOwner    = errors.New("the session owner cannot be removed")
 	ErrCannotKickSelf     = errors.New("you cannot kick yourself")
 	ErrUserKicked         = errors.New("user was removed from the session and cannot rejoin")
+	// ErrInviterNoTargetAccess is returned when the session owner has lost
+	// access to the underlying target since the invitation was created
+	// (stale-access guard). ErrJoinerNoTargetAccess is returned when the
+	// joining user does not have target access of their own -- a valid
+	// invitation token is never sufficient without it.
+	ErrInviterNoTargetAccess = errors.New("session owner no longer has access to the target")
+	ErrJoinerNoTargetAccess  = errors.New("user does not have access to the target")
 )
 
 // WriteRequestStatus tracks the lifecycle of a control-handoff request.
@@ -47,10 +54,11 @@ const (
 
 // Participant captures a single user's presence inside a Room.
 type Participant struct {
-	UserID   string
-	Username string
-	Role     Role
-	JoinedAt time.Time
+	UserID       string
+	Username     string
+	Role         Role
+	JoinedAt     time.Time
+	InvitationID string // invitation used to join; empty for owner
 }
 
 // WriteRequest tracks one pending or recently-decided handoff.
@@ -152,9 +160,38 @@ func (r *Room) IsKicked(userID string) bool {
 	return ok
 }
 
+// Unkick lifts the rejoin block set by RemoveParticipant. The owner
+// explicitly re-inviting the same user by name is treated as permission
+// to come back; shareable links, tag and group invitations do not lift
+// it, so a kick keeps its meaning against blanket invitations. Returns
+// true when a block was actually removed.
+func (r *Room) Unkick(userID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.kicked[userID]; !ok {
+		return false
+	}
+	delete(r.kicked, userID)
+	return true
+}
+
+// KickedUserIDs returns the users currently blocked from rejoining,
+// sorted for stable output. Used by the owner's participants UI to offer
+// "allow rejoin".
+func (r *Room) KickedUserIDs() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.kicked))
+	for id := range r.kicked {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // AddViewer records that userID has joined the room as a viewer.
 // Re-adding an existing participant updates the username only.
-func (r *Room) AddViewer(userID, username string, now time.Time) error {
+func (r *Room) AddViewer(userID, username, invitationID string, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, blocked := r.kicked[userID]; blocked {
@@ -164,15 +201,37 @@ func (r *Room) AddViewer(userID, username string, now time.Time) error {
 		if username != "" {
 			existing.Username = username
 		}
+		if invitationID != "" {
+			existing.InvitationID = invitationID
+		}
 		return nil
 	}
 	r.memberByID[userID] = &Participant{
-		UserID:   userID,
-		Username: username,
-		Role:     RoleViewer,
-		JoinedAt: now,
+		UserID:       userID,
+		Username:     username,
+		Role:         RoleViewer,
+		JoinedAt:     now,
+		InvitationID: invitationID,
 	}
 	return nil
+}
+
+// ParticipantUserIDsForInvitation returns user IDs of viewers who joined
+// via invitationID. The owner is never included.
+func (r *Room) ParticipantUserIDsForInvitation(invitationID string) []string {
+	if invitationID == "" {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0)
+	for uid, p := range r.memberByID {
+		if p.Role == RoleViewer && p.InvitationID == invitationID {
+			out = append(out, uid)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // RemoveParticipant detaches userID from the room. The owner cannot be
@@ -356,6 +415,13 @@ func (reg *Registry) EnsureRoom(sessionID, targetID, ownerID, ownerName string) 
 }
 
 // Get returns the room for sessionID, or nil if missing.
+// Len returns the number of open rooms (metrics).
+func (reg *Registry) Len() int {
+	reg.mu.RLock()
+	defer reg.mu.RUnlock()
+	return len(reg.rooms)
+}
+
 func (reg *Registry) Get(sessionID string) (*Room, bool) {
 	reg.mu.RLock()
 	defer reg.mu.RUnlock()

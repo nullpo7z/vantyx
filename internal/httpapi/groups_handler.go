@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/go-chi/chi/v5"
@@ -13,6 +15,22 @@ import (
 	"github.com/nullpo7z/vantyx/internal/access"
 	"github.com/nullpo7z/vantyx/internal/auth"
 )
+
+// groupIDParam extracts the {group_id} route parameter. Access group
+// IDs are hierarchical paths (e.g. "parent/child"); the SPA percent-
+// encodes the "/" (encodeURIComponent) so the whole ID lands in a
+// single path segment, and chi returns route params exactly as
+// matched -- still percent-encoded. Decode it back here, mirroring
+// the same pattern used for recording IDs, or a nested group's ID
+// would fail validateGroupID with a spurious "invalid characters"
+// error (the literal "%2F" doesn't match the allowed character set).
+func groupIDParam(r *http.Request) string {
+	raw := chi.URLParam(r, "group_id")
+	if decoded, err := url.PathUnescape(raw); err == nil {
+		raw = decoded
+	}
+	return strings.TrimSpace(raw)
+}
 
 type groupResponse struct {
 	ID      string           `json:"id"`
@@ -31,6 +49,17 @@ type updateGroupRequest struct {
 
 type addGroupMemberRequest struct {
 	UserID string `json:"user_id"`
+	// ExpiresAt (RFC3339, optional): membership stops granting access at
+	// this time. Empty = permanent. Re-adding a member updates it.
+	ExpiresAt string `json:"expires_at"`
+}
+
+type memberResponse struct {
+	ID        string `json:"id"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+	Expired   bool   `json:"expired"`
 }
 
 type tagsResponse struct {
@@ -90,7 +119,21 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 		pageLimit = opts.Limit
 		opts = &access.ListOpts{Limit: pageLimit + 1, AfterID: opts.AfterID}
 	}
-	groupIDs, err := a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(userID), opts)
+	// Admins see every group and every target in it: the management UI
+	// (Server management) is driven by this endpoint, and a second admin
+	// who isn't a member of a group could otherwise neither see nor edit
+	// it. Ordinary users stay on the membership/tag-based path.
+	isAdmin, err := a.currentUserIsAdmin(r)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	var groupIDs []access.GroupID
+	if isAdmin {
+		groupIDs, err = a.AccessGroupStore.AllGroupIDs(ctx, opts)
+	} else {
+		groupIDs, err = a.AccessGroupStore.GroupIDsForUser(ctx, access.UserID(userID), opts)
+	}
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -100,15 +143,19 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 		groupIDs = groupIDs[:pageLimit]
 		nextCursor = string(groupIDs[pageLimit-1])
 	}
-	// Targets this user is allowed to see (membership or tag based).
-	allowedTargetIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
+	// Targets this user is allowed to see (membership or tag based,
+	// including groups below the ones they hold -- see
+	// docs/access-control.md); admins are allowed to see all of them.
 	allowedSet := make(map[access.TargetID]bool)
-	for _, id := range allowedTargetIDs {
-		allowedSet[id] = true
+	if !isAdmin {
+		allowedTargetIDs, err := a.AccessGroupStore.TargetIDsForUser(ctx, access.UserID(userID), nil)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		for _, id := range allowedTargetIDs {
+			allowedSet[id] = true
+		}
 	}
 
 	out := make([]groupResponse, 0, len(groupIDs))
@@ -122,10 +169,10 @@ func (a *App) handleGroups(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// Only include targets the user is allowed to see; avoids
-		// leaking targets when access is tag based.
+		// leaking targets when access is tag based. Admins see all.
 		var filtered []access.TargetID
 		for _, tid := range tids {
-			if allowedSet[tid] {
+			if isAdmin || allowedSet[tid] {
 				filtered = append(filtered, tid)
 			}
 		}
@@ -222,7 +269,7 @@ func (a *App) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	groupID := strings.TrimSpace(chi.URLParam(r, "group_id"))
+	groupID := groupIDParam(r)
 	if groupID == "" {
 		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
@@ -260,7 +307,7 @@ func (a *App) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	groupID := strings.TrimSpace(chi.URLParam(r, "group_id"))
+	groupID := groupIDParam(r)
 	if groupID == "" {
 		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
@@ -286,21 +333,20 @@ func (a *App) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	groupID := chi.URLParam(r, "group_id")
+	groupID := groupIDParam(r)
 	if groupID == "" {
 		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()
-	opts := listOptsFromRequest(r)
-	userIDs, err := a.AccessGroupStore.UserIDsForGroup(ctx, access.GroupID(groupID), opts)
+	members, err := a.AccessGroupStore.MembershipsForGroup(ctx, access.GroupID(groupID))
 	if err != nil {
 		writeInternalError(w, err)
 		return
 	}
-	out := make([]userResponse, 0, len(userIDs))
-	for _, uid := range userIDs {
-		u, err := a.UserStore.GetByID(string(uid))
+	out := make([]memberResponse, 0, len(members))
+	for _, m := range members {
+		u, err := a.UserStore.GetByID(string(m.UserID))
 		if err != nil {
 			continue
 		}
@@ -308,7 +354,11 @@ func (a *App) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
 		if role == "" {
 			role = auth.RoleUser
 		}
-		out = append(out, userResponse{ID: u.ID, Username: u.Username, Role: role})
+		mr := memberResponse{ID: u.ID, Username: u.Username, Role: role, Expired: m.Expired}
+		if m.ExpiresAt != nil {
+			mr.ExpiresAt = m.ExpiresAt.In(a.serverLocation()).Format(time.RFC3339)
+		}
+		out = append(out, mr)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -320,8 +370,7 @@ func (a *App) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	groupID := chi.URLParam(r, "group_id")
-	groupID = strings.TrimSpace(groupID)
+	groupID := groupIDParam(r)
 	if groupID == "" {
 		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
@@ -349,10 +398,33 @@ func (a *App) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, err)
 		return
 	}
-	if err := a.AccessGroupStore.AddUserToGroup(ctx, access.UserID(req.UserID), access.GroupID(groupID)); err != nil {
+	var expiresAt *time.Time
+	if raw := strings.TrimSpace(req.ExpiresAt); raw != "" {
+		t, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			writeJSONErrorKey(w, r, "groups.expiresInvalid", http.StatusBadRequest)
+			return
+		}
+		if !t.After(time.Now()) {
+			writeJSONErrorKey(w, r, "groups.expiresInPast", http.StatusBadRequest)
+			return
+		}
+		t = t.UTC()
+		expiresAt = &t
+	}
+	if err := a.AccessGroupStore.AddUserToGroupUntil(ctx, access.UserID(req.UserID), access.GroupID(groupID), expiresAt); err != nil {
 		writeInternalError(w, err)
 		return
 	}
+	fields := auditFields{
+		"user_id":   a.currentUserID(r),
+		"member_id": req.UserID,
+		"group_id":  groupID,
+	}
+	if expiresAt != nil {
+		fields["expires_at"] = expiresAt.Format(time.RFC3339)
+	}
+	audit("group_member_added", fields)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -362,10 +434,8 @@ func (a *App) handleRemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	groupID := chi.URLParam(r, "group_id")
-	userID := chi.URLParam(r, "user_id")
-	groupID = strings.TrimSpace(groupID)
-	userID = strings.TrimSpace(userID)
+	groupID := groupIDParam(r)
+	userID := strings.TrimSpace(chi.URLParam(r, "user_id"))
 	if groupID == "" || userID == "" {
 		writeJSONErrorKey(w, r, "groups.groupAndUserIDRequired", http.StatusBadRequest)
 		return
@@ -379,14 +449,18 @@ func (a *App) handleRemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, err)
 		return
 	}
+	audit("group_member_removed", auditFields{
+		"user_id":   a.currentUserID(r),
+		"member_id": userID,
+		"group_id":  groupID,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleGroupTags returns tags for the group. The caller must be a
 // member or an admin.
 func (a *App) handleGroupTags(w http.ResponseWriter, r *http.Request) {
-	groupID := chi.URLParam(r, "group_id")
-	groupID = strings.TrimSpace(groupID)
+	groupID := groupIDParam(r)
 	if groupID == "" {
 		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return
@@ -419,8 +493,7 @@ func (a *App) handleSetGroupTags(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdmin(w, r) {
 		return
 	}
-	groupID := chi.URLParam(r, "group_id")
-	groupID = strings.TrimSpace(groupID)
+	groupID := groupIDParam(r)
 	if groupID == "" {
 		writeJSONErrorKey(w, r, "groups.idRequired", http.StatusBadRequest)
 		return

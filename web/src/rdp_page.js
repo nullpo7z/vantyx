@@ -6,6 +6,7 @@
 import RFB from '@novnc/novnc'
 import API from './api.js'
 import { t } from './i18n.js'
+import { initViewOnlySharingUI } from './sharing_ui.js'
 function escapeHtml(s) {
   if (s == null) return ''
   const div = document.createElement('div')
@@ -13,14 +14,16 @@ function escapeHtml(s) {
   return div.innerHTML
 }
 
-export function renderRdpPage(container) {
+export async function renderRdpPage(container) {
   const params = new URLSearchParams(window.location.search)
   const targetId = params.get('target_id') || ''
   const targetName = params.get('target_name') || targetId || 'RDP'
   const sessionId = params.get('session_id') || ''
   const parentToken = params.get('parent_token') || ''
+  const sharingMode = (params.get('mode') || 'writer').toLowerCase() === 'viewer' ? 'viewer' : 'writer'
+  const inviteToken = params.get('invite') || ''
 
-  if (!targetId) {
+  if (!targetId && !sessionId) {
     container.innerHTML = `
       <div class="min-h-screen flex flex-col bg-slate-100 font-sans text-slate-900 items-center justify-center p-6">
         <div class="text-center text-slate-600">
@@ -35,7 +38,7 @@ export function renderRdpPage(container) {
   const wsScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
 
   container.innerHTML = `
-    <div class="h-screen w-screen flex flex-col bg-slate-100 font-sans text-slate-900 overflow-hidden">
+    <div data-sharing-root="1" class="h-screen w-screen flex flex-col bg-slate-100 font-sans text-slate-900 overflow-hidden">
       <header class="shrink-0 shadow z-10 text-white">
         <div class="vantyx-header-inner">
           <div class="vantyx-header-start">
@@ -46,6 +49,7 @@ export function renderRdpPage(container) {
             </div>
           </div>
           <div class="vantyx-header-end">
+            <button id="rdp-fullscreen" type="button" class="vantyx-page-btn hidden">${t('rdp.fullscreen')}</button>
             <button id="rdp-back" type="button" class="vantyx-page-btn">${t('rdp.back')}</button>
             <button id="rdp-disconnect" type="button" class="vantyx-page-btn vantyx-page-btn-danger hidden">${t('rdp.disconnect')}</button>
           </div>
@@ -69,12 +73,7 @@ export function renderRdpPage(container) {
 
       <!-- noVNC screen -->
       <div id="rdp-screen-wrap" class="hidden flex-1 min-h-0 flex flex-col bg-white border-t border-slate-200 overflow-auto">
-        <div id="rdp-screen" class="relative flex-1 min-h-0 w-full overflow-hidden">
-          <button id="rdp-fullscreen" type="button"
-            class="absolute right-3 bottom-3 z-10 rounded bg-black/60 px-2 py-1 text-[11px] text-white hover:bg-black/80">
-            ${t('rdp.fullscreen')}
-          </button>
-        </div>
+        <div id="rdp-screen" class="relative flex-1 min-h-0 w-full overflow-hidden"></div>
       </div>
     </div>
   `
@@ -93,7 +92,31 @@ export function renderRdpPage(container) {
   let rfb = null
   let resizeRaf = 0
   let activeSessionId = sessionId || ''
-  // no explicit scaling here; rely on noVNC's scaleViewport so input coordinates stay correct.
+  let sharingCtl = null
+
+  function showKicked() {
+    disconnect()
+    container.innerHTML = `
+      <div class="min-h-screen flex flex-col items-center justify-center p-8 text-center">
+        <h2 class="text-lg font-semibold text-slate-800">${escapeHtml(t('sharing.youWereKicked'))}</h2>
+        <p class="text-sm text-slate-600 mt-2">${escapeHtml(t('sharing.youWereKickedHint'))}</p>
+      </div>`
+  }
+
+  async function ensureSharingUI() {
+    await resolveActiveSessionId()
+    if (!activeSessionId) return
+    sharingCtl?.stop?.()
+    sharingCtl = initViewOnlySharingUI({
+      container,
+      sessionKind: 'rdp',
+      sessionId: activeSessionId,
+      sharingMode,
+      targetName,
+      escapeHtml,
+      onKicked: showKicked,
+    })
+  }
 
   async function resolveActiveSessionId() {
     if (activeSessionId) return activeSessionId
@@ -131,6 +154,7 @@ export function renderRdpPage(container) {
     errorEl.classList.add('hidden')
     screenWrap.classList.add('hidden')
     disconnectBtn.classList.add('hidden')
+    fullscreenBtn.classList.add('hidden')
   }
 
   function showError(msg) {
@@ -139,6 +163,7 @@ export function renderRdpPage(container) {
     errorEl.classList.remove('hidden')
     screenWrap.classList.add('hidden')
     disconnectBtn.classList.add('hidden')
+    fullscreenBtn.classList.add('hidden')
   }
 
   function showScreen() {
@@ -146,6 +171,7 @@ export function renderRdpPage(container) {
     errorEl.classList.add('hidden')
     screenWrap.classList.remove('hidden')
     disconnectBtn.classList.remove('hidden')
+    fullscreenBtn.classList.remove('hidden')
   }
 
   function disconnect() {
@@ -165,13 +191,20 @@ export function renderRdpPage(container) {
     try { window.close() } catch { /* ignore */ }
   }
 
-  function startConnection() {
+  async function startConnection() {
     disconnect()
     screenEl.innerHTML = ''
     showConnecting()
 
-    // 基本は 1920x1080 で扱い、rw/rh クエリが指定されていればそれを優先する。
-    // ブラウザのウィンドウサイズとは独立した「RDP セッション解像度」として扱う。
+    if (sharingMode === 'viewer' && activeSessionId && inviteToken) {
+      try {
+        await API.joinRDPSession(activeSessionId, { invitationToken: inviteToken })
+      } catch (err) {
+        showError(t('sharing.joinFailed', { error: err.message || String(err) }))
+        return
+      }
+    }
+
     let baseW = 1920
     let baseH = 1080
     const prefW = parseInt(params.get('rw') || '', 10)
@@ -185,7 +218,12 @@ export function renderRdpPage(container) {
     if (w > 3840) w = 3840
     if (h < 480) h = 480
     if (h > 2160) h = 2160
-    const wsUrl = `${wsScheme}//${window.location.host}/ws/rdp/browser?target_id=${encodeURIComponent(targetId)}&w=${w}&h=${h}`
+    let wsUrl
+    if (activeSessionId && sharingMode === 'viewer') {
+      wsUrl = `${wsScheme}//${window.location.host}/ws/rdp/browser?target_id=${encodeURIComponent(targetId)}&session_id=${encodeURIComponent(activeSessionId)}&mode=viewer&w=${w}&h=${h}`
+    } else {
+      wsUrl = `${wsScheme}//${window.location.host}/ws/rdp/browser?target_id=${encodeURIComponent(targetId)}&w=${w}&h=${h}`
+    }
 
     try {
       rfb = new RFB(screenEl, wsUrl, { shared: true })
@@ -196,7 +234,7 @@ export function renderRdpPage(container) {
 
       rfb.addEventListener('connect', () => {
         showScreen()
-        void resolveActiveSessionId()
+        void ensureSharingUI()
         // 初回だけ軽くリサイズイベントを投げて noVNC に再計算させる
         setTimeout(() => {
           try { window.dispatchEvent(new window.Event('resize')) } catch { /* ignore */ }
@@ -250,6 +288,17 @@ export function renderRdpPage(container) {
     if (el.requestFullscreen) el.requestFullscreen().catch(() => {})
   })
 
+  // Update the button label and nudge noVNC to recompute its layout once
+  // the fullscreen transition actually completes -- a manual
+  // window.dispatchEvent('resize') right after requestFullscreen()/
+  // exitFullscreen() can race the browser's own layout change, leaving
+  // the remote screen scaled to its pre-transition size.
+  document.addEventListener('fullscreenchange', () => {
+    const isFullscreen = !!document.fullscreenElement
+    fullscreenBtn.textContent = t(isFullscreen ? 'rdp.exitFullscreen' : 'rdp.fullscreen')
+    onResize()
+  })
+
   function onResize() {
     if (!rfb) return
     if (resizeRaf) window.cancelAnimationFrame(resizeRaf)
@@ -261,5 +310,8 @@ export function renderRdpPage(container) {
   }
   window.addEventListener('resize', onResize)
 
-  startConnection()
+  void startConnection()
+  if (activeSessionId && sharingMode !== 'viewer') {
+    void ensureSharingUI()
+  }
 }

@@ -17,6 +17,19 @@ import (
 
 var logger = logging.WithComponent("access")
 
+// isUniqueConstraintErr reports whether err is a SQLite UNIQUE constraint
+// violation, as opposed to some other failure (disk full, DB locked,
+// connection lost, etc.). Several Create() methods in this package used
+// to map *any* INSERT error to an "already exists" response, which hides
+// the real cause from operators and sends users on a pointless "try a
+// different ID" retry loop for unrelated failures. modernc.org/sqlite
+// doesn't export its result-code constants, so this matches on the
+// stable, version-independent SQLite error text rather than a numeric
+// code.
+func isUniqueConstraintErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
 // StoreConfig holds store behavior parameters (timeout, list limit).
 // If nil is passed to constructors, defaults are used (5s timeout, defaultListLimit).
 type StoreConfig struct {
@@ -28,12 +41,31 @@ const (
 	maxIDLen   = 512
 	maxNameLen = 512
 	maxHostLen = 253
+	// maxFanoutRowsPerQuery caps each of the sub-queries that
+	// GroupIDsForUser / TargetIDsForUser union together in Go before
+	// paginating. Unlike every other list method in this package, the
+	// per-user union can't push LIMIT/OFFSET down to a single SQL
+	// query (the final ordering only exists after dedup across all
+	// three branches), so this acts as a hard backstop against
+	// unbounded memory use (ASVS V11.1.4) rather than a real page
+	// size -- it's set far above any realistic per-user membership
+	// count.
+	maxFanoutRowsPerQuery = 20000
 )
 
 var (
 	idPattern       = regexp.MustCompile(`^[a-zA-Z0-9_\-]+$`)
 	hostnamePattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$`)
 )
+
+// escapeLikePrefix escapes SQL LIKE wildcards ("%", "_") and the
+// escape character itself so a literal ID can be safely used as a
+// LIKE prefix (with `ESCAPE '\'`). Group ID segments allow "_", which
+// is otherwise a single-character LIKE wildcard.
+func escapeLikePrefix(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
+}
 
 func validateGroupID(id GroupID) error {
 	s := string(id)
@@ -93,6 +125,9 @@ func validateHost(host string) error {
 		return ErrHostTooLong
 	}
 	if ip := net.ParseIP(host); ip != nil {
+		if err := checkRestrictedHostIP(ip); err != nil {
+			return err
+		}
 		return nil
 	}
 	if !hostnamePattern.MatchString(host) {
@@ -226,6 +261,25 @@ func (s *SQLiteAccessGroupStore) Delete(ctx context.Context, id GroupID) error {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
+	// group_targets.group_id cascades on delete, so deleting a group
+	// that still has targets (or child groups, by the "parent/child"
+	// ID naming convention) would silently orphan them -- removed from
+	// every tree view without being deleted themselves. Refuse instead.
+	var targetCount int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM group_targets WHERE group_id = ?`, string(id)).Scan(&targetCount); err != nil {
+		return err
+	}
+	if targetCount > 0 {
+		return ErrGroupNotEmpty
+	}
+	var childCount int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM access_groups WHERE id LIKE ? ESCAPE '\'`, escapeLikePrefix(string(id))+"/%").Scan(&childCount); err != nil {
+		return err
+	}
+	if childCount > 0 {
+		return ErrGroupNotEmpty
+	}
+
 	res, err := s.db.ExecContext(ctx, `DELETE FROM access_groups WHERE id = ?`, string(id))
 	if err != nil {
 		return err
@@ -239,6 +293,12 @@ func (s *SQLiteAccessGroupStore) Delete(ctx context.Context, id GroupID) error {
 
 // AddUserToGroup adds a user to an access group (within a transaction to avoid TOCTOU).
 func (s *SQLiteAccessGroupStore) AddUserToGroup(ctx context.Context, userID UserID, groupID GroupID) error {
+	return s.AddUserToGroupUntil(ctx, userID, groupID, nil)
+}
+
+// AddUserToGroupUntil grants membership until expiresAt (nil = permanent),
+// updating the expiry of an existing membership.
+func (s *SQLiteAccessGroupStore) AddUserToGroupUntil(ctx context.Context, userID UserID, groupID GroupID, expiresAt *time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
@@ -256,15 +316,64 @@ func (s *SQLiteAccessGroupStore) AddUserToGroup(ctx context.Context, userID User
 		return err
 	}
 
+	var exp interface{}
+	if expiresAt != nil {
+		exp = expiresAt.Unix()
+	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO user_groups (user_id, group_id)
-		VALUES (?, ?)
-	`, string(userID), string(groupID))
+		INSERT INTO user_groups (user_id, group_id, expires_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(user_id, group_id) DO UPDATE SET expires_at = excluded.expires_at
+	`, string(userID), string(groupID), exp)
 	if err != nil {
 		return err
 	}
 	return tx.Commit()
 }
+
+// MembershipsForGroup lists all membership rows (expired included).
+func (s *SQLiteAccessGroupStore) MembershipsForGroup(ctx context.Context, groupID GroupID) ([]Membership, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id, expires_at FROM user_groups WHERE group_id = ? ORDER BY user_id`, string(groupID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	now := time.Now()
+	var out []Membership
+	for rows.Next() {
+		var uid string
+		var exp sql.NullInt64
+		if err := rows.Scan(&uid, &exp); err != nil {
+			return nil, err
+		}
+		m := Membership{UserID: UserID(uid)}
+		if exp.Valid {
+			t := time.Unix(exp.Int64, 0).UTC()
+			m.ExpiresAt = &t
+			m.Expired = !t.After(now)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// PurgeExpiredMemberships deletes memberships that expired before olderThan.
+func (s *SQLiteAccessGroupStore) PurgeExpiredMemberships(ctx context.Context, olderThan time.Time) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	res, err := s.db.ExecContext(ctx, `DELETE FROM user_groups WHERE expires_at IS NOT NULL AND expires_at < ?`, olderThan.Unix())
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// activeMembership is the SQL predicate for a membership that still
+// grants access (permanent, or not yet expired at the bound unix time).
+const activeMembership = `(ug.expires_at IS NULL OR ug.expires_at > ?)`
 
 // RemoveUserFromGroup removes a user from an access group.
 func (s *SQLiteAccessGroupStore) RemoveUserFromGroup(ctx context.Context, userID UserID, groupID GroupID) error {
@@ -293,19 +402,19 @@ func (s *SQLiteAccessGroupStore) UserIDsForGroup(ctx context.Context, groupID Gr
 	if opts != nil && opts.AfterID != "" {
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT user_id
-			FROM user_groups
-			WHERE group_id = ? AND user_id > ?
+			FROM user_groups ug
+			WHERE group_id = ? AND user_id > ? AND `+activeMembership+`
 			ORDER BY user_id
 			LIMIT ?
-		`, string(groupID), opts.AfterID, limit)
+		`, string(groupID), opts.AfterID, time.Now().Unix(), limit)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT user_id
-			FROM user_groups
-			WHERE group_id = ?
+			FROM user_groups ug
+			WHERE group_id = ? AND `+activeMembership+`
 			ORDER BY user_id
 			LIMIT ? OFFSET ?
-		`, string(groupID), limit, offset)
+		`, string(groupID), time.Now().Unix(), limit, offset)
 	}
 	if err != nil {
 		return nil, err
@@ -327,7 +436,8 @@ func (s *SQLiteAccessGroupStore) UserIDsForGroup(ctx context.Context, groupID Gr
 }
 
 // UserIDsForTarget returns distinct user IDs that can access targetID via
-// group membership or tag-based ACL (mirrors TargetIDsForUser paths).
+// group membership or tag-based ACL (mirrors TargetIDsForUser paths,
+// including grants on ancestor groups).
 func (s *SQLiteAccessGroupStore) UserIDsForTarget(ctx context.Context, targetID TargetID, opts *ListOpts) ([]UserID, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
@@ -336,8 +446,10 @@ func (s *SQLiteAccessGroupStore) UserIDsForTarget(ctx context.Context, targetID 
 		SELECT DISTINCT uid FROM (
 			SELECT ug.user_id AS uid
 			FROM user_groups ug
-			INNER JOIN group_targets gt ON gt.group_id = ug.group_id
-			WHERE gt.target_id = ?
+			INNER JOIN group_targets gt
+				ON gt.group_id = ug.group_id
+				OR substr(gt.group_id, 1, length(ug.group_id) + 1) = ug.group_id || '/'
+			WHERE gt.target_id = ? AND `+activeMembership+`
 			UNION
 			SELECT ut.user_id AS uid
 			FROM user_tags ut
@@ -347,11 +459,13 @@ func (s *SQLiteAccessGroupStore) UserIDsForTarget(ctx context.Context, targetID 
 			SELECT ut.user_id AS uid
 			FROM user_tags ut
 			INNER JOIN group_tags gtag ON gtag.tag = ut.tag
-			INNER JOIN group_targets gt ON gt.group_id = gtag.group_id
+			INNER JOIN group_targets gt
+				ON gt.group_id = gtag.group_id
+				OR substr(gt.group_id, 1, length(gtag.group_id) + 1) = gtag.group_id || '/'
 			WHERE gt.target_id = ?
 		)
 		ORDER BY uid
-	`, tid, tid, tid)
+	`, tid, time.Now().Unix(), tid, tid)
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +501,8 @@ func (s *SQLiteAccessGroupStore) UserIDsForTarget(ctx context.Context, targetID 
 	return all, nil
 }
 
-// TagsGrantingTargetAccess returns distinct tags that grant access to targetID.
+// TagsGrantingTargetAccess returns distinct tags that grant access to
+// targetID: its own tags plus the tags of its groups and their ancestors.
 func (s *SQLiteAccessGroupStore) TagsGrantingTargetAccess(ctx context.Context, targetID TargetID) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
@@ -396,7 +511,9 @@ func (s *SQLiteAccessGroupStore) TagsGrantingTargetAccess(ctx context.Context, t
 			SELECT tag FROM target_tags WHERE target_id = ?
 			UNION
 			SELECT gtag.tag FROM group_tags gtag
-			INNER JOIN group_targets gt ON gt.group_id = gtag.group_id
+			INNER JOIN group_targets gt
+				ON gt.group_id = gtag.group_id
+				OR substr(gt.group_id, 1, length(gtag.group_id) + 1) = gtag.group_id || '/'
 			WHERE gt.target_id = ?
 		)
 		ORDER BY tag
@@ -532,18 +649,62 @@ func (s *SQLiteAccessGroupStore) RemoveTargetFromGroup(ctx context.Context, grou
 	return err
 }
 
+// GroupIDsForTarget returns every group the target is directly assigned to via group_targets.
+func (s *SQLiteAccessGroupStore) GroupIDsForTarget(ctx context.Context, targetID TargetID) ([]GroupID, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT group_id
+		FROM group_targets
+		WHERE target_id = ?
+		ORDER BY group_id
+	`, string(targetID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []GroupID
+	for rows.Next() {
+		var gid string
+		if err := rows.Scan(&gid); err != nil {
+			return nil, err
+		}
+		out = append(out, GroupID(gid))
+	}
+	return out, rows.Err()
+}
+
 // GroupIDsForUser returns the set of access group IDs the user can see: direct membership (user_groups)
 // and tag-based (groups that have a target with matching user tag, or groups with matching tag).
+// Group hierarchy: a group ID is a "/"-separated path ("net/tokyo") and
+// access granted on a group covers the group itself and every descendant
+// ("net" reaches "net/tokyo" and "net/tokyo/rack1"), never the other
+// way round. The descendant test is a plain prefix comparison on
+// substr()/length() rather than LIKE, because "_" is legal in IDs and
+// would be a single-character wildcard ("a_b" must not match "a/b").
+//
+//	descendantOrSelf(child, parent) :=
+//	    child = parent OR substr(child, 1, length(parent) + 1) = parent || '/'
+
 func (s *SQLiteAccessGroupStore) GroupIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]GroupID, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
 	seen := make(map[GroupID]bool)
 
-	// 1) Via direct group membership
+	// 1) Via group membership: the groups the user is in and all of their
+	//    descendants.
 	rows1, err := s.db.QueryContext(ctx, `
-		SELECT group_id FROM user_groups WHERE user_id = ?
-	`, string(userID))
+		SELECT DISTINCT g.id
+		FROM user_groups ug
+		INNER JOIN access_groups g
+			ON g.id = ug.group_id
+			OR substr(g.id, 1, length(ug.group_id) + 1) = ug.group_id || '/'
+		WHERE ug.user_id = ? AND `+activeMembership+`
+		LIMIT ?
+	`, string(userID), time.Now().Unix(), maxFanoutRowsPerQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +727,8 @@ func (s *SQLiteAccessGroupStore) GroupIDsForUser(ctx context.Context, userID Use
 		FROM group_targets gt
 		INNER JOIN target_tags tt ON gt.target_id = tt.target_id
 		INNER JOIN user_tags ut ON ut.tag = tt.tag AND ut.user_id = ?
-	`, string(userID))
+		LIMIT ?
+	`, string(userID), maxFanoutRowsPerQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -583,12 +745,16 @@ func (s *SQLiteAccessGroupStore) GroupIDsForUser(ctx context.Context, userID Use
 		return nil, err
 	}
 
-	// 3) Via user tag = group tag
+	// 3) Via user tag = group tag (the tagged group and its descendants)
 	rows3, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT gtag.group_id
+		SELECT DISTINCT g.id
 		FROM group_tags gtag
 		INNER JOIN user_tags ut ON gtag.tag = ut.tag AND ut.user_id = ?
-	`, string(userID))
+		INNER JOIN access_groups g
+			ON g.id = gtag.group_id
+			OR substr(g.id, 1, length(gtag.group_id) + 1) = gtag.group_id || '/'
+		LIMIT ?
+	`, string(userID), maxFanoutRowsPerQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -629,6 +795,49 @@ func (s *SQLiteAccessGroupStore) GroupIDsForUser(ctx context.Context, userID Use
 		all = all[:limit]
 	}
 	return all, nil
+}
+
+// AllGroupIDs returns every group ID sorted by ID, honouring opts for
+// pagination. It ignores membership and tags entirely: callers are
+// expected to have already established that the acting user is an admin.
+func (s *SQLiteAccessGroupStore) AllGroupIDs(ctx context.Context, opts *ListOpts) ([]GroupID, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	limit, offset := listLimit(opts, s.defaultListLimit)
+	var rows *sql.Rows
+	var err error
+	if opts != nil && opts.AfterID != "" {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id FROM access_groups
+			WHERE id > ?
+			ORDER BY id
+			LIMIT ?
+		`, opts.AfterID, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id FROM access_groups
+			ORDER BY id
+			LIMIT ? OFFSET ?
+		`, limit, offset)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []GroupID
+	for rows.Next() {
+		var gid string
+		if err := rows.Scan(&gid); err != nil {
+			return nil, err
+		}
+		out = append(out, GroupID(gid))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // TargetIDsForGroup returns target IDs assigned to the group.
@@ -677,6 +886,7 @@ func (s *SQLiteAccessGroupStore) TargetIDsForGroup(ctx context.Context, groupID 
 
 // TargetIDsForUser returns the set of target IDs the user can access via group membership or tag match.
 // Tag-based: user has tag T and (target has tag T or target's group has tag T).
+// Group-based grants (membership and group tags) cover descendant groups too.
 func (s *SQLiteAccessGroupStore) TargetIDsForUser(ctx context.Context, userID UserID, opts *ListOpts) ([]TargetID, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
@@ -684,13 +894,16 @@ func (s *SQLiteAccessGroupStore) TargetIDsForUser(ctx context.Context, userID Us
 	// Collect all accessible target IDs: from groups and from tags (then dedup, sort, paginate in Go).
 	seen := make(map[TargetID]bool)
 
-	// 1) Via group membership
+	// 1) Via group membership (the group and its descendants)
 	rows1, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT gt.target_id
 		FROM user_groups ug
-		JOIN group_targets gt ON ug.group_id = gt.group_id
-		WHERE ug.user_id = ?
-	`, string(userID))
+		JOIN group_targets gt
+			ON gt.group_id = ug.group_id
+			OR substr(gt.group_id, 1, length(ug.group_id) + 1) = ug.group_id || '/'
+		WHERE ug.user_id = ? AND `+activeMembership+`
+		LIMIT ?
+	`, string(userID), time.Now().Unix(), maxFanoutRowsPerQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -712,7 +925,8 @@ func (s *SQLiteAccessGroupStore) TargetIDsForUser(ctx context.Context, userID Us
 		SELECT DISTINCT tt.target_id
 		FROM target_tags tt
 		INNER JOIN user_tags ut ON ut.tag = tt.tag AND ut.user_id = ?
-	`, string(userID))
+		LIMIT ?
+	`, string(userID), maxFanoutRowsPerQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -729,13 +943,16 @@ func (s *SQLiteAccessGroupStore) TargetIDsForUser(ctx context.Context, userID Us
 		return nil, err
 	}
 
-	// 3) Via user tag = group tag (target belongs to that group)
+	// 3) Via user tag = group tag (target belongs to that group or a descendant)
 	rows3, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT gt.target_id
 		FROM user_tags ut
 		INNER JOIN group_tags gtag ON gtag.tag = ut.tag AND ut.user_id = ?
-		INNER JOIN group_targets gt ON gtag.group_id = gt.group_id
-	`, string(userID))
+		INNER JOIN group_targets gt
+			ON gt.group_id = gtag.group_id
+			OR substr(gt.group_id, 1, length(gtag.group_id) + 1) = gtag.group_id || '/'
+		LIMIT ?
+	`, string(userID), maxFanoutRowsPerQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -1036,6 +1253,26 @@ func (s *SQLiteTargetStore) SetSSHHostKeyInsecureSkipVerify(ctx context.Context,
 	return nil
 }
 
+// SetCredentialSource records (or clears) which Identity / SSH Key
+// library entry the target's credentials were last set from.
+func (s *SQLiteTargetStore) SetCredentialSource(ctx context.Context, id TargetID, credentialIdentityID CredentialIdentityID, sshKeyID SSHKeyID) error {
+	if err := validateTargetID(id); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+	res, err := s.db.ExecContext(ctx, `UPDATE targets SET credential_identity_id = ?, ssh_key_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		string(credentialIdentityID), string(sshKeyID), string(id))
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrTargetNotFound
+	}
+	return nil
+}
+
 // Delete removes a target. Group assignments (group_targets) are removed by FK CASCADE.
 func (s *SQLiteTargetStore) Delete(ctx context.Context, id TargetID) error {
 	if err := validateTargetID(id); err != nil {
@@ -1067,11 +1304,12 @@ func (s *SQLiteTargetStore) Get(ctx context.Context, id TargetID) (*Target, erro
 	var storedPassword, storedKey, storedKeyPass string
 	var sftpVal, ftpVal, tftpVal, insecureSkipVal int
 	var hostKeyFP string
+	var credentialIdentityID, sshKeyID string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0), COALESCE(ssh_host_key_fingerprint,''), COALESCE(ssh_host_key_insecure_skip_verify,0)
+		SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0), COALESCE(ssh_host_key_fingerprint,''), COALESCE(ssh_host_key_insecure_skip_verify,0), COALESCE(credential_identity_id,''), COALESCE(ssh_key_id,'')
 		FROM targets
 		WHERE id = ?
-	`, string(id)).Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal, &hostKeyFP, &insecureSkipVal)
+	`, string(id)).Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal, &hostKeyFP, &insecureSkipVal, &credentialIdentityID, &sshKeyID)
 	if err == nil {
 		t.ID = TargetID(idStr)
 		t.SSHPassword = decryptOrPlain(s.encKey, storedPassword, t.ID, "ssh_password")
@@ -1082,6 +1320,8 @@ func (s *SQLiteTargetStore) Get(ctx context.Context, id TargetID) (*Target, erro
 		t.TFTPEnabled = tftpVal != 0
 		t.SSHHostKeyFingerprint = hostKeyFP
 		t.SSHHostKeyInsecureSkipVerify = insecureSkipVal != 0
+		t.CredentialIdentityID = CredentialIdentityID(credentialIdentityID)
+		t.SSHKeyID = SSHKeyID(sshKeyID)
 	}
 	if err == sql.ErrNoRows {
 		return nil, ErrTargetNotFound
@@ -1180,7 +1420,7 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 		err := func() error {
 			// #nosec G202 -- placeholders is "?,?,?" from len(chunk); args are validated TargetIDs
 			rows, err := s.db.QueryContext(ctx, `
-				SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0), COALESCE(ssh_host_key_fingerprint,''), COALESCE(ssh_host_key_insecure_skip_verify,0)
+				SELECT id, name, host, port, protocol, path, COALESCE(ssh_username,''), COALESCE(ssh_password,''), COALESCE(ssh_private_key,''), COALESCE(ssh_private_key_passphrase,''), COALESCE(sftp_enabled,1), COALESCE(ftp_enabled,0), COALESCE(tftp_enabled,0), COALESCE(ssh_host_key_fingerprint,''), COALESCE(ssh_host_key_insecure_skip_verify,0), COALESCE(credential_identity_id,''), COALESCE(ssh_key_id,'')
 				FROM targets
 				WHERE id IN (`+placeholders+`)`, args...)
 			if err != nil {
@@ -1195,7 +1435,8 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 				var storedPassword, storedKey, storedKeyPass string
 				var sftpVal, ftpVal, tftpVal, insecureSkipVal int
 				var hostKeyFP string
-				if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal, &hostKeyFP, &insecureSkipVal); err != nil {
+				var credentialIdentityID, sshKeyID string
+				if err := rows.Scan(&idStr, &t.Name, &t.Host, &port, &proto, &t.Path, &t.SSHUsername, &storedPassword, &storedKey, &storedKeyPass, &sftpVal, &ftpVal, &tftpVal, &hostKeyFP, &insecureSkipVal, &credentialIdentityID, &sshKeyID); err != nil {
 					return err
 				}
 				if port >= 0 && port <= 65535 {
@@ -1210,6 +1451,8 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 					t.TFTPEnabled = tftpVal != 0
 					t.SSHHostKeyFingerprint = hostKeyFP
 					t.SSHHostKeyInsecureSkipVerify = insecureSkipVal != 0
+					t.CredentialIdentityID = CredentialIdentityID(credentialIdentityID)
+					t.SSHKeyID = SSHKeyID(sshKeyID)
 					byID[TargetID(idStr)] = &t
 				}
 			}
@@ -1230,6 +1473,49 @@ func (s *SQLiteTargetStore) ListByIDs(ctx context.Context, ids []TargetID, opts 
 }
 
 // ListByProtocol returns targets for the given protocol. Credentials are not populated.
+// AllIDs returns every target ID sorted by ID, honouring opts for
+// pagination. It ignores access control entirely: callers are expected
+// to have already established that the acting user is an admin.
+func (s *SQLiteTargetStore) AllIDs(ctx context.Context, opts *ListOpts) ([]TargetID, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	defer cancel()
+
+	limit, offset := listLimit(opts, s.defaultListLimit)
+	var rows *sql.Rows
+	var err error
+	if opts != nil && opts.AfterID != "" {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id FROM targets
+			WHERE id > ?
+			ORDER BY id
+			LIMIT ?
+		`, opts.AfterID, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id FROM targets
+			ORDER BY id
+			LIMIT ? OFFSET ?
+		`, limit, offset)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []TargetID
+	for rows.Next() {
+		var tid string
+		if err := rows.Scan(&tid); err != nil {
+			return nil, err
+		}
+		out = append(out, TargetID(tid))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (s *SQLiteTargetStore) ListByProtocol(ctx context.Context, protocol Protocol) ([]*Target, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()

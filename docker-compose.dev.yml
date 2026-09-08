@@ -30,6 +30,7 @@ services:
       - VANTYX_RECORDINGS_DIR=/app/recordings
       - VANTYX_SSH_PASSWORD_ENCRYPTION_KEY=${VANTYX_SSH_PASSWORD_ENCRYPTION_KEY}
       - VANTYX_SQLITE_PATH=/app/data/vantyx.db
+      - VANTYX_SSH_HOST_KEY_PATH=/app/data/sshd_host_key.pem
       - VANTYX_TFTP_LISTEN=0.0.0.0:6969
     env_file:
       - .env

@@ -180,9 +180,6 @@ func TestRenewFromCacheAlreadyRenewed(t *testing.T) {
 
 	// set internal state to an almost expired cert
 	oldCert := ca.LeafCert(exampleDomain, "ECDSA", now.Add(-2*time.Hour), now.Add(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
 	oldLeaf, err := validCert(exampleCertKey, oldCert.Certificate, oldCert.PrivateKey.(crypto.Signer), now)
 	if err != nil {
 		t.Fatal(err)

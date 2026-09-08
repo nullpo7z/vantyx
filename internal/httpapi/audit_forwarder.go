@@ -172,7 +172,7 @@ func (f *auditForwarder) writeOne(jsonLine []byte) {
 		return
 	}
 	// RFC5424-ish syslog message with JSON payload in MSG.
-	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	ts := time.Now().Format(time.RFC3339Nano) // server zone, explicit offset
 	msg := fmt.Sprintf("<134>1 %s %s %s - - - %s\n", ts, f.host, f.appName, strings.TrimSpace(string(jsonLine)))
 
 	if strings.HasPrefix(f.network, "udp") {

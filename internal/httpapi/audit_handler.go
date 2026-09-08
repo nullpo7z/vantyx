@@ -86,7 +86,7 @@ func (a *App) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
 				_ = json.Unmarshal([]byte(fieldsJSON), &fields)
 				items = append(items, AuditEntry{
 					ID:     id,
-					Time:   t.UTC(),
+					Time:   t.In(a.serverLocation()), // same zone as the logs (VANTYX_TIMEZONE)
 					Event:  ev,
 					Fields: fields,
 				})

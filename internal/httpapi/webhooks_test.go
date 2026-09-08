@@ -19,6 +19,12 @@ import (
 
 func TestWebhooks_DeliveryFilteringAndSignature(t *testing.T) {
 	t.Setenv(webhookAllowLoopback, "1")
+	// The dispatcher is a package-level singleton; start from clean
+	// delivery counters so the exact-count assertions below hold under
+	// go test -count=N as well.
+	globalWebhooks.mu.Lock()
+	globalWebhooks.stats = map[string]*webhookStats{}
+	globalWebhooks.mu.Unlock()
 	var mu sync.Mutex
 	var got []struct {
 		event, sig string

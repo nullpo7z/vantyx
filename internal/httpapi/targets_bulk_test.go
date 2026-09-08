@@ -166,7 +166,7 @@ func TestTargetsCSV_FormulaGuardRoundTrips(t *testing.T) {
 	for _, in := range []string{"=1+1", "+cmd", "-x", "@SUM", "\tx", "plain", "", "'quoted"} {
 		safe := csvSafe(in)
 		if in != "" && strings.ContainsAny(in[:1], "=+-@\t\r") && !strings.HasPrefix(safe, "'") {
-			t.Errorf("csvSafe(%q) = %q, not neutralised", in, safe)
+			t.Errorf("csvSafe(%q) = %q, not neutralized", in, safe)
 		}
 		if got := csvUnsafe(safe); got != in {
 			t.Errorf("round trip %q -> %q -> %q", in, safe, got)

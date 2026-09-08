@@ -126,7 +126,7 @@ func (s *SQLiteAPITokenStore) Create(ctx context.Context, userID, name, scope st
 	return &APIToken{ID: id, UserID: userID, Name: name, Prefix: plain[:12], Scope: scope, CreatedAt: now, ExpiresAt: expiresAt}, plain, nil
 }
 
-const apiTokenCols = `id, user_id, name, prefix, scope, created_at, expires_at, last_used_at, revoked_at`
+const apiTokenCols = `id, user_id, name, prefix, scope, created_at, expires_at, last_used_at, revoked_at` // #nosec G101 -- SQL column list, not a credential
 
 func scanAPIToken(sc interface{ Scan(...interface{}) error }) (*APIToken, error) {
 	var t APIToken

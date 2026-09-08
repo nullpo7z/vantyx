@@ -22,11 +22,11 @@ import (
 	"github.com/nullpo7z/vantyx/internal/auth"
 )
 
-// fakeIdP is a minimal OpenID Provider: discovery, JWKS and a token
+// fakeIDP is a minimal OpenID Provider: discovery, JWKS and a token
 // endpoint that mints an RS256 ID token for whatever claims the test
 // asked for. The authorization endpoint is never called (the test reads
 // the redirect the app produces instead of following it).
-type fakeIdP struct {
+type fakeIDP struct {
 	srv *httptest.Server
 	key *rsa.PrivateKey
 
@@ -43,20 +43,20 @@ type fakeIdP struct {
 	verif  string // last code_verifier seen at the token endpoint
 }
 
-func newFakeIdP(t *testing.T) *fakeIdP {
-	return newFakeIdPAt(t, "")
+func newFakeIDP(t *testing.T) *fakeIDP {
+	return newFakeIDPAt(t, "")
 }
 
-// newFakeIdPAt serves the discovery document under discoveryPath (for
+// newFakeIDPAt serves the discovery document under discoveryPath (for
 // example "/cdn-cgi/access/sso/oidc/cid") while the issuer stays the
 // server root, like Cloudflare Access does.
-func newFakeIdPAt(t *testing.T, discoveryPath string) *fakeIdP {
+func newFakeIDPAt(t *testing.T, discoveryPath string) *fakeIDP {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("rsa key: %v", err)
 	}
-	p := &fakeIdP{key: key, claims: map[string]interface{}{}, discoveryPath: discoveryPath}
+	p := &fakeIDP{key: key, claims: map[string]interface{}{}, discoveryPath: discoveryPath}
 	mux := http.NewServeMux()
 	mux.HandleFunc(discoveryPath+"/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -110,7 +110,7 @@ func newFakeIdPAt(t *testing.T, discoveryPath string) *fakeIdP {
 	return p
 }
 
-func (p *fakeIdP) sign(t *testing.T, claims map[string]interface{}) string {
+func (p *fakeIDP) sign(t *testing.T, claims map[string]interface{}) string {
 	t.Helper()
 	hdr, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT", "kid": "k1"})
 	body, _ := json.Marshal(claims)
@@ -123,19 +123,19 @@ func (p *fakeIdP) sign(t *testing.T, claims map[string]interface{}) string {
 	return signing + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
-func (p *fakeIdP) setClaims(c map[string]interface{}) {
+func (p *fakeIDP) setClaims(c map[string]interface{}) {
 	p.mu.Lock()
 	p.claims = c
 	p.mu.Unlock()
 }
 
-func (p *fakeIdP) setNonce(n string) {
+func (p *fakeIDP) setNonce(n string) {
 	p.mu.Lock()
 	p.nonce = n
 	p.mu.Unlock()
 }
 
-func newOIDCTestApp(t *testing.T, idp *fakeIdP, autoCreate bool) (*App, http.Handler) {
+func newOIDCTestApp(t *testing.T, idp *fakeIDP, autoCreate bool) (*App, http.Handler) {
 	t.Helper()
 	app := newTestApp(t)
 	app.oidc = &oidcService{
@@ -201,7 +201,7 @@ func oidcCallback(t *testing.T, router http.Handler, cookie *http.Cookie, state 
 }
 
 func TestAuthMethods_ReportsOIDCWhenConfigured(t *testing.T) {
-	idp := newFakeIdP(t)
+	idp := newFakeIDP(t)
 	_, router := newOIDCTestApp(t, idp, false)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/auth/methods", nil))
@@ -213,7 +213,7 @@ func TestAuthMethods_ReportsOIDCWhenConfigured(t *testing.T) {
 }
 
 func TestOIDC_LoginAutoCreatesAndLinksUser(t *testing.T) {
-	idp := newFakeIdP(t)
+	idp := newFakeIDP(t)
 	app, router := newOIDCTestApp(t, idp, true)
 	idp.setClaims(map[string]interface{}{"sub": "sub-123", "preferred_username": "Alice", "email": "alice@example.com"})
 
@@ -282,7 +282,7 @@ func TestOIDC_LoginAutoCreatesAndLinksUser(t *testing.T) {
 }
 
 func TestOIDC_LinksExistingUserByUsername(t *testing.T) {
-	idp := newFakeIdP(t)
+	idp := newFakeIDP(t)
 	t.Setenv("VANTYX_OIDC_LINK_EXISTING_USERS", "1")
 	app, router := newOIDCTestApp(t, idp, false)
 	if _, err := app.UserStore.CreateUser("bob", "Bob", "Password1!", "user"); err != nil {
@@ -318,7 +318,7 @@ func TestOIDC_LinksExistingUserByUsername(t *testing.T) {
 }
 
 func TestOIDC_UnknownUserWithoutAutoCreateIsRejected(t *testing.T) {
-	idp := newFakeIdP(t)
+	idp := newFakeIDP(t)
 	app, router := newOIDCTestApp(t, idp, false)
 	idp.setClaims(map[string]interface{}{"sub": "sub-x", "preferred_username": "stranger"})
 	cookie, state, nonce := startOIDCLogin(t, router, "/")
@@ -339,7 +339,7 @@ func TestOIDC_UnknownUserWithoutAutoCreateIsRejected(t *testing.T) {
 }
 
 func TestOIDC_RejectsBadStateNonceAndAudience(t *testing.T) {
-	idp := newFakeIdP(t)
+	idp := newFakeIDP(t)
 	_, router := newOIDCTestApp(t, idp, true)
 	idp.setClaims(map[string]interface{}{"sub": "sub-1", "preferred_username": "dave"})
 
@@ -384,7 +384,7 @@ func TestOIDC_RejectsBadStateNonceAndAudience(t *testing.T) {
 // Cloudflare Access style: discovery lives under a per-client path, the
 // issuer in the document / ID token is the bare team domain.
 func TestOIDC_DiscoveryURLDistinctFromIssuer(t *testing.T) {
-	idp := newFakeIdPAt(t, "/cdn-cgi/access/sso/oidc/cid")
+	idp := newFakeIDPAt(t, "/cdn-cgi/access/sso/oidc/cid")
 	idp.setClaims(map[string]interface{}{"sub": "cf-1", "email": "eve@example.com", "name": "Eve"})
 
 	// Without the discovery URL the well-known document is not at the issuer.
@@ -427,7 +427,7 @@ func TestOIDC_DiscoveryURLDistinctFromIssuer(t *testing.T) {
 
 // Groups claim -> Vantyx memberships and role, reconciled on every login.
 func TestOIDC_GroupsClaimSyncsMembershipsAndRole(t *testing.T) {
-	idp := newFakeIdP(t)
+	idp := newFakeIDP(t)
 	app, router := newOIDCTestApp(t, idp, true)
 	ctx := context.Background()
 	for _, g := range []string{"net", "net/tokyo", "ops"} {
@@ -591,7 +591,7 @@ func TestOIDCConfigFromEnv(t *testing.T) {
 // otherwise whoever controls the claim at the IdP could sign in as any
 // local user.
 func TestOIDC_LinkExistingIsOptInAndNeverAdmin(t *testing.T) {
-	expectRefused := func(t *testing.T, app *App, router http.Handler, idp *fakeIdP, claims map[string]interface{}) {
+	expectRefused := func(t *testing.T, app *App, router http.Handler, idp *fakeIDP, claims map[string]interface{}) {
 		t.Helper()
 		idp.setClaims(claims)
 		cookie, state, nonce := startOIDCLogin(t, router, "/")
@@ -606,7 +606,7 @@ func TestOIDC_LinkExistingIsOptInAndNeverAdmin(t *testing.T) {
 	}
 
 	t.Run("default off", func(t *testing.T) {
-		idp := newFakeIdP(t)
+		idp := newFakeIDP(t)
 		app, router := newOIDCTestApp(t, idp, false)
 		if _, err := app.UserStore.CreateUser("bob", "bob", "Password1!", "user"); err != nil {
 			t.Fatal(err)
@@ -614,14 +614,14 @@ func TestOIDC_LinkExistingIsOptInAndNeverAdmin(t *testing.T) {
 		expectRefused(t, app, router, idp, map[string]interface{}{"sub": "sub-bob", "preferred_username": "bob"})
 	})
 	t.Run("never admin", func(t *testing.T) {
-		idp := newFakeIdP(t)
+		idp := newFakeIDP(t)
 		t.Setenv("VANTYX_OIDC_LINK_EXISTING_USERS", "1")
 		app, router := newOIDCTestApp(t, idp, false)
 		// The seeded admin account must not be claimable through the IdP.
 		expectRefused(t, app, router, idp, map[string]interface{}{"sub": "sub-admin", "preferred_username": "ADMIN"})
 	})
 	t.Run("unverified email", func(t *testing.T) {
-		idp := newFakeIdP(t)
+		idp := newFakeIDP(t)
 		t.Setenv("VANTYX_OIDC_LINK_EXISTING_USERS", "1")
 		app, router := newOIDCTestApp(t, idp, false)
 		if _, err := app.UserStore.CreateUser("carol", "carol@example.com", "Password1!", "user"); err != nil {
@@ -630,7 +630,7 @@ func TestOIDC_LinkExistingIsOptInAndNeverAdmin(t *testing.T) {
 		expectRefused(t, app, router, idp, map[string]interface{}{"sub": "sub-carol", "email": "carol@example.com", "email_verified": false})
 	})
 	t.Run("auto-create does not shadow a clashing local name", func(t *testing.T) {
-		idp := newFakeIdP(t)
+		idp := newFakeIDP(t)
 		app, router := newOIDCTestApp(t, idp, true)
 		if _, err := app.UserStore.CreateUser("dave", "dave", "Password1!", "user"); err != nil {
 			t.Fatal(err)

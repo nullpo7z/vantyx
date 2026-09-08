@@ -57,7 +57,8 @@ func (s *softAuthenticator) authData(flags byte, attested bool) []byte {
 		out = append(out, l...)
 		out = append(out, s.credID...)
 		pub := s.key.PublicKey
-		cose := map[int]interface{}{1: 2, 3: -7, -1: 1, -2: pub.X.FillBytes(make([]byte, 32)), -3: pub.Y.FillBytes(make([]byte, 32))}
+		pubXY, _ := pub.Bytes() // 0x04 || X || Y (uncompressed point)
+		cose := map[int]interface{}{1: 2, 3: -7, -1: 1, -2: pubXY[1:33], -3: pubXY[33:65]}
 		enc, _ := cbor.Marshal(cose)
 		out = append(out, enc...)
 	}

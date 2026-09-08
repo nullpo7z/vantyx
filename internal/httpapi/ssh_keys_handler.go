@@ -266,6 +266,8 @@ func (a *App) handleSSHKeysGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	// #nosec G117 -- the freshly generated private key is returned exactly once
+	// to the admin who asked for it (that is the feature); it is never logged.
 	_ = json.NewEncoder(w).Encode(generateSSHKeyResponse{
 		ID:            string(sum.ID),
 		Label:         sum.Label,

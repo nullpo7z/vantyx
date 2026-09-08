@@ -18,7 +18,7 @@ import (
 // read it. Nothing user-identifying is exported -- counters are keyed
 // by method / status class / audit event name only.
 
-const metricsTokenEnv = "VANTYX_METRICS_TOKEN"
+const metricsTokenEnv = "VANTYX_METRICS_TOKEN" // #nosec G101 -- environment variable *name*, not a credential
 
 // observeHTTPMetrics is called by the request logging middleware.
 func observeHTTPMetrics(method string, status int, dur time.Duration, path string) {

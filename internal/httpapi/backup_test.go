@@ -48,6 +48,9 @@ func TestBackups_CreateListDownloadRestore(t *testing.T) {
 		}
 		names = append(names, name)
 	}
+	if len(names) != 3 {
+		t.Fatalf("created %d backups, want 3", len(names))
+	}
 	list, err := app.listBackups()
 	if err != nil || len(list) != 2 {
 		t.Fatalf("list = %v, %v (want 2 after prune)", list, err)
@@ -235,9 +238,9 @@ func TestBackups_StripSessions(t *testing.T) {
 	if err := app.stageRestore(src, "admin", "test"); err != nil {
 		t.Fatalf("stageRestore: %v", err)
 	}
-	if n := countSessions(a_pending(app)); n != 0 {
+	if n := countSessions(aPending(app)); n != 0 {
 		t.Fatalf("staged restore carries %d sessions", n)
 	}
 }
 
-func a_pending(app *App) string { return app.pendingRestorePath() }
+func aPending(app *App) string { return app.pendingRestorePath() }

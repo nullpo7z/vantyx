@@ -11,7 +11,7 @@ import (
 )
 
 // Retention policy: age-based purge of recordings (rows + media files +
-// export artefacts), audit log rows, command log rows and long-expired
+// export artifacts), audit log rows, command log rows and long-expired
 // memberships. Everything is opt-in via environment (empty / 0 = keep
 // forever) so an upgrade never starts deleting data on its own. The job
 // runs shortly after start-up and then hourly; admins can inspect the
@@ -185,7 +185,7 @@ func (a *App) runRetention(ctx context.Context, trigger string) *retentionReport
 
 // purgeOldRecordings removes recordings that ended before cutoff: DB row
 // first (so the recording is unreachable even if the file lingers), then
-// the media file and any export artefacts, mirroring the manual delete.
+// the media file and any export artifacts, mirroring the manual delete.
 func (a *App) purgeOldRecordings(ctx context.Context, cutoff time.Time, rep *retentionReport) {
 	bound := cutoff.UTC().Format("2006-01-02 15:04:05")
 	rows, err := a.DB.QueryContext(ctx, `SELECT id, file_path FROM recordings WHERE ended_at IS NOT NULL AND ended_at <> '' AND ended_at < ? ORDER BY ended_at LIMIT 500`, bound)

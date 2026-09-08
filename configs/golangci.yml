@@ -58,6 +58,21 @@ linters:
         - dialling
         - sanitised
         - sanitise
+        - honours
+        - honouring
+        - honoring
+        - enrol
+        - enrolment
+        - enrolments
+        - finalise
+        - finalises
+        - finalised
+        - artefact
+        - artefacts
+        - neutralise
+        - neutralises
+        - neutralised
+        - defence
         - recognised
         - recognise
         - behaviour

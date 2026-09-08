@@ -126,7 +126,7 @@ func (a *App) handleExportTargets(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(buf.Bytes())
 }
 
-// csvSafe neutralises spreadsheet formula injection: a cell starting with
+// csvSafe neutralizes spreadsheet formula injection: a cell starting with
 // =, +, -, @ or a tab / CR would otherwise be evaluated by Excel / LibreOffice
 // when the export is opened. The leading quote is stripped again by
 // csvUnsafe on import, so our own exports round-trip unchanged.

@@ -357,7 +357,7 @@ func (a *App) handleGetRecordingFile(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "video/mp4")
 			setAttachmentDisposition(w, filepath.Base(mediaPath))
 			// Serve via ServeContent rather than io.Copy so the response
-			// carries Content-Length and honours Range requests. The
+			// carries Content-Length and honors Range requests. The
 			// browser <video> element needs both to make the timeline
 			// seekable (with a plain streamed body Chrome reports
 			// seekable=[0,0] and the user cannot scrub an RDP/VNC

@@ -336,13 +336,28 @@ func (a *App) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 		oauth2.S256ChallengeOption(verifier),
 	)
 	audit("oidc_login_started", auditFields{"issuer": a.oidc.cfg.Issuer})
+	// #nosec G710 -- authURL is the IdP's discovered authorization endpoint
+	// (from the operator-configured issuer), not request input.
 	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+// clearOIDCStateCookie expires the login-state cookie with the same
+// attributes it was issued with: browsers refuse to replace a Secure
+// cookie with a non-Secure one, so a bare deletion cookie could leave the
+// old state behind.
+func clearOIDCStateCookie(w http.ResponseWriter, r *http.Request) {
+	// #nosec G124 -- Secure is set from the request scheme at runtime; the
+	// static check can not see the assignment (same as setSessionCookie).
+	http.SetCookie(w, &http.Cookie{
+		Name: oidcStateCookie, Value: "", Path: "/api/auth/oidc", MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: cookieSecure(r),
+	})
 }
 
 // oidcFail sends the browser back to the login page with a short error
 // code the SPA can localize (never the raw upstream error).
 func (a *App) oidcFail(w http.ResponseWriter, r *http.Request, code string) {
-	http.SetCookie(w, &http.Cookie{Name: oidcStateCookie, Value: "", Path: "/api/auth/oidc", MaxAge: -1, HttpOnly: true})
+	clearOIDCStateCookie(w, r)
 	http.Redirect(w, r, "/?oidc_error="+url.QueryEscape(code), http.StatusFound)
 }
 
@@ -460,7 +475,7 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setSessionCookie(w, r, sess.ID)
-	http.SetCookie(w, &http.Cookie{Name: oidcStateCookie, Value: "", Path: "/api/auth/oidc", MaxAge: -1, HttpOnly: true})
+	clearOIDCStateCookie(w, r)
 	audit("oidc_login_ok", auditFields{
 		"user_id":      u.ID,
 		"issuer":       idToken.Issuer,

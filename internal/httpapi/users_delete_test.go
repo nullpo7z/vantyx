@@ -59,7 +59,7 @@ func TestApp_DeleteUser_RemovesUserAndMemberships(t *testing.T) {
 // TestApp_DeleteUser_GuardRails covers the refusal paths: self-deletion,
 // unknown user, and a non-admin actor. It also checks that with two admins
 // one may be deleted and exactly one remains (the last-admin guard is a
-// defence-in-depth check: through HTTP the actor is always an admin
+// defense-in-depth check: through HTTP the actor is always an admin
 // distinct from the target, so a sole admin can only ever be the actor
 // themselves, which the self-deletion rule already refuses).
 func TestApp_DeleteUser_GuardRails(t *testing.T) {

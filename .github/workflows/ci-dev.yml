@@ -21,7 +21,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  GOLANGCI_LINT_VERSION: v2.12.2
+  GOLANGCI_LINT_VERSION: v2.13.2
 
 jobs:
   lint-go:

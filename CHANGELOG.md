@@ -156,6 +156,11 @@ Until the `1.0.0` release, breaking changes may land in any `0.y` bump.
 
 ### Changed
 
+- Toolchain: Go 1.27 (`toolchain go1.27.1`, `golang:1.27-alpine` builder),
+  runtime image `alpine:3.24`, golangci-lint v2.13.2.
+- Dependencies: `modernc.org/sqlite` 1.58.0, `go-oidc` 3.21.0, `chi` 5.3.2,
+  `pkg/sftp` 1.13.11, `jlaffaye/ftp` 0.2.4, `x/oauth2` 0.37.0; npm
+  `asciinema-player` 3.17.0, `tailwindcss` 4.3.3, `eslint` 10.10.0.
 - Docker: drop `su-exec` from the runtime image and start the
   process directly as the non-root user via `USER nonroot:nonroot`
   in the Dockerfile. The previous entrypoint relied on `su-exec`

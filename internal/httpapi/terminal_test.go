@@ -139,7 +139,7 @@ func TestHandleSSHWebSocket_UnauthorizedWithoutCookie(t *testing.T) {
 	// Ensure target_id=demo exists for this test (admin has access via a group).
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	srv := httptest.NewServer(router)
@@ -210,7 +210,7 @@ func TestHandleSSHWebSocket_ForbiddenTarget(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	_, _ = app.UserStore.CreateUser("other", "other", "Other1!x", "")
@@ -241,7 +241,7 @@ func TestHandleSSHWebSocket_ForbiddenTarget_RealWSGetsErrorFrame(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 	_, _ = app.UserStore.CreateUser("other", "other", "Other1!x", "")
 	httpSess, err := app.SessionStore.Create("other")
@@ -391,7 +391,7 @@ func TestHandleSSHWebSocket_UpgradeFailsWithoutWebSocketRequest(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -437,7 +437,7 @@ func TestHandleSSHWebSocket_InvalidCredentialsReturnsError(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -487,7 +487,7 @@ func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -516,7 +516,7 @@ func TestHandleSSHWebSocket_ValidCredentialsStartsBridge(t *testing.T) {
 		t.Fatalf("WriteMessage: %v", err)
 	}
 
-	// Server will try SSH dial to demo (127.0.0.1:22); no server => connection closes.
+	// Server will try SSH dial to demo (a closed loopback port); no server => connection closes.
 	_ = conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 	_, _, err = conn.ReadMessage()
 	if err == nil {
@@ -544,7 +544,7 @@ func TestHandleSSHWebSocket_BridgeErrorRespectsUserLocale(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	if err := app.UserStore.UpdateLocale("admin", "ja"); err != nil {
@@ -577,7 +577,7 @@ func TestHandleSSHWebSocket_BridgeErrorRespectsUserLocale(t *testing.T) {
 		t.Fatalf("WriteMessage: %v", err)
 	}
 
-	// Nothing listens on 127.0.0.1:22 in the test environment, so the
+	// Nothing listens on the closed loopback port the target points at, so the
 	// dial fails (connection refused / timeout) and the bridge reports
 	// it back over the WS as an "error: " text frame.
 	var errMsg string
@@ -750,7 +750,7 @@ func TestHandleTerminalSessions_ListWithSession(t *testing.T) {
 	ctx := context.Background()
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo"))
 
 	httpSess, err := app.SessionStore.Create("admin")
@@ -886,7 +886,7 @@ func TestHandleTerminalSessions_FiltersByTargetAccess(t *testing.T) {
 
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("allowed"), "Allowed", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("allowed"), "Allowed", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("allowed"))
 
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g2"), "G2")
@@ -942,7 +942,7 @@ func TestHandleTerminalSessionDelete_ForbiddenWithoutTargetAccess(t *testing.T) 
 
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	httpSess, _ := app.SessionStore.Create("admin")
@@ -976,7 +976,7 @@ func TestHandleTerminalSessionDelete_Success(t *testing.T) {
 
 	_, _ = app.AccessGroupStore.Create(ctx, access.GroupID("g1"), "G1")
 	_ = app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1"))
-	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
+	_, _ = app.TargetStore.CreateWithPath(ctx, access.TargetID("t1"), "T1", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false)
 	_ = app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("t1"))
 
 	httpSess, err := app.SessionStore.Create("admin")

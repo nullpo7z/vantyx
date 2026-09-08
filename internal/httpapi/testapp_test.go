@@ -57,6 +57,22 @@ func newTestAppForVNC(t *testing.T) *App {
 }
 
 // seedAdminDemoSSHTarget grants admin access to a demo SSH target via group g1.
+// closedTestPort returns a loopback TCP port that nothing listens on (it
+// is reserved and released again). Tests that expect an SSH dial to fail
+// must not point at 127.0.0.1:22: GitHub-hosted runners run sshd there,
+// which turns the expected "connection refused" into a completed
+// handshake and a host-key (TOFU) prompt frame instead of an error frame.
+func closedTestPort(t *testing.T) uint16 {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve closed port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return uint16(port)
+}
+
 func seedAdminDemoSSHTarget(t *testing.T, app *App) {
 	t.Helper()
 	ctx := context.Background()
@@ -66,7 +82,7 @@ func seedAdminDemoSSHTarget(t *testing.T, app *App) {
 	if err := app.AccessGroupStore.AddUserToGroup(ctx, access.UserID("admin"), access.GroupID("g1")); err != nil {
 		t.Fatalf("AddUserToGroup: %v", err)
 	}
-	if _, err := app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", 22, access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false); err != nil {
+	if _, err := app.TargetStore.CreateWithPath(ctx, access.TargetID("demo"), "Demo host", "127.0.0.1", closedTestPort(t), access.ProtocolSSH, access.GroupID("g1"), "g1", "", "", "", "", true, false, false); err != nil {
 		t.Fatalf("CreateWithPath: %v", err)
 	}
 	if err := app.AccessGroupStore.AddTargetToGroup(ctx, access.GroupID("g1"), access.TargetID("demo")); err != nil {

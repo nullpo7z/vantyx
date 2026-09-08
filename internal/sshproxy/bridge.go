@@ -369,7 +369,9 @@ func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.W
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	var cleanupOnce sync.Once
+	doCleanup := func() { cleanupOnce.Do(cleanup) }
+	defer doCleanup()
 
 	if resizeChan != nil && windowChange != nil {
 		go func() {
@@ -468,6 +470,15 @@ func RunBridgeStream(ctx context.Context, localStdin io.Reader, localStdout io.W
 
 	select {
 	case <-ctx.Done():
+		// Tear the SSH session down first so the pumps' blocking reads
+		// return, then wait (bounded) for them to exit: otherwise the
+		// stdout pump could still be writing to localStdout after this
+		// function has returned to the caller.
+		doCleanup()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
 		return nil
 	case <-done:
 		return nil

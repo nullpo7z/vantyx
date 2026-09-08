@@ -3,6 +3,7 @@ package sshproxy
 import (
 	"bytes"
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,7 +17,10 @@ import (
 // the multi-client tests to assert fan-out and writer / viewer
 // behaviour without spinning up real WebSockets.
 type recordingStreamAttach struct {
-	id      string
+	id string
+	// written is filled by the bridge's broadcast goroutine while the
+	// test polls it; guard it so the -race detector stays quiet.
+	mu      sync.Mutex
 	written bytes.Buffer
 	closed  atomic.Bool
 	stdinIn chan []byte
@@ -24,6 +28,15 @@ type recordingStreamAttach struct {
 	starter chan struct{}
 	closeFn func() error
 }
+
+// out returns a snapshot of everything written so far.
+func (s *recordingStreamAttach) out() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.written.Bytes()...)
+}
+
+func (s *recordingStreamAttach) outString() string { return string(s.out()) }
 
 func newRecordingStreamAttach(id string) *recordingStreamAttach {
 	return &recordingStreamAttach{
@@ -36,7 +49,9 @@ func newRecordingStreamAttach(id string) *recordingStreamAttach {
 func (s *recordingStreamAttach) toStreamAttach() *StreamAttach {
 	return &StreamAttach{
 		Write: func(p []byte) error {
+			s.mu.Lock()
 			s.written.Write(p)
+			s.mu.Unlock()
 			return nil
 		},
 		StartRead: func(stdinChOut chan<- []byte, onClose func()) {
@@ -117,18 +132,18 @@ func TestBridgeFanOutAndWriterEnforcement(t *testing.T) {
 	viewer.stdinIn <- []byte("VIEWER-INPUT-MUST-BE-DROPPED\n")
 
 	deadline := time.After(3 * time.Second)
-	for !(bytes.Contains(owner.written.Bytes(), []byte("hello-from-owner")) &&
-		bytes.Contains(viewer.written.Bytes(), []byte("hello-from-owner"))) {
+	for !(bytes.Contains(owner.out(), []byte("hello-from-owner")) &&
+		bytes.Contains(viewer.out(), []byte("hello-from-owner"))) {
 		select {
 		case <-deadline:
-			t.Fatalf("fan-out missing: owner=%q viewer=%q", owner.written.String(), viewer.written.String())
+			t.Fatalf("fan-out missing: owner=%q viewer=%q", owner.outString(), viewer.outString())
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
 
 	// The viewer's input must NOT appear in the echoed stream.
-	if bytes.Contains(owner.written.Bytes(), []byte("VIEWER-INPUT-MUST-BE-DROPPED")) {
-		t.Fatalf("viewer input leaked to writer: %q", owner.written.String())
+	if bytes.Contains(owner.out(), []byte("VIEWER-INPUT-MUST-BE-DROPPED")) {
+		t.Fatalf("viewer input leaked to writer: %q", owner.outString())
 	}
 }
 
@@ -199,15 +214,15 @@ func TestBridgeSetWriterTransfersControl(t *testing.T) {
 	viewer.stdinIn <- []byte("from-new-writer\n")
 
 	deadline := time.After(3 * time.Second)
-	for !bytes.Contains(viewer.written.Bytes(), []byte("from-new-writer")) {
+	for !bytes.Contains(viewer.out(), []byte("from-new-writer")) {
 		select {
 		case <-deadline:
-			t.Fatalf("new writer's input did not echo back: %q", viewer.written.String())
+			t.Fatalf("new writer's input did not echo back: %q", viewer.outString())
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	if bytes.Contains(viewer.written.Bytes(), []byte("from-old-writer")) {
-		t.Fatalf("demoted writer's input must be dropped: %q", viewer.written.String())
+	if bytes.Contains(viewer.out(), []byte("from-old-writer")) {
+		t.Fatalf("demoted writer's input must be dropped: %q", viewer.outString())
 	}
 }
 
@@ -267,15 +282,15 @@ func TestBridgeSecondWriterAttachDemotesFirst(t *testing.T) {
 	second.stdinIn <- []byte("from-second-writer\n")
 
 	deadline := time.After(3 * time.Second)
-	for !bytes.Contains(second.written.Bytes(), []byte("from-second-writer")) {
+	for !bytes.Contains(second.out(), []byte("from-second-writer")) {
 		select {
 		case <-deadline:
-			t.Fatalf("second (current) writer's input did not echo back: %q", second.written.String())
+			t.Fatalf("second (current) writer's input did not echo back: %q", second.outString())
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	if bytes.Contains(second.written.Bytes(), []byte("from-first-writer")) {
-		t.Fatalf("first writer must be demoted once the second attaches: %q", second.written.String())
+	if bytes.Contains(second.out(), []byte("from-first-writer")) {
+		t.Fatalf("first writer must be demoted once the second attaches: %q", second.outString())
 	}
 }
 

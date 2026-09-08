@@ -1,10 +1,15 @@
-name: CI weekly
+name: Weekly checks
 
-# Slow / informational jobs that do not need to gate every PR for a
-# single-maintainer project. Runs on a weekly schedule and on demand via
-# the GitHub UI ("Run workflow"). The schedule only ever runs on the
-# default branch, so every job checks out BOTH main and dev explicitly:
-# main is what is released, dev is where the work happens.
+# Slow / drift-detecting checks that do not need to gate every PR:
+# Markdown link integrity, dependency advisories that appeared since the
+# last change (Trivy, npm audit). Runs on a schedule and on demand.
+#
+# The schedule only ever runs on the default branch, so every job checks
+# out BOTH main (what is released) and dev (where work happens).
+#
+# A failure opens -- or comments on -- a tracking issue so it is noticed;
+# the weekly run failing silently for months is exactly what this avoids.
+
 on:
   schedule:
     - cron: "0 6 * * 1"
@@ -14,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-weekly-${{ github.ref }}
+  group: weekly-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -23,6 +28,7 @@ env:
 jobs:
   link-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -45,18 +51,19 @@ jobs:
             './**/*.md'
           fail: true
 
-  security-scan:
+  dependency-audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         ref: [main, dev]
-    name: security-scan (${{ matrix.ref }})
+    name: dependency-audit (${{ matrix.ref }})
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ matrix.ref }}
-      - name: Trivy FS scan
+      - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: "fs"
@@ -66,29 +73,36 @@ jobs:
           # Advisories without an upstream fix cannot be acted on and
           # would otherwise fail every week until one appears.
           ignore-unfixed: "true"
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-node@v7
         with:
-          go-version: "1.26.3"
-          cache: true
-      - name: Install gosec
-        # Pinned: @latest silently picks up new rules and breaks the run
-        # without any change in the repository.
-        run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
-          echo "$HOME/go/bin" >> "$GITHUB_PATH"
-      - name: Run gosec
-        run: gosec -exclude=G703,G304,G706,G104 ./...
+          node-version: "26"
+      - name: npm audit (production dependencies)
+        working-directory: web
+        run: npm audit --omit=dev --audit-level=high
 
-  build-docker:
+  # Open or update a tracking issue when anything above failed.
+  notify:
+    if: failure()
+    needs: [link-check, dependency-audit]
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        ref: [main, dev]
-    name: build-docker (${{ matrix.ref }})
+    timeout-minutes: 5
+    permissions:
+      issues: write
     steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ matrix.ref }}
-      - name: Build Docker image
-        run: docker build -t vantyx:ci .
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Weekly checks are failing"
+          body=$(printf '%s\n' \
+            "The scheduled weekly checks failed: ${RUN_URL}" "" \
+            "Look at the failing job(s) (link-check / dependency-audit, on main and/or dev) and fix or document the cause." \
+            "This issue is updated by the workflow on every failing run and can be closed once a run is green.")
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label ci --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Still failing: ${RUN_URL}"
+          else
+            gh label create ci --repo "$GITHUB_REPOSITORY" --color 0e8a16 --description "Continuous integration" 2>/dev/null || true
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label ci --body "$body"
+          fi

@@ -19,6 +19,9 @@ the image is always built there from source.
   changes.
 - **Never** push to the public Docker Hub image. Only build locally on the
   target host.
+  Public images are published **only** by the `Release` GitHub Actions
+  workflow when a `vX.Y.Z` tag on `main` is pushed (see
+  `docs/development.md` → Releases).
 
 ### Why `docker-compose.yml` / `docker-compose.dev.yml` / `.env` are excluded from rsync
 

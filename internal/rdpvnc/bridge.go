@@ -446,6 +446,7 @@ func (m *Manager) Register(key string, b *Bridge) {
 		if sid, ok := m.sessionIDByKey[key]; ok {
 			if s, ok := m.sessionsByID[sid]; ok && s.Bridge == b {
 				delete(m.sessionsByID, sid)
+				delete(m.keep, sid)
 			}
 			delete(m.sessionIDByKey, key)
 		}
@@ -462,6 +463,7 @@ func (m *Manager) RegisterSession(key string, sessionID string, userID, targetID
 	old, hadOld := m.bridges[key]
 	if oldID, ok := m.sessionIDByKey[key]; ok {
 		delete(m.sessionsByID, oldID)
+		delete(m.keep, oldID)
 	}
 
 	now := m.now()
@@ -593,6 +595,7 @@ func (m *Manager) Remove(key string) {
 	if sid, ok2 := m.sessionIDByKey[key]; ok2 {
 		delete(m.sessionIDByKey, key)
 		delete(m.sessionsByID, sid)
+		delete(m.keep, sid)
 	}
 	m.mu.Unlock()
 	if ok {

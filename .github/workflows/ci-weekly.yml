@@ -1,13 +1,21 @@
 name: CI weekly
 
 # Slow / informational jobs that do not need to gate every PR for a
-# single-maintainer project. Run on a weekly schedule and on demand via
-# the GitHub UI ("Run workflow"). Failures here are not blockers; treat
-# them as a backlog of things to look at.
+# single-maintainer project. Runs on a weekly schedule and on demand via
+# the GitHub UI ("Run workflow"). The schedule only ever runs on the
+# default branch, so every job checks out BOTH main and dev explicitly:
+# main is what is released, dev is where the work happens.
 on:
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-weekly-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -15,8 +23,15 @@ env:
 jobs:
   link-check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [main, dev]
+    name: link-check (${{ matrix.ref }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.ref }}
       - name: Check Markdown links
         uses: lycheeverse/lychee-action@v2
         with:
@@ -32,8 +47,15 @@ jobs:
 
   security-scan:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [main, dev]
+    name: security-scan (${{ matrix.ref }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.ref }}
       - name: Trivy FS scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -41,20 +63,32 @@ jobs:
           scan-ref: "."
           exit-code: "1"
           severity: "HIGH,CRITICAL"
-      - uses: actions/setup-go@v6
+          # Advisories without an upstream fix cannot be acted on and
+          # would otherwise fail every week until one appears.
+          ignore-unfixed: "true"
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26.3"
           cache: true
       - name: Install gosec
+        # Pinned: @latest silently picks up new rules and breaks the run
+        # without any change in the repository.
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-          echo "$HOME/go/bin" >> $GITHUB_PATH
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
       - name: Run gosec
         run: gosec -exclude=G703,G304,G706,G104 ./...
 
   build-docker:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [main, dev]
+    name: build-docker (${{ matrix.ref }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.ref }}
       - name: Build Docker image
         run: docker build -t vantyx:ci .

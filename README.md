@@ -55,13 +55,19 @@ exposes a unified REST + WebSocket API for the bundled single-page UI.
 Published image: [`nullpo7z/vantyx:latest`](https://hub.docker.com/r/nullpo7z/vantyx)
 
 ```bash
-git clone https://github.com/nullpo7z/vantyx.git
-cd vantyx
-cp .env.example .env
+# You only need two files — no clone required
+mkdir -p vantyx && cd vantyx
+curl -fsSLO https://raw.githubusercontent.com/nullpo7z/vantyx/main/docker-compose.yml
+curl -fsSL  https://raw.githubusercontent.com/nullpo7z/vantyx/main/.env.example -o .env
+
 # Edit .env: set VANTYX_EXTERNAL_HOST (browser hostname/IP) and
 # VANTYX_SSH_PASSWORD_ENCRYPTION_KEY (from: openssl rand -base64 32)
-# Edit /path/to/vantyx in docker-compose.yml (e.g. /opt/vantyx)
-mkdir -p /path/to/vantyx/{certs,data,recordings}
+
+# Create the state directories and point the compose file at them.
+# The container runs as uid 65532 (nonroot), so it must own them.
+sudo mkdir -p /opt/vantyx/{certs,data,recordings}
+sudo chown -R 65532:65532 /opt/vantyx
+sed -i 's#/path/to/vantyx#/opt/vantyx#g' docker-compose.yml
 
 docker compose pull    # fetch nullpo7z/vantyx:latest (no local build)
 docker compose up -d   # uses docker-compose.yml (operations)
@@ -70,9 +76,12 @@ docker compose up -d   # uses docker-compose.yml (operations)
 Open `https://<VANTYX_EXTERNAL_HOST>/` in your browser (you may need to accept
 the self-signed TLS warning on first start).
 
-To build from source while developing, use [docker-compose.dev.yml](docker-compose.dev.yml):
+Cloning the repository is only needed for development. To build the image from
+source, clone it and use [docker-compose.dev.yml](docker-compose.dev.yml):
 
 ```bash
+git clone https://github.com/nullpo7z/vantyx.git && cd vantyx
+cp .env.example .env    # then edit it as above
 docker compose -f docker-compose.dev.yml up --build -d
 ```
 

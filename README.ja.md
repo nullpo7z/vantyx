@@ -35,13 +35,19 @@ FTP / TFTP サーバーをつなぐセルフホスト型のアクセスゲート
 公開イメージ: [`nullpo7z/vantyx:latest`](https://hub.docker.com/r/nullpo7z/vantyx)
 
 ```bash
-git clone https://github.com/nullpo7z/vantyx.git
-cd vantyx
-cp .env.example .env
+# 必要なのは 2 ファイルだけ（クローン不要）
+mkdir -p vantyx && cd vantyx
+curl -fsSLO https://raw.githubusercontent.com/nullpo7z/vantyx/main/docker-compose.yml
+curl -fsSL  https://raw.githubusercontent.com/nullpo7z/vantyx/main/.env.example -o .env
+
 # .env を編集: VANTYX_EXTERNAL_HOST（ブラウザで開くホスト名/IP）と
 # VANTYX_SSH_PASSWORD_ENCRYPTION_KEY（openssl rand -base64 32 で生成）
-# docker-compose.yml の /path/to/vantyx を実際のパスに変更（例: /opt/vantyx）
-mkdir -p /path/to/vantyx/{certs,data,recordings}
+
+# データ用ディレクトリを作成し、compose ファイルのパスを書き換える。
+# コンテナは非 root（uid 65532）で動くため、所有者を合わせる必要がある。
+sudo mkdir -p /opt/vantyx/{certs,data,recordings}
+sudo chown -R 65532:65532 /opt/vantyx
+sed -i 's#/path/to/vantyx#/opt/vantyx#g' docker-compose.yml
 
 docker compose pull    # nullpo7z/vantyx:latest を取得（ローカルビルドは不要）
 docker compose up -d   # docker-compose.yml（実運用向け）
@@ -49,9 +55,11 @@ docker compose up -d   # docker-compose.yml（実運用向け）
 
 ブラウザで `https://<VANTYX_EXTERNAL_HOST>/` を開きます（自己署名 TLS のため警告が出る場合があります）。
 
-ソースから開発用イメージをビルドする場合のみ [docker-compose.dev.yml](docker-compose.dev.yml) を使います:
+リポジトリのクローンが必要なのは開発時だけです。ソースからイメージをビルドする場合は、クローンして [docker-compose.dev.yml](docker-compose.dev.yml) を使います:
 
 ```bash
+git clone https://github.com/nullpo7z/vantyx.git && cd vantyx
+cp .env.example .env    # 上と同じ内容を編集
 docker compose -f docker-compose.dev.yml up --build -d
 ```
 

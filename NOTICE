@@ -4,20 +4,97 @@ Copyright 2026 The Vantyx Authors
 This product includes software developed by The Vantyx Authors
 (https://github.com/nullpo7z/vantyx).
 
-Licensed under the Apache License, Version 2.0.
+Licensed under the Apache License, Version 2.0. See LICENSE for the full text.
 
----
+================================================================================
+1. Third-party source bundled in this repository
+================================================================================
 
-This product bundles or depends on the following third-party software:
+- golang.org/x/crypto — BSD-3-Clause
+  A patched fork lives under patched_deps/crypto/ (see the go.mod `replace`
+  directive). The upstream LICENSE and PATENTS files are retained there.
+  Upstream: https://github.com/golang/crypto
 
-- chi (https://github.com/go-chi/chi)            - MIT
-- golang.org/x/crypto (forked under patched_deps/crypto) - BSD-3-Clause
-- xterm.js (https://github.com/xtermjs/xterm.js) - MIT
-- asciinema-player                                - GPL-3.0 (loaded at runtime from CDN)
-- noVNC                                           - MPL-2.0 (loaded at runtime from CDN)
-- Swagger UI                                      - Apache-2.0 (loaded at runtime from CDN)
-- Tailwind CSS                                    - MIT
-- Vite                                            - MIT
+================================================================================
+2. Go modules linked into the vantyx binary (direct dependencies)
+================================================================================
 
-See go.sum / web/package-lock.json for a full list of dependencies and their
-licenses.
+- github.com/go-chi/chi/v5 ............... MIT
+- github.com/gorilla/websocket ........... BSD-2-Clause
+- github.com/pkg/sftp .................... BSD-2-Clause
+- github.com/jlaffaye/ftp ................ ISC
+- github.com/pin/tftp/v3 ................. MIT
+- github.com/creack/pty .................. MIT
+- github.com/coreos/go-oidc/v3 ........... Apache-2.0
+- github.com/go-webauthn/webauthn ........ BSD-3-Clause
+- github.com/pquerna/otp ................. Apache-2.0
+- github.com/skip2/go-qrcode ............. MIT
+- github.com/fxamacker/cbor/v2 ........... MIT
+- github.com/hashicorp/golang-lru/v2 ..... MPL-2.0
+- modernc.org/sqlite ..................... BSD-3-Clause
+- golang.org/x/crypto .................... BSD-3-Clause (see section 1)
+- golang.org/x/oauth2 .................... BSD-3-Clause
+- gopkg.in/yaml.v3 ....................... MIT and Apache-2.0
+
+github.com/hashicorp/golang-lru/v2 is covered by the Mozilla Public License
+2.0. It is used unmodified; its source is available at
+https://github.com/hashicorp/golang-lru.
+
+The complete module graph, including indirect dependencies, is recorded in
+go.mod / go.sum.
+
+================================================================================
+3. JavaScript bundled into the web assets
+================================================================================
+
+These packages are compiled into the files served from /assets by the Vantyx
+server (they are NOT loaded from a CDN):
+
+- @xterm/xterm ........................... MIT
+- @xterm/addon-fit ....................... MIT
+- @xterm/addon-web-links ................. MIT
+- @novnc/novnc ........................... MPL-2.0
+- asciinema-player ....................... Apache-2.0
+- tailwindcss (build-time only) .......... MIT
+- vite (build-time only) ................. MIT
+
+@novnc/novnc is covered by the Mozilla Public License 2.0. It is used
+unmodified; its source is available at https://github.com/novnc/noVNC.
+
+A running server publishes the full license texts of the bundled packages at
+`/THIRD-PARTY-LICENSES.txt`; the same file ships in the container image at
+/app/web/dist/THIRD-PARTY-LICENSES.txt and is generated at build time by
+web/scripts/collect-licenses.mjs.
+
+================================================================================
+4. Loaded from a CDN at runtime (not redistributed by this project)
+================================================================================
+
+- Swagger UI (unpkg.com) ................. Apache-2.0
+  Used only by the administrator-only /docs page.
+
+================================================================================
+5. Software included in the container image
+================================================================================
+
+The published image (nullpo7z/vantyx) is built on Alpine Linux and includes the
+following packages. Vantyx invokes them as separate processes (fork/exec) and
+does not link against them, so their copyleft terms do not extend to Vantyx's
+own code.
+
+- freerdp ................................ Apache-2.0
+- xvfb (xorg-server) ..................... MIT
+- x11vnc ................................. GPL-2.0-or-later
+- tigervnc-client ........................ GPL-2.0-or-later
+- ffmpeg ................................. GPL-2.0-or-later AND LGPL-2.1-or-later
+- busybox / Alpine base .................. GPL-2.0-only and others
+- asciinema agg .......................... Apache-2.0
+- font-dejavu ............................ Bitstream Vera / Public Domain
+
+These are unmodified Alpine packages. The corresponding sources are published
+by Alpine Linux at https://gitlab.alpinelinux.org/alpine/aports and can be
+retrieved for the exact versions in the image with:
+
+    docker run --rm nullpo7z/vantyx:latest apk list -I
+
+Anyone redistributing the image is responsible for passing on these terms.

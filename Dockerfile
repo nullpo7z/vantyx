@@ -53,6 +53,10 @@ WORKDIR /app
 
 COPY --from=builder /out/vantyx /app/vantyx
 COPY --from=frontend /src/web/dist /app/web/dist
+# Apache-2.0 §4(a)(d): ship the licence and the attribution notice with the
+# distributed work. NOTICE also records the licences of the Alpine packages
+# above (x11vnc / ffmpeg / tigervnc are GPL) and where to get their sources.
+COPY LICENSE NOTICE /app/
 COPY scripts/docker-entrypoint.sh /entrypoint.sh
 
 RUN mkdir -p /app/certs /app/data /app/recordings \

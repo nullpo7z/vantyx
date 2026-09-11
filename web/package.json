@@ -8,12 +8,13 @@
   },
   "scripts": {
     "predev": "node scripts/check-node.mjs",
-    "prebuild": "node scripts/check-node.mjs",
+    "prebuild": "node scripts/check-node.mjs && node scripts/collect-licenses.mjs",
     "prelint": "node scripts/check-node.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint src --max-warnings 0"
+    "lint": "eslint src --max-warnings 0",
+    "licenses": "node scripts/collect-licenses.mjs"
   },
   "dependencies": {
     "@novnc/novnc": "^1.7.0",

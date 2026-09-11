@@ -190,4 +190,12 @@ in [CHANGELOG.md](CHANGELOG.md).
 ## License
 
 Vantyx is released under the [Apache License 2.0](LICENSE). Third-party
-attribution lives in [NOTICE](NOTICE).
+attribution lives in [NOTICE](NOTICE), which covers the Go modules linked into
+the binary, the JavaScript compiled into the web assets (noVNC is MPL-2.0), and
+the Alpine packages shipped in the container image (x11vnc, tigervnc and ffmpeg
+are GPL; Vantyx runs them as separate processes and does not link against them).
+
+A running server serves the full licence texts of the bundled JavaScript at
+`/THIRD-PARTY-LICENSES.txt`; the same file is in the image at
+`/app/web/dist/THIRD-PARTY-LICENSES.txt`, alongside `/app/LICENSE` and
+`/app/NOTICE`.

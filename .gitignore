@@ -55,6 +55,8 @@ zap-reports/__pycache__/
 *.key
 
 # Frontend (if present)
+# Generated at build time by web/scripts/collect-licenses.mjs
+/web/public/THIRD-PARTY-LICENSES.txt
 /web/node_modules/
 /web/dist/
 /web/.cache/

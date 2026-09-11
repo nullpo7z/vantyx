@@ -163,4 +163,13 @@ GitHub Private Security Advisory フォームを使用してください。
 ## ライセンス
 
 Vantyx は [Apache License 2.0](LICENSE) で配布しています。サードパーティの
-クレジットは [NOTICE](NOTICE) を参照してください。
+クレジットは [NOTICE](NOTICE) を参照してください。NOTICE には、バイナリに
+リンクされる Go モジュール、Web アセットにバンドルされる JavaScript（noVNC は
+MPL-2.0）、コンテナイメージに含まれる Alpine パッケージ（x11vnc・tigervnc・
+ffmpeg は GPL。Vantyx は別プロセスとして起動するだけでリンクはしません）を
+記載しています。
+
+起動中のサーバーは、バンドルした JavaScript のライセンス全文を
+`/THIRD-PARTY-LICENSES.txt` で配信します。イメージ内では
+`/app/web/dist/THIRD-PARTY-LICENSES.txt` に同梱されており、`/app/LICENSE` と
+`/app/NOTICE` も含まれます。
